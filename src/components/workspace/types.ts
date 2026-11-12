@@ -1,7 +1,7 @@
 export interface Organization { id: string; name: string; timezone: string; role: string; paused?: number; settlement_asset: string; permissions?: string[] }
 export interface Session { user: { id: string; email: string | null; name: string | null }; organizations: Organization[]; activeOrganizationId: string | null; wallets: Wallet[] }
 export interface Wallet { id: string; family: string; address: string; network: string; label: string | null }
-export interface Recipient { id: string; name: string; email: string | null; kind: string; primary_asset: string; primary_network: string; primary_address: string; backup_network: string | null; backup_address: string | null; fallback_consent: number; version: number }
+export interface Recipient { id: string; name: string; email: string | null; kind: string; primary_asset: string; primary_network: string; primary_address: string; backup_network: string | null; backup_address: string | null; fallback_consent: number; version: number; preference_status?: string; confirmed_at?: string | null }
 export interface Payment { id: string; recipient_id: string; kind: string; reference: string; amount: string; max_fee: string; status: string; scheduled_for: string | null; hold_reason: string | null; created_at: string; delivered_amount: string }
 export interface Treasury { balance: string; reserved: string; available: string; lastSyncedAt: string | null; config: { near_account_id: string; network: string; token_contract: string } | null }
 export interface Token { assetId: string; symbol: string; blockchain: string; decimals: number; price?: number; contractAddress?: string }
