@@ -1,0 +1,29 @@
+export interface OperationJob {
+  id: string; organization_id: string; job_key: string; kind: string; entity_id: string;
+  status: string; run_at: string; attempts: number; failures: number; lease_owner: string | null;
+  lease_expires_at: string | null; last_error: string | null; result: string | null;
+  payload: string; created_at: string; updated_at: string;
+}
+export interface RecurringRule {
+  id: string; organization_id: string; kind: "bill" | "payroll"; entity_id: string;
+  interval_days: number; next_run_at: string; enabled: number; created_by: string;
+  max_amount: string | null; status: string; last_result: string | null; last_run_at: string | null;
+  snapshot_ciphertext: string | null; created_at: string; updated_at: string | null;
+}
+export type RecurringRuleView = Omit<RecurringRule, "snapshot_ciphertext">;
+export interface Notice {
+  id: string; title: string; body: string; entity_id: string | null; read_at: string | null;
+  required_permission: string; created_at: string;
+}
+export interface AgentMandate {
+  organization_id: string; executor_account_id: string; max_amount: string; expires_at: string;
+  enabled: number; created_by: string; updated_at: string;
+}
+export interface TemplatePayment {
+  recipientId: string; amount: string; maxFee: string; recipientVersion: number;
+}
+export interface TemplateSnapshot {
+  fingerprint: string; total: string; payments: TemplatePayment[];
+  bill?: { title: string; lineItems: unknown[]; requiresAcceptance: boolean };
+  payroll?: { periodStart: string; periodEnd: string; scheduledFor: string | null };
+}
