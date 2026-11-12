@@ -1,0 +1,488 @@
+import { createHash, randomUUID } from "node:crypto";
+import { getDb, row, rows, transaction } from "../db";
+import { ApiError, requirePermission, type AccessContext } from "../context";
+import { atomic as parseAtomic, usdToToken } from "../../lib/money";
+import { assertSameQuote, checkStatus, getSupportedTokens, nativeUsdc, notifyDeposit, requestQuote, type QuoteResponse, type Token } from "./intents";
+import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
+import { validNearAccount, view } from "./near";
+import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
+
+const now = () => new Date().toISOString();
+const id = () => randomUUID();
+const json = (value: unknown) => JSON.stringify(value);
+const onchainReference = (payment: Payment) => `float:${payment.id}`;
+function atomic(value: string | bigint, allowZero = false) {
+  try { return parseAtomic(value, allowZero); } catch { throw new ApiError(422, "Use a valid unsigned integer token amount within the supported range", "INVALID_AMOUNT"); }
+}
+
+const activeStates = ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered"];
+
+function assertRunning(access: AccessContext): void {
+  const company = row<{ paused: number }>("SELECT paused FROM organizations WHERE id = ?", access.organizationId);
+  if (!company) throw new ApiError(404, "Company not found", "COMPANY_NOT_FOUND");
+  if (company.paused) throw new ApiError(409, "Company payments are paused", "PAYMENTS_PAUSED");
+}
+
+export function getPayment(access: AccessContext, paymentId: string): Payment {
+  requirePermission(access, "payments:read");
+  const item = row<Payment>("SELECT * FROM payments WHERE id = ? AND organization_id = ?", paymentId, access.organizationId);
+  if (!item) throw new ApiError(404, "Payment not found", "PAYMENT_NOT_FOUND");
+  return item;
+}
+
+export function listPayments(access: AccessContext): Payment[] {
+  requirePermission(access, "payments:read");
+  return rows<Payment>("SELECT * FROM payments WHERE organization_id = ? ORDER BY created_at DESC LIMIT 500", access.organizationId);
+}
+
+export function listLedger(access: AccessContext) {
+  requirePermission(access, "reports:read");
+  return rows<Record<string, string>>("SELECT * FROM treasury_ledger WHERE organization_id = ? ORDER BY created_at DESC LIMIT 1000", access.organizationId);
+}
+
+function balance(organizationId: string) {
+  const current = row<{ balance: string; reserved: string; onchain_reserved: string; updated_at: string }>("SELECT balance,reserved,onchain_reserved,updated_at FROM treasury_balances WHERE organization_id = ?", organizationId) ?? { balance: "0", reserved: "0", onchain_reserved: "0", updated_at: "" };
+  const knownChainReserved = rows<{ chain_reserved: string }>("SELECT chain_reserved FROM payments WHERE organization_id=?", organizationId).reduce((sum, payment) => sum + BigInt(payment.chain_reserved), 0n);
+  const externalReserved = BigInt(current.onchain_reserved) - knownChainReserved;
+  return { ...current, effectiveReserved: (BigInt(current.reserved) + (externalReserved > 0n ? externalReserved : 0n)).toString() };
+}
+
+function ledger(organizationId: string, reference: string, entryType: string, amount: string, nextBalance: string, nextReserved: string, metadata: unknown = {}) {
+  const db = getDb();
+  db.prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,updated_at) VALUES(?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET balance=excluded.balance,reserved=excluded.reserved,updated_at=excluded.updated_at").run(organizationId, nextBalance, nextReserved, now());
+  db.prepare("INSERT INTO treasury_ledger(id,organization_id,reference,entry_type,amount,balance_after,reserved_after,metadata,created_at) VALUES(?,?,?,?,?,?,?,?,?)").run(id(), organizationId, reference, entryType, amount, nextBalance, nextReserved, json(metadata), now());
+}
+
+export function getTreasury(access: AccessContext) {
+  requirePermission(access, "company:read");
+  const current = balance(access.organizationId);
+  const available = BigInt(current.balance) - BigInt(current.effectiveReserved);
+  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
+}
+
+export function listNetworks(access: AccessContext) {
+  requirePermission(access, "company:read");
+  const configured = rows<{ network: string; enabled: number }>("SELECT * FROM payment_networks WHERE organization_id=?", access.organizationId);
+  return BACKUP_NETWORKS.map((network) => ({ network, enabled: configured.find((item) => item.network === network)?.enabled !== 0 }));
+}
+
+export function setNetwork(access: AccessContext, network: string, enabled: boolean) {
+  requirePermission(access, "company:manage");
+  if (!BACKUP_NETWORKS.includes(network as typeof BACKUP_NETWORKS[number])) throw new ApiError(422, "Choose a supported backup network", "BACKUP_NETWORK_UNSUPPORTED");
+  getDb().prepare("INSERT INTO payment_networks(organization_id,network,enabled) VALUES(?,?,?) ON CONFLICT(organization_id,network) DO UPDATE SET enabled=excluded.enabled").run(access.organizationId, network, Number(enabled));
+  return { network, enabled };
+}
+
+function configFor(access: AccessContext, requireMainnet = false): TreasuryConfig {
+  const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId);
+  if (!config) throw new ApiError(409, "Connect and configure the company NEAR treasury first", "TREASURY_SETUP_REQUIRED");
+  if (requireMainnet && config.network !== "mainnet") throw new ApiError(409, "NEAR Intents settlement uses mainnet. Configure a mainnet company treasury for live routes", "MAINNET_TREASURY_REQUIRED");
+  return config;
+}
+
+export async function configureTreasury(access: AccessContext, input: { nearAccountId: string; network: "mainnet" | "testnet"; tokenContract: string }) {
+  requirePermission(access, "company:manage");
+  if (!validNearAccount(input.nearAccountId) || !validNearAccount(input.tokenContract)) throw new ApiError(422, "Enter valid NEAR account IDs", "INVALID_ACCOUNT");
+  const config: TreasuryConfig = { organization_id: access.organizationId, near_account_id: input.nearAccountId, network: input.network, token_contract: input.tokenContract };
+  const contract = await view<{ token_contract: string; owner_id: string }>(config, "get_config");
+  if (contract.token_contract !== input.tokenContract) throw new ApiError(422, "The treasury contract uses another settlement token", "SETTLEMENT_TOKEN_MISMATCH");
+  if (config.network === "mainnet" && config.token_contract !== "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1") throw new ApiError(422, "Live settlement requires native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
+  const wallet = row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, contract.owner_id, config.network);
+  if (!wallet) throw new ApiError(403, "Verify the NEAR wallet that owns this treasury before connecting it", "TREASURY_OWNER_UNVERIFIED");
+  const existing = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE network=? AND near_account_id=?", input.network, input.nearAccountId);
+  if (existing && existing.organization_id !== access.organizationId) throw new ApiError(409, "This treasury is connected to another company", "TREASURY_ALREADY_CONNECTED");
+  const current = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
+  if (current && (current.near_account_id !== input.nearAccountId || current.network !== input.network || current.token_contract !== input.tokenContract)) throw new ApiError(409, "A connected company treasury cannot be replaced while its ledger is active", "TREASURY_CHANGE_REQUIRES_MIGRATION");
+  getDb().prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET near_account_id=excluded.near_account_id,network=excluded.network,token_contract=excluded.token_contract").run(access.organizationId, input.nearAccountId, input.network, input.tokenContract, now());
+  return { config, contract, treasury: await syncTreasury(access) };
+}
+
+export async function syncTreasury(access: AccessContext) {
+  requirePermission(access, "company:read");
+  const config = configFor(access);
+  const actual = await view<{ balance: string; reserved: string; available: string; in_flight: string; confirmed_at_ms: string }>(config, "get_balance");
+  const confirmed = atomic(actual.balance, true);
+  transaction(() => {
+    const current = balance(access.organizationId);
+    if (confirmed !== BigInt(current.balance)) ledger(access.organizationId, `sync:${id()}`, "onchain_balance_sync", (confirmed - BigInt(current.balance)).toString(), confirmed.toString(), current.reserved, { network: config.network, account: config.near_account_id, contractBalance: actual });
+    else getDb().prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,updated_at) VALUES(?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET updated_at=excluded.updated_at").run(access.organizationId, confirmed.toString(), current.reserved, now());
+    getDb().prepare("UPDATE treasury_balances SET onchain_reserved=? WHERE organization_id=?").run(atomic(actual.reserved, true).toString(), access.organizationId);
+  });
+  return { ...getTreasury(access), onchain: actual };
+}
+
+export async function prepareTreasurySetup(access: AccessContext) {
+  requirePermission(access, "company:manage");
+  const config = configFor(access);
+  const token = { ...config, near_account_id: config.token_contract };
+  const registered = await view<{ total: string; available: string } | null>(token, "storage_balance_of", { account_id: config.near_account_id });
+  const actions: WalletTransaction[] = [];
+  if (!registered) {
+    const bounds = await view<{ min: string }>(token, "storage_balance_bounds");
+    actions.push(action({ ...config, near_account_id: config.token_contract }, "storage_deposit", { account_id: config.near_account_id, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
+  }
+  actions.push(action(config, "refresh_balance", {}, "0", "40000000000000"));
+  return { config, tokenRegistered: !!registered, walletActions: actions };
+}
+
+export interface CreatePaymentInput {
+  recipientId: string;
+  reference: string;
+  amount: string;
+  kind?: string;
+  maxFee?: string;
+  scheduledFor?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export function createPayment(access: AccessContext, input: CreatePaymentInput): Payment {
+  requirePermission(access, "payments:prepare");
+  const amount = atomic(input.amount).toString();
+  const maxFee = atomic(input.maxFee ?? "0", true).toString();
+  if (!input.reference.trim() || input.reference.length > 200) throw new ApiError(422, "A stable payment reference is required", "INVALID_REFERENCE");
+  if (input.scheduledFor && !Number.isFinite(Date.parse(input.scheduledFor))) throw new ApiError(422, "Invalid scheduled date", "INVALID_DATE");
+  return transaction(() => {
+    const existing = row<Payment>("SELECT * FROM payments WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);
+    if (existing) {
+      if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment")) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
+      return existing;
+    }
+    const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id = ? AND organization_id = ?", input.recipientId, access.organizationId);
+    if (!recipient) throw new ApiError(404, "Recipient not found", "RECIPIENT_NOT_FOUND");
+    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
+    const paymentId = id();
+    getDb().prepare("INSERT INTO payments(id,organization_id,recipient_id,kind,reference,amount,max_fee,status,scheduled_for,recipient_version,recipient_snapshot,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(paymentId, access.organizationId, input.recipientId, input.kind ?? "payment", input.reference, amount, maxFee, "draft", input.scheduledFor ?? null, recipient.version, json(snapshot), json(input.metadata ?? {}), now(), now());
+    return getPayment(access, paymentId);
+  });
+}
+
+export function approvePayment(access: AccessContext, paymentId: string): Payment {
+  requirePermission(access, "payments:approve");
+  assertRunning(access);
+  return transaction(() => {
+    const payment = getPayment(access, paymentId);
+    if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
+    if (!["draft", "approved_unfunded", "held"].includes(payment.status)) throw new ApiError(409, "This obligation cannot be approved in its current state", "PAYMENT_STATE_CHANGED");
+    const recipient = row<{ version: number }>("SELECT version FROM recipients WHERE id = ? AND organization_id = ?", payment.recipient_id, access.organizationId);
+    if (!recipient || recipient.version !== payment.recipient_version) throw new ApiError(409, "Recipient details changed. Prepare a new payment for approval", "RECIPIENT_CHANGED");
+    const current = balance(access.organizationId);
+    const required = atomic(payment.amount) + atomic(payment.max_fee, true) - atomic(payment.total_spent, true);
+    if (required < atomic(payment.amount)) throw new ApiError(409, "The approved fee budget is exhausted", "COST_LIMIT_EXCEEDED");
+    const funded = BigInt(current.balance) - BigInt(current.effectiveReserved) >= required;
+    if (funded && payment.reserved_amount === "0") ledger(access.organizationId, `reserve:${paymentId}:${id()}`, "payment_reserved", required.toString(), current.balance, (BigInt(current.reserved) + required).toString(), { paymentId });
+    getDb().prepare("UPDATE payments SET status=?,approved_by=COALESCE(approved_by,?),approved_at=COALESCE(approved_at,?),reserved_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(funded ? "approved" : "approved_unfunded", access.userId, now(), funded ? required.toString() : "0", funded ? null : "Fund the payment entitlement and approved costs", now(), paymentId);
+    return getPayment(access, paymentId);
+  });
+}
+
+export async function cancelPayment(access: AccessContext, paymentId: string) {
+  requirePermission(access, "payments:approve");
+  const payment = getPayment(access, paymentId);
+  if (payment.status === "cancelled") return { payment, walletActions: [] };
+  const attempts = listAttempts(access, paymentId);
+  if (payment.status === "paid" || attempts.some((attempt) => activeStates.includes(attempt.state))) throw new ApiError(409, "Reconcile active delivery before cancelling", "ATTEMPT_ACTIVE");
+  const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
+  const chain = config ? await view<ChainPayment | null>(config, "get_payment", { payment_id: paymentId }) : null;
+  if (chain && chain.status !== "cancelled") {
+    if (!["proposed", "approved", "retryable", "held"].includes(chain.status)) throw new ApiError(409, "The existing onchain delivery must be reconciled before cancellation", "ONCHAIN_ATTEMPT_UNRESOLVED");
+    return { payment, walletActions: [action(config!, "cancel_payment", { payment_id: paymentId }, "1")] };
+  }
+  transaction(() => {
+    const latest = getPayment(access, paymentId);
+    if (latest.status === "cancelled") return;
+    if (row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')", paymentId)) throw new ApiError(409, "An attempt was prepared while cancelling", "ATTEMPT_ACTIVE");
+    const current = balance(access.organizationId);
+    const remaining = BigInt(current.reserved) - BigInt(latest.reserved_amount);
+    if (remaining < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");
+    if (BigInt(latest.reserved_amount) > 0n) ledger(access.organizationId, `release:${paymentId}`, "reservation_released", latest.reserved_amount, current.balance, remaining.toString(), { paymentId });
+    getDb().prepare("UPDATE payments SET status='cancelled',reserved_amount='0',chain_reserved='0',updated_at=? WHERE id=?").run(now(), paymentId);
+  });
+  if (config) await syncTreasury(access);
+  return { payment: getPayment(access, paymentId), walletActions: [] };
+}
+
+function ensureRecipient(payment: Payment, access: AccessContext): RecipientSnapshot {
+  const current = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=?", payment.recipient_id, access.organizationId);
+  if (!current || current.version !== payment.recipient_version) throw new ApiError(409, "Recipient details changed after approval", "RECIPIENT_CHANGED");
+  if (current.archived || current.preference_status !== "confirmed" || !current.confirmed_at) throw new ApiError(409, "The recipient must confirm their payout preferences", "PREFERENCES_UNCONFIRMED");
+  return JSON.parse(payment.recipient_snapshot) as RecipientSnapshot;
+}
+
+function resolveAsset(tokens: Token[], recipient: RecipientSnapshot, backup: boolean): Token {
+  if (backup) return nativeUsdc(tokens, recipient.backup_network!);
+  if (recipient.primary_asset === "USDC") return nativeUsdc(tokens, recipient.primary_network);
+  const token = tokens.find((item) => item.assetId === recipient.primary_asset && item.blockchain === recipient.primary_network);
+  if (!token) throw new ApiError(422, "The preferred asset is not currently supported", "PRIMARY_UNAVAILABLE");
+  return token;
+}
+
+export async function preparePaymentQuote(access: AccessContext, paymentId: string, input: { useBackup?: boolean; dry?: boolean } = {}) {
+  requirePermission(access, "payments:execute");
+  assertRunning(access);
+  const config = configFor(access, true);
+  const payment = getPayment(access, paymentId);
+  if (!payment.approved_at || payment.status === "cancelled" || payment.status === "paid") throw new ApiError(409, "Approve an unpaid obligation before execution", "APPROVAL_REQUIRED");
+  if (payment.scheduled_for && Date.parse(payment.scheduled_for) > Date.now()) throw new ApiError(409, "This payment is scheduled for later", "PAYMENT_NOT_DUE");
+  const recipient = ensureRecipient(payment, access);
+  const attempts = rows<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at", paymentId);
+  if (attempts.some((item) => activeStates.includes(item.state))) throw new ApiError(409, "An earlier attempt must be reconciled before preparing another", "ATTEMPT_ACTIVE");
+  if (input.useBackup) canUseBackup(payment, recipient, attempts);
+  if (input.useBackup && !listNetworks(access).find((network) => network.network === recipient.backup_network)?.enabled) throw new ApiError(409, "The company disabled this backup network", "BACKUP_NETWORK_DISABLED");
+  if (payment.reserved_amount === "0") throw new ApiError(409, "Fund and reserve this payment before executing", "PAYMENT_UNFUNDED");
+  await syncTreasury(access);
+  const tokens = await getSupportedTokens();
+  const origin = nativeUsdc(tokens, "near");
+  const destination = resolveAsset(tokens, recipient, !!input.useBackup);
+  const address = input.useBackup ? recipient.backup_address! : recipient.primary_address;
+  if (!address) throw new ApiError(422, "Confirm the receiving destination first", "DESTINATION_REQUIRED");
+  const outputFor = (token: Token) => {
+    try { return usdToToken(payment.amount, token.symbol === "USDC" ? "1" : token.price ?? "0", token.decimals); } catch { throw new ApiError(422, "A usable valuation is unavailable for the preferred payout asset", "TOKEN_VALUATION_UNAVAILABLE"); }
+  };
+  const output = outputFor(destination);
+  const makeQuote = (token: Token, receivingAddress: string, dry: boolean) => requestQuote({ dry, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: token.assetId, amount: outputFor(token), recipient: receivingAddress, recipientType: "DESTINATION_CHAIN", refundTo: config.near_account_id, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString() });
+  if (input.useBackup && !attempts.some((attempt) => attempt.route === "primary")) {
+    let primaryAvailable = false;
+    try {
+      await makeQuote(resolveAsset(tokens, recipient, false), recipient.primary_address, true);
+      primaryAvailable = true;
+    } catch (error) {
+      if (!(error instanceof ApiError) || !["PRIMARY_UNAVAILABLE", "USDC_UNAVAILABLE", "USDC_NETWORK_UNSUPPORTED", "ROUTE_UNAVAILABLE"].includes(error.code)) throw error;
+    }
+    if (primaryAvailable) throw new ApiError(409, "The preferred payout route is available. Use the preferred destination first", "PRIMARY_AVAILABLE");
+  }
+  const quote = await makeQuote(destination, address, !!input.dry);
+  checkBudget(payment, quote.quote.amountIn);
+  if (input.dry) return { quote, dry: true, valuation: destination.symbol === "USDC" ? null : { price: destination.price, priceUpdatedAt: destination.priceUpdatedAt, entitlement: payment.amount } };
+  if (!validNearAccount(quote.quote.depositAddress!) || quote.quote.depositMemo) throw new ApiError(502, "The NEAR source route returned incompatible funding instructions", "SOURCE_ROUTE_INVALID");
+  const attemptId = id();
+  const walletActions = await buildWalletActions(config, payment, recipient, attemptId, quote, !!input.useBackup, tokens);
+  transaction(() => {
+    const latest = getPayment(access, paymentId);
+    ensureRecipient(latest, access);
+    if (latest.status === "paid" || latest.status === "cancelled") throw new ApiError(409, "Payment is no longer executable", "PAYMENT_CHANGED");
+    if (row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')", paymentId)) throw new ApiError(409, "Another payout attempt was prepared while quoting", "ATTEMPT_ACTIVE");
+    if (latest.reserved_amount === "0") throw new ApiError(409, "This payment no longer has reserved funds", "PAYMENT_UNFUNDED");
+    checkBudget(latest, quote.quote.amountIn);
+    getDb().prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,deposit_memo,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(attemptId, paymentId, access.organizationId, input.useBackup ? "backup" : "primary", "prepared", json(quote), destination.assetId, destination.blockchain, address, output, quote.quote.amountIn, quote.quote.depositAddress!, quote.quote.depositMemo ?? null, now(), now());
+    getDb().prepare("UPDATE payments SET status='prepared',hold_reason=NULL,updated_at=? WHERE id=?").run(now(), paymentId);
+  });
+  return { attempt: getAttempt(access, attemptId), walletActions, dry: false };
+}
+
+function action(config: TreasuryConfig, methodName: string, args: unknown, deposit = "0", gas = "100000000000000"): WalletTransaction {
+  return { receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }] };
+}
+
+async function buildWalletActions(config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: QuoteResponse, backup: boolean, tokens: Token[]): Promise<WalletTransaction[]> {
+  const expires = Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline);
+  if (expires <= Date.now()) throw new ApiError(409, "This quote expired. Close the unused attempt and quote again", "QUOTE_EXPIRED");
+  let primaryAsset = recipient.primary_asset;
+  if (primaryAsset === "USDC") primaryAsset = nativeUsdc(tokens, recipient.primary_network).assetId;
+  const primary = { asset_id: primaryAsset, network: recipient.primary_network, address: recipient.primary_address };
+  const backupDestination = recipient.backup_address ? { asset_id: nativeUsdc(tokens, recipient.backup_network!).assetId, network: recipient.backup_network!, address: recipient.backup_address } : null;
+  const [existing, currentRecipient, obligation] = await Promise.all([
+    view<ChainPayment | null>(config, "get_payment", { payment_id: payment.id }),
+    view<{ primary: typeof primary; backup: typeof backupDestination; backup_consent: boolean; active: boolean } | null>(config, "get_recipient", { recipient_id: payment.recipient_id }),
+    view<string | null>(config, "get_obligation", { reference: onchainReference(payment) }),
+  ]);
+  if (obligation && obligation !== payment.id) throw new ApiError(409, "The onchain obligation reference is already in use", "ONCHAIN_OBLIGATION_CONFLICT");
+  if (existing && (existing.amount !== payment.amount || existing.max_fee !== payment.max_fee || existing.reference !== onchainReference(payment) || existing.recipient_id !== payment.recipient_id)) throw new ApiError(409, "The onchain obligation has different approved terms", "ONCHAIN_TERMS_MISMATCH");
+  const sameDestination = (left: typeof primary | null | undefined, right: typeof primary | null | undefined) => !left && !right || !!left && !!right && left.asset_id === right.asset_id && left.network === right.network && left.address === right.address;
+  const recipientMatches = currentRecipient?.active && currentRecipient.backup_consent === !!recipient.fallback_consent && sameDestination(currentRecipient.primary, primary) && sameDestination(currentRecipient.backup, backupDestination);
+  if (existing && !recipientMatches) throw new ApiError(409, "The onchain recipient changed after approval. Cancel and prepare a new obligation", "ONCHAIN_RECIPIENT_CHANGED");
+  const actions: WalletTransaction[] = [];
+  if (backupDestination && await view<string | null>(config, "get_backup_asset", { network: backupDestination.network }) !== backupDestination.asset_id) actions.push(action(config, "set_backup_asset", { network: backupDestination.network, asset_id: backupDestination.asset_id }, "1"));
+  if (!recipientMatches) actions.push(action(config, "set_recipient", { recipient_id: payment.recipient_id, primary, backup: backupDestination, backup_consent: !!recipient.fallback_consent, active: true }, "1"));
+  if (!existing) actions.push(action(config, "propose_payment", { payment_id: payment.id, recipient_id: payment.recipient_id, amount: payment.amount, max_fee: payment.max_fee, expires_at_ms: String(Date.parse(payment.approved_at!) + 30 * 86_400_000), reference: onchainReference(payment) }));
+  if (!existing || ["proposed", "held"].includes(existing.status)) actions.push(action(config, "approve_payment", { payment_id: payment.id }, "1"));
+  if (existing && !["proposed", "approved", "held", "retryable"].includes(existing.status)) throw new ApiError(409, "Reconcile the existing onchain delivery before resuming", "ONCHAIN_ATTEMPT_UNRESOLVED");
+  if (existing && BigInt(existing.expires_at_ms) < BigInt(expires)) throw new ApiError(409, "The approved onchain obligation expires before this quote", "APPROVAL_EXPIRED");
+  const chainAttempt = existing?.attempts.find((attempt) => attempt.id === attemptId);
+  if (existing?.attempts.some((attempt) => attempt.id !== attemptId && !["refunded", "transfer_failed", "discarded"].includes(attempt.status))) throw new ApiError(409, "An earlier onchain source may still deliver", "ONCHAIN_ATTEMPT_UNRESOLVED");
+  const route = { kind: "intents", source_receiver: quote.quote.depositAddress!, input_amount: quote.quote.amountIn, output_amount: quote.quote.amountOut, quote_id: quote.correlationId, quote_hash: createHash("sha256").update(json(quote)).digest("hex"), deadline_ms: String(expires) };
+  if (chainAttempt && (chainAttempt.status !== "prepared" || chainAttempt.route.quote_hash !== route.quote_hash)) throw new ApiError(409, "This onchain attempt is no longer awaiting signature", "ONCHAIN_ATTEMPT_UNRESOLVED");
+  if (!chainAttempt) actions.push(action(config, "create_attempt", { payment_id: payment.id, attempt_id: attemptId, use_backup: backup, route }));
+  if (!chainAttempt?.authorized) actions.push(action(config, "authorize_attempt", { payment_id: payment.id, attempt_id: attemptId }, "1"));
+  actions.push(action(config, "execute_payment", { payment_id: payment.id, attempt_id: attemptId }));
+  return actions;
+}
+
+export function getAttempt(access: AccessContext, attemptId: string): PayoutAttempt {
+  requirePermission(access, "payments:read");
+  const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE id=? AND organization_id=?", attemptId, access.organizationId);
+  if (!attempt) throw new ApiError(404, "Payment attempt not found", "ATTEMPT_NOT_FOUND");
+  return attempt;
+}
+
+export function listAttempts(access: AccessContext, paymentId: string): PayoutAttempt[] {
+  getPayment(access, paymentId);
+  return rows<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at", paymentId);
+}
+
+export async function resumeAttempt(access: AccessContext, attemptId: string) {
+  requirePermission(access, "payments:execute");
+  assertRunning(access);
+  const attempt = getAttempt(access, attemptId);
+  if (attempt.state !== "prepared") throw new ApiError(409, "Reconcile this attempt before resuming", "ATTEMPT_STATE_CHANGED");
+  const payment = getPayment(access, attempt.payment_id);
+  const recipient = ensureRecipient(payment, access);
+  return { attempt, walletActions: await buildWalletActions(configFor(access, true), payment, recipient, attemptId, JSON.parse(attempt.quote), attempt.route === "backup", await getSupportedTokens()) };
+}
+
+export async function markAttemptSubmitted(access: AccessContext, attemptId: string, txHash: string) {
+  requirePermission(access, "payments:execute");
+  const attempt = getAttempt(access, attemptId);
+  if (attempt.source_tx_hash && attempt.source_tx_hash !== txHash) throw new ApiError(409, "This attempt already has another source transaction", "ATTEMPT_ALREADY_SUBMITTED");
+  if (!["prepared", "submitted"].includes(attempt.state)) throw new ApiError(409, "This attempt is not awaiting submission", "ATTEMPT_STATE_CHANGED");
+  const onchain = await view<ChainPayment | null>(configFor(access), "get_payment", { payment_id: attempt.payment_id });
+  const chainAttempt = onchain?.attempts.find((item) => item.id === attemptId);
+  if (!chainAttempt || chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex")) throw new ApiError(409, "The treasury has not recorded this authorized attempt. Resume the wallet actions first", "SOURCE_ATTEMPT_UNVERIFIED");
+  getDb().prepare("UPDATE payout_attempts SET state='submitted',source_tx_hash=?,updated_at=? WHERE id=?").run(txHash, now(), attemptId);
+  getDb().prepare("UPDATE payments SET status='in_flight',updated_at=? WHERE id=?").run(now(), attempt.payment_id);
+  try { await notifyDeposit(attempt.deposit_address, txHash, attempt.deposit_memo); } catch {}
+  await reconcilePayment(access, attempt.payment_id);
+  return getAttempt(access, attemptId);
+}
+
+export async function reconcilePayment(access: AccessContext, paymentId: string) {
+  requirePermission(access, "payments:read");
+  const payment = getPayment(access, paymentId);
+  const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at DESC LIMIT 1", paymentId);
+  if (!attempt || payment.status === "paid" || payment.status === "cancelled" || attempt.state === "closed_unfunded") return { payment, attempt: attempt ?? null };
+  const config = configFor(access);
+  const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: paymentId });
+  const chainAttempt = chain?.attempts.find((item) => item.id === attempt.id);
+  if (chain && (chain.amount !== payment.amount || chain.max_fee !== payment.max_fee || chain.reference !== onchainReference(payment) || chain.recipient_id !== payment.recipient_id)) throw new ApiError(409, "The onchain obligation terms do not match", "ONCHAIN_TERMS_MISMATCH");
+  if (chainAttempt && (chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex") || chainAttempt.route.input_amount !== attempt.amount_in || chainAttempt.route.output_amount !== attempt.expected_output || chainAttempt.route.source_receiver !== attempt.deposit_address)) throw new ApiError(409, "The onchain route does not match this signed quote", "ONCHAIN_ROUTE_MISMATCH");
+  let provider: Awaited<ReturnType<typeof checkStatus>> | null = null;
+  let providerError: string | null = null;
+  try {
+    provider = await checkStatus(attempt.deposit_address, attempt.deposit_memo);
+    assertSameQuote(JSON.parse(attempt.quote), provider.quoteResponse);
+  } catch (error) {
+    providerError = error instanceof ApiError ? error.message : "Routing evidence is temporarily unavailable";
+  }
+  let state = provider ? providerOutcome(provider.status) : "unknown";
+  let nextStatus = state === "recovery_pending" ? "recovery_pending" : "in_flight";
+  let hold: string | null = state === "reported_delivered" ? "Provider reports delivery. Confirm settlement in the NEAR treasury to close the obligation" : state === "recovery_pending" ? "Verify route closure and recovered funds before retrying" : state === "unknown" ? "Payment outcome requires reconciliation; no backup may execute yet" : null;
+  if (!chainAttempt || chainAttempt.status === "prepared") {
+    state = !provider || provider.status === "PENDING_DEPOSIT" ? "prepared" : "unknown";
+    nextStatus = state === "prepared" ? "prepared" : "in_flight";
+    hold = state === "unknown" ? "Routing activity needs review before any source transfer or backup" : providerError;
+  }
+  if (chainAttempt && ["sending", "source_sent", "uncertain", "refund_pending", "refund_verifying"].includes(chainAttempt.status)) {
+    if (["uncertain", "refund_pending", "refund_verifying"].includes(chainAttempt.status)) {
+      state = "recovery_pending";
+      nextStatus = "recovery_pending";
+      hold = "Reconcile the prior route and confirm recovered funds on NEAR before retrying";
+    }
+  }
+  if (chainAttempt?.status === "delivered" && chain?.status === "paid") { state = "delivered"; nextStatus = "paid"; hold = null; }
+  if (chainAttempt?.status === "refunded") { state = "refunded_verified"; nextStatus = chain?.status === "retryable" ? "approved" : "held"; hold = nextStatus === "held" ? "Recovered funds or the approved fee budget do not cover a retry" : null; }
+  if (chainAttempt && ["discarded", "transfer_failed"].includes(chainAttempt.status)) { state = "closed_unfunded"; nextStatus = chain?.status === "held" ? "held" : "approved"; hold = null; }
+  transaction(() => {
+    const latest = getPayment(access, paymentId);
+    if (latest.status === "paid") return;
+    const current = balance(access.organizationId);
+    const reservation = chainAttempt ? atomic(chain!.reservation, true).toString() : latest.reserved_amount;
+    const nextReserved = BigInt(current.reserved) - BigInt(latest.reserved_amount) + BigInt(reservation);
+    if (nextReserved < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");
+    if (reservation !== latest.reserved_amount) ledger(access.organizationId, `reservation-sync:${attempt.id}:${id()}`, "reservation_reconciled", (BigInt(reservation) - BigInt(latest.reserved_amount)).toString(), current.balance, nextReserved.toString(), { paymentId, attemptId: attempt.id, chainStatus: chain?.status });
+    if (state === "delivered") ledger(access.organizationId, `paid:${paymentId}`, "payment_delivered", latest.amount, current.balance, nextReserved.toString(), { paymentId, attemptId: attempt.id, destinationReceipt: chainAttempt?.receipt });
+    const spent = chain ? (atomic(chain.incurred_cost, true) + (state === "delivered" ? atomic(attempt.amount_in) : 0n)).toString() : latest.total_spent;
+    getDb().prepare("UPDATE payments SET status=?,reserved_amount=?,chain_reserved=?,total_spent=?,delivered_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(nextStatus, reservation, chain?.reservation ?? "0", spent, state === "delivered" ? latest.amount : latest.delivered_amount, hold, now(), paymentId);
+    getDb().prepare("UPDATE payout_attempts SET state=?,provider_status=?,reconciliation=?,destination_tx_hash=?,updated_at=? WHERE id=?").run(state, provider?.status ?? attempt.provider_status, json({ provider, chain, providerError }), provider?.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? attempt.destination_tx_hash, now(), attempt.id);
+  });
+  await syncTreasury(access);
+  return { payment: getPayment(access, paymentId), attempt: getAttempt(access, attempt.id), providerError };
+}
+
+export async function closeUnfundedAttempt(access: AccessContext, attemptId: string) {
+  requirePermission(access, "payments:execute");
+  const attempt = getAttempt(access, attemptId);
+  if (["closed_unfunded", "refunded_verified"].includes(attempt.state)) return { attempt, walletActions: [] };
+  const config = configFor(access);
+  const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
+  const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
+  if (chainAttempt && ["discarded", "transfer_failed", "refunded"].includes(chainAttempt.status)) return { ...await reconcilePayment(access, attempt.payment_id), walletActions: [] };
+  if (chainAttempt?.status === "prepared") return { attempt, walletActions: [action(config, "discard_attempt", { payment_id: attempt.payment_id, attempt_id: attemptId })] };
+  const quote = JSON.parse(attempt.quote) as QuoteResponse;
+  if (!chainAttempt && attempt.state === "prepared" && Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline) <= Date.now()) {
+    transaction(() => {
+      getDb().prepare("UPDATE payout_attempts SET state='closed_unfunded',updated_at=? WHERE id=? AND state='prepared'").run(now(), attemptId);
+      getDb().prepare("UPDATE payments SET status='approved',hold_reason=NULL,updated_at=? WHERE id=? AND status='prepared'").run(now(), attempt.payment_id);
+    });
+    return { attempt: getAttempt(access, attemptId), walletActions: [] };
+  }
+  throw new ApiError(409, "The earlier route may still deliver. Reconcile it before closing", "PRIOR_ATTEMPT_UNRESOLVED");
+}
+
+export async function prepareSettlement(access: AccessContext, attemptId: string, input: { outcome: "delivered" | "uncertain" | "refund_pending"; receipt: string }) {
+  requirePermission(access, "payments:approve");
+  const attempt = getAttempt(access, attemptId);
+  const config = configFor(access);
+  const reconciled = await reconcilePayment(access, attempt.payment_id);
+  if (reconciled.payment.status === "paid") return { ...reconciled, walletActions: [] };
+  if (input.outcome === "delivered" && (reconciled.attempt?.provider_status !== "SUCCESS" || !reconciled.attempt.destination_tx_hash)) throw new ApiError(409, "The provider has not supplied a matching destination transaction", "DELIVERY_UNVERIFIED");
+  return { ...reconciled, requiresReporterAttestation: true, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt: input.receipt })] };
+}
+
+export async function prepareRefundConfirmation(access: AccessContext, attemptId: string, input: { refundAmount: string; receipt: string }) {
+  requirePermission(access, "payments:approve");
+  const attempt = getAttempt(access, attemptId);
+  const config = configFor(access);
+  if (atomic(input.refundAmount, true) > atomic(attempt.amount_in)) throw new ApiError(422, "The refund exceeds the original source amount", "REFUND_EXCEEDS_INPUT");
+  const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
+  const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
+  if (chainAttempt?.status !== "refund_pending") throw new ApiError(409, "Report route closure and the pending refund on NEAR first", "REFUND_NOT_REPORTED");
+  return { attempt, requiresReporterAttestation: true, walletActions: [action(config, "confirm_refund", { payment_id: attempt.payment_id, attempt_id: attemptId, refund_amount: atomic(input.refundAmount, true).toString(), receipt: input.receipt })] };
+}
+
+export async function prepareFunding(access: AccessContext, input: { originAsset: string; amount: string; refundAddress: string; reference: string; paymentId?: string; exactOutput?: boolean; dry?: boolean }) {
+  requirePermission(access, "payments:prepare");
+  assertRunning(access);
+  const config = configFor(access, true);
+  if (!input.reference.trim() || input.reference.length > 200) throw new ApiError(422, "A stable funding reference is required", "INVALID_REFERENCE");
+  const existing = row<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND reference=?", access.organizationId, input.reference);
+  if (existing) {
+    const request = (JSON.parse(existing.quote) as QuoteResponse).quoteRequest;
+    if (existing.origin_asset !== input.originAsset || existing.payment_id !== (input.paymentId ?? null) || request.amount !== input.amount || request.refundTo !== input.refundAddress || request.swapType !== (input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT")) throw new ApiError(409, "Funding reference already has different terms", "IDEMPOTENCY_CONFLICT");
+    return existing;
+  }
+  const tokens = await getSupportedTokens();
+  if (!tokens.some((token) => token.assetId === input.originAsset)) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
+  const destination = nativeUsdc(tokens, "near");
+  if (input.paymentId) getPayment(access, input.paymentId);
+  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString(), customRecipientMsg: "float:funding" });
+  if (input.dry) return { dry: true, quote };
+  const fundingId = id();
+  getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(fundingId, access.organizationId, input.paymentId ?? null, input.reference, input.originAsset, quote.quote.amountIn, quote.quote.amountOut, json(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, "pending_deposit", now(), now());
+  return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)!;
+}
+
+export function listFunding(access: AccessContext): FundingLeg[] {
+  requirePermission(access, "company:read");
+  return rows<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? ORDER BY created_at DESC LIMIT 250", access.organizationId);
+}
+
+export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string) {
+  requirePermission(access, "payments:prepare");
+  const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
+  if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
+  if (sourceTxHash) {
+    if (funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
+    getDb().prepare("UPDATE funding_legs SET source_tx_hash=?,updated_at=? WHERE id=?").run(sourceTxHash, now(), fundingId);
+    try { await notifyDeposit(funding.deposit_address, sourceTxHash, funding.deposit_memo); } catch {}
+  }
+  const status = await checkStatus(funding.deposit_address, funding.deposit_memo);
+  assertSameQuote(JSON.parse(funding.quote), status.quoteResponse);
+  const onchain = await syncTreasury(access);
+  const deliveredHash = status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null;
+  const completed = status.status === "SUCCESS" && !!deliveredHash;
+  getDb().prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=?,updated_at=? WHERE id=?").run(completed ? "reported_delivered" : providerOutcome(status.status), status.status, deliveredHash, now(), fundingId);
+  if (completed && funding.payment_id) {
+    const payment = getPayment(access, funding.payment_id);
+    if (payment.status === "approved_unfunded" && access.permissions.includes("payments:approve")) approvePayment(access, payment.id);
+  }
+  return { funding: row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId), treasury: onchain };
+}
