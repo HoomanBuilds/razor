@@ -1,5 +1,6 @@
 import { ApiError } from "../context";
 import type { TreasuryConfig } from "./types";
+import { atomic } from "../../lib/money";
 
 const ACCOUNT = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 
@@ -21,29 +22,75 @@ export async function view<T>(config: Pick<TreasuryConfig, "near_account_id" | "
   try { return JSON.parse(Buffer.from(result.result).toString()) as T; } catch { throw new ApiError(502, "The NEAR contract returned invalid data", "CONTRACT_RESPONSE_INVALID"); }
 }
 
-export async function verifyTokenReceipt(config: TreasuryConfig, txHash: string, receiver: string, minimum: bigint): Promise<{ amount: string; transactionHash: string; blockHashes: string[] }> {
-  const result = await rpc<Record<string, unknown>>(config.network, "EXPERIMENTAL_tx_status", { tx_hash: txHash, sender_account_id: config.near_account_id, wait_until: "FINAL" });
+export interface TokenReceiptEvent {
+  receiptId: string;
+  logIndex: number;
+  dataIndex: number;
+  amount: string;
+  sender: string;
+  receiver: string;
+  blockHash: string;
+}
+
+export interface TokenReceiptProof {
+  network: "mainnet" | "testnet";
+  tokenContract: string;
+  transactionHash: string;
+  senderAccountId: string;
+  receiver: string;
+  finality: "FINAL";
+  amount: string;
+  events: TokenReceiptEvent[];
+}
+
+export interface NearAction { FunctionCall?: { method_name: string; args: string } }
+
+export interface FinalTransaction {
+  final_execution_status?: string;
+  status?: Record<string, unknown>;
+  transaction?: { hash?: string; signer_id?: string; receiver_id?: string; actions?: NearAction[] };
+  transaction_outcome?: { outcome: { receipt_ids: string[] } };
+  receipts?: { receipt_id: string; receiver_id: string; predecessor_id: string; receipt?: { Action?: { actions: NearAction[] } } }[];
+  receipts_outcome?: { id: string; block_hash: string; outcome: { executor_id: string; logs: string[]; status: Record<string, unknown>; receipt_ids?: string[] } }[];
+}
+
+export function inspectTokenReceipt(result: FinalTransaction, config: TreasuryConfig, txHash: string, senderAccountId: string, receiver: string, expected: string, receiptId?: string, excludedEvents: string[] = []): TokenReceiptProof {
   if (result.final_execution_status !== "FINAL") throw new ApiError(409, "The NEAR transaction is not final", "RECEIPT_NOT_FINAL");
-  const status = result.status as Record<string, unknown> | undefined;
+  if (result.transaction?.hash !== txHash || result.transaction.signer_id !== senderAccountId) throw new ApiError(409, "The returned transaction does not match its hash and signer", "RECEIPT_IDENTITY_MISMATCH");
+  const status = result.status;
   if (!status || !("SuccessValue" in status)) throw new ApiError(409, "The NEAR transaction did not complete successfully", "RECEIPT_FAILED");
-  const outcomes = (result.receipts_outcome ?? []) as { block_hash: string; outcome: { executor_id: string; logs: string[]; status: Record<string, unknown> } }[];
-  let received = 0n;
-  const hashes: string[] = [];
-  for (const item of outcomes) {
-    if (item.outcome.executor_id !== config.token_contract || !("SuccessValue" in item.outcome.status)) continue;
-    for (const log of item.outcome.logs) {
+  const events: TokenReceiptEvent[] = [];
+  for (const item of result.receipts_outcome ?? []) {
+    if (item.outcome.executor_id !== config.token_contract || !("SuccessValue" in item.outcome.status || "SuccessReceiptId" in item.outcome.status)) continue;
+    for (const [logIndex, log] of item.outcome.logs.entries()) {
       if (!log.startsWith("EVENT_JSON:")) continue;
       let event;
       try { event = JSON.parse(log.slice(11)); } catch { continue; }
       if (event.standard !== "nep141" || event.event !== "ft_transfer" || !Array.isArray(event.data)) continue;
-      for (const transfer of event.data) {
-        if (transfer.new_owner_id === receiver && /^(0|[1-9]\d*)$/.test(String(transfer.amount))) {
-          received += BigInt(transfer.amount);
-          hashes.push(item.block_hash);
-        }
+      for (const [dataIndex, transfer] of event.data.entries()) {
+        if (!/^[1-9]\d*$/.test(String(transfer.amount))) continue;
+        if (transfer.old_owner_id === receiver) throw new ApiError(409, "The transaction includes funds leaving or being refunded from the destination. Review it manually", "RECEIPT_CONTAINS_OUTFLOW");
+        if (transfer.new_owner_id === receiver && typeof transfer.old_owner_id === "string" && validNearAccount(transfer.old_owner_id) && (!receiptId || item.id === receiptId) && !excludedEvents.includes(`${item.id}:${logIndex}:${dataIndex}`)) events.push({ receiptId: item.id, logIndex, dataIndex, amount: atomic(transfer.amount).toString(), sender: transfer.old_owner_id, receiver, blockHash: item.block_hash });
       }
     }
   }
-  if (received < minimum) throw new ApiError(409, "A matching final token delivery could not be verified", "DELIVERY_UNVERIFIED");
-  return { amount: received.toString(), transactionHash: txHash, blockHashes: [...new Set(hashes)] };
+  const required = atomic(expected);
+  if (new Set(events.map((event) => `${event.receiptId}:${event.logIndex}:${event.dataIndex}`)).size !== events.length) throw new ApiError(502, "The receipt response repeats a token event", "RECEIPT_EVENT_DUPLICATE");
+  const exact = events.find((event) => atomic(event.amount) === required);
+  const selected = exact ? [exact] : events;
+  if (!selected.length || selected.some((event) => !event.receiptId || !event.blockHash) || selected.reduce((sum, event) => sum + atomic(event.amount), 0n) !== required) throw new ApiError(409, "A final native-token transfer matching this funding amount could not be verified", "DELIVERY_UNVERIFIED");
+  return { network: config.network, tokenContract: config.token_contract, transactionHash: txHash, senderAccountId, receiver, finality: "FINAL", amount: required.toString(), events: selected };
+}
+
+export async function verifyTokenReceipt(config: TreasuryConfig, txHash: string, senderAccountId: string, receiver: string, expected: string, receiptId?: string, excludedEvents: string[] = []): Promise<TokenReceiptProof> {
+  if (!validNearAccount(senderAccountId) || !validNearAccount(receiver)) throw new ApiError(422, "Enter valid NEAR signer and destination account IDs", "INVALID_ACCOUNT");
+  const result = await nearTransactionStatus(config, txHash, senderAccountId);
+  return inspectTokenReceipt(result, config, txHash, senderAccountId, receiver, expected, receiptId, excludedEvents);
+}
+
+export async function nearTransactionStatus(config: TreasuryConfig, txHash: string, senderAccountId: string): Promise<FinalTransaction> {
+  if (!validNearAccount(senderAccountId)) throw new ApiError(422, "Enter the NEAR transaction signer", "INVALID_ACCOUNT");
+  const result = await rpc<FinalTransaction>(config.network, "EXPERIMENTAL_tx_status", { tx_hash: txHash, sender_account_id: senderAccountId, wait_until: "FINAL" });
+  if (result.final_execution_status !== "FINAL" || result.transaction?.hash !== txHash || result.transaction.signer_id !== senderAccountId) throw new ApiError(409, "The NEAR transaction is not final or does not match the supplied signer", "RECEIPT_IDENTITY_MISMATCH");
+  return result;
 }

@@ -42,6 +42,7 @@ export interface QuoteResponse {
     depositAddress?: string;
     depositMemo?: string;
     deadline?: string;
+    timeWhenInactive?: string;
     timeEstimate?: number;
     [key: string]: unknown;
   };
@@ -114,10 +115,20 @@ export async function requestQuote(request: QuoteRequest): Promise<QuoteResponse
   atomic(result.quote.amountOut);
   if (request.swapType === "EXACT_OUTPUT" && atomic(result.quote.amountOut) < atomic(request.amount)) throw new ApiError(502, "The quote does not satisfy the recipient amount", "QUOTE_UNDERPAYS");
   if (!request.dry && !result.quote.depositAddress) throw new ApiError(502, "The quote is missing a funding destination", "QUOTE_INVALID");
-  const expires = result.quote.deadline ?? request.deadline;
-  if (!Number.isFinite(Date.parse(expires)) || Date.parse(expires) <= Date.now()) throw new ApiError(409, "The quote has expired", "QUOTE_EXPIRED");
+  if (!request.dry) assertCanStartDeposit(result);
   if (!Number.isFinite(Date.parse(result.timestamp)) || Math.abs(Date.now() - Date.parse(result.timestamp)) > 120_000) throw new ApiError(502, "The routing quote is not fresh", "QUOTE_STALE");
   return result;
+}
+
+export function quoteDepositWindow(quote: QuoteResponse) {
+  const refundDeadline = Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline);
+  const inactiveAt = quote.quote.timeWhenInactive ? Date.parse(quote.quote.timeWhenInactive) : refundDeadline;
+  if (!Number.isFinite(refundDeadline) || !Number.isFinite(inactiveAt)) throw new ApiError(502, "The signed quote has invalid deposit timing", "QUOTE_TIMING_INVALID");
+  return { startBefore: Math.min(refundDeadline, inactiveAt), refundDeadline };
+}
+
+export function assertCanStartDeposit(quote: QuoteResponse, now = Date.now()): void {
+  if (quoteDepositWindow(quote).startBefore <= now) throw new ApiError(409, "Refresh the quote before starting a new deposit. Existing transfers must still be reconciled", "QUOTE_DEPOSIT_WINDOW_CLOSED");
 }
 
 export async function checkStatus(depositAddress: string, depositMemo?: string | null): Promise<StatusResponse> {
@@ -131,8 +142,8 @@ export async function checkStatus(depositAddress: string, depositMemo?: string |
   return result;
 }
 
-export async function notifyDeposit(depositAddress: string, txHash: string, depositMemo?: string | null): Promise<void> {
-  await call("/v0/deposit/submit", { depositAddress, txHash, ...(depositMemo ? { memo: depositMemo } : {}) });
+export async function notifyDeposit(depositAddress: string, txHash: string, depositMemo?: string | null, nearSenderAccount?: string): Promise<void> {
+  await call("/v0/deposit/submit", { depositAddress, txHash, ...(depositMemo ? { memo: depositMemo } : {}), ...(nearSenderAccount ? { nearSenderAccount } : {}) });
 }
 
 export function assertSameQuote(stored: QuoteResponse, reported: QuoteResponse): void {
