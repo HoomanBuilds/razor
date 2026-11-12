@@ -294,3 +294,64 @@ fn owner_source_recovery_makes_late_callback_harmless() {
         PaymentStatus::InFlight
     );
 }
+
+#[test]
+fn disabled_backup_cannot_execute_after_policy_reapproval() {
+    let mut treasury = setup(false);
+    call("owner.testnet", 1);
+    treasury.cancel_payment("payment".into());
+    treasury.set_recipient(
+        "recipient".into(),
+        Destination {
+            asset_id: "base-usdc".into(),
+            network: "base".into(),
+            address: "0x1234".into(),
+        },
+        Some(Destination {
+            asset_id: "nep141:usdc.testnet".into(),
+            network: "near".into(),
+            address: "fallback.testnet".into(),
+        }),
+        true,
+        true,
+    );
+    call("agent.testnet", 0);
+    treasury.propose_payment(
+        "payment-2".into(),
+        "recipient".into(),
+        U128(100),
+        U128(10),
+        U64(NOW + 86_400_000),
+        "invoice-2".into(),
+    );
+    call("owner.testnet", 1);
+    treasury.approve_payment("payment-2".into());
+    call("agent.testnet", 0);
+    treasury.create_attempt(
+        "payment-2".into(),
+        "backup-attempt".into(),
+        true,
+        Route {
+            kind: RouteKind::Direct,
+            source_receiver: account("fallback.testnet"),
+            input_amount: U128(100),
+            output_amount: U128(100),
+            quote_id: String::new(),
+            quote_hash: String::new(),
+            deadline_ms: U64(NOW + 60_000),
+        },
+    );
+    call("owner.testnet", 1);
+    treasury.authorize_attempt("payment-2".into(), "backup-attempt".into());
+    treasury.set_backup_asset("near".into(), None);
+    treasury.approve_payment("payment-2".into());
+    call("agent.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.execute_payment("payment-2".into(), "backup-attempt".into())
+        ))
+        .is_err()
+    );
+    assert_eq!(treasury.get_balance().in_flight, U128(0));
+    assert_eq!(treasury.get_balance().reserved, U128(110));
+}
