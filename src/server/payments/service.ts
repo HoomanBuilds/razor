@@ -185,7 +185,7 @@ export function approvePayment(access: AccessContext, paymentId: string): Paymen
       if (!bill || bill.status !== "approved") throw new ApiError(409, "Approve the underlying invoice before approving its payment", "BILL_APPROVAL_REQUIRED");
     }
     if (metadata.runId) {
-      const run = row<{ status: string }>("SELECT status FROM payroll_runs WHERE id=? AND organization_id=?", metadata.runId, access.organizationId);
+      const run = row<{ status: string }>("SELECT r.status FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=?", metadata.runId, access.organizationId, payment.id, payment.recipient_id);
       if (!run || run.status !== "approved") throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
     }
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;

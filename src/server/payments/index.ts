@@ -3,6 +3,8 @@ import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
 import { getSupportedTokens } from "./intents";
 import * as service from "./service";
+import { paymentReviewToken } from "./approval";
+import { transaction } from "../db";
 
 export * from "./service";
 export type { Payment, PayoutAttempt, FundingLeg } from "./types";
@@ -45,8 +47,20 @@ paymentsRoutes.post("/funding", async (c) => c.json(await service.prepareFunding
 paymentsRoutes.post("/funding/:id/reconcile", async (c) => c.json(await service.reconcileFunding(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ sourceTxHash: text.optional() }))).sourceTxHash)));
 paymentsRoutes.get("/payments", (c) => c.json({ payments: service.listPayments(c.get("access")) }));
 paymentsRoutes.post("/payments", async (c) => c.json({ payment: service.createPayment(c.get("access"), await body(c.req.raw, paymentInput)) }, 201));
-paymentsRoutes.get("/payments/:id", (c) => c.json({ payment: service.getPayment(c.get("access"), c.req.param("id")), attempts: service.listAttempts(c.get("access"), c.req.param("id")) }));
-paymentsRoutes.post("/payments/:id/approve", (c) => c.json({ payment: service.approvePayment(c.get("access"), c.req.param("id")) }));
+paymentsRoutes.get("/payments/:id", (c) => {
+  const payment = service.getPayment(c.get("access"), c.req.param("id"));
+  return c.json({ payment, reviewToken: paymentReviewToken(payment), attempts: service.listAttempts(c.get("access"), payment.id) });
+});
+paymentsRoutes.post("/payments/:id/approve", async (c) => {
+  const input = await body(c.req.raw, z.object({ reviewToken: z.string().regex(/^[a-f0-9]{64}$/) }));
+  return c.json(transaction(() => {
+    const payment = service.getPayment(c.get("access"), c.req.param("id"));
+    const metadata = JSON.parse(payment.metadata) as { runId?: string; billId?: string };
+    if (!payment.approved_at && (metadata.runId || metadata.billId)) throw new ApiError(409, "Review and approve the underlying payroll run or invoice first", "SOURCE_REVIEW_REQUIRED");
+    if (input.reviewToken !== paymentReviewToken(payment)) throw new ApiError(409, "Payment terms changed. Review the current amount and receiving details before approval", "PAYMENT_REVIEW_CHANGED");
+    return { payment: service.approvePayment(c.get("access"), payment.id) };
+  }));
+});
 paymentsRoutes.post("/payments/:id/revalidate", (c) => c.json({ payment: service.revalidatePaymentRecipient(c.get("access"), c.req.param("id")) }));
 paymentsRoutes.post("/payments/:id/cancel", async (c) => c.json(await service.cancelPayment(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/payments/:id/quote", async (c) => c.json(await service.preparePaymentQuote(c.get("access"), c.req.param("id"), await body(c.req.raw, quoteInput))));
