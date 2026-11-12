@@ -22,6 +22,11 @@ export async function view<T>(config: Pick<TreasuryConfig, "near_account_id" | "
   try { return JSON.parse(Buffer.from(result.result).toString()) as T; } catch { throw new ApiError(502, "The NEAR contract returned invalid data", "CONTRACT_RESPONSE_INVALID"); }
 }
 
+export async function contractCodeHash(config: Pick<TreasuryConfig, "near_account_id" | "network">): Promise<string> {
+  const account = await rpc<{ code_hash: string }>(config.network, "query", { request_type: "view_account", finality: "final", account_id: config.near_account_id });
+  return account.code_hash;
+}
+
 export interface TokenReceiptEvent {
   receiptId: string;
   logIndex: number;

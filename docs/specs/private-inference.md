@@ -39,3 +39,7 @@ Retained evidence includes verified attestation reports, the signed receipt and 
 The review screen must show extracted currency, warnings and recipient observations. Foreign currency amounts require an explicit USDC-denominated obligation entered by the payer. Invoice payment instructions never replace a receiver-confirmed payout profile.
 
 Verification follows the official [SDK guide](https://github.com/nearai/inference-sdk/blob/main/js/docs/verification-guide.md) and [API reference](https://github.com/nearai/inference-sdk/blob/main/js/docs/api-reference.md).
+
+## Settlement evidence
+
+Manually entered settlement and refund references are encrypted in private storage for 30 days. Financial authorization sends only their SHA-256 commitments to the NEAR treasury. The company can inspect retained evidence, while expiration removes its plaintext recovery path and preserves the commitment and accounting history. Public transaction identifiers remain visible where needed for transfer reconciliation.

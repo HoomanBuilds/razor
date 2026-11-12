@@ -4,10 +4,11 @@ import { randomUUID } from "node:crypto";
 import { getDb, row, transaction } from "../src/server/db";
 import { createBill, approveBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
 import { approvePayment, revalidatePaymentRecipient } from "../src/server/payments";
-import { microUsd } from "../src/lib/format";
+import { microUsd, usd } from "../src/lib/format";
 import { parsePayrollCsv } from "../src/lib/csv";
 import type { AccessContext } from "../src/server/context";
 import { acceptBillMilestone, addBillInstallment, getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
+import { listPrivateEvidence, retainPrivateEvidence } from "../src/server/reconciliation/evidence";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "a1".repeat(32);
@@ -52,6 +53,7 @@ test("pay-run approval is atomic and stale recipient details require explicit dr
 test("USDC and payroll imports preserve precision and reject duplicate recipients", () => {
   assert.equal(microUsd("12.000001"), "12000001");
   assert.equal(microUsd("0", true), "0");
+  assert.equal(usd("1"), "$0.000001");
   assert.throws(() => microUsd("1.0000001"));
   assert.throws(() => microUsd("0"));
   const recipients = [{ id: "r1", email: "one@example.test" }];
@@ -75,4 +77,20 @@ test("milestone acceptance gates release and installments preserve the unpaid in
   assert.equal(next.uncommitted, "0");
   assert.equal(next.installments.length, 2);
   assert.throws(() => approveBill(approver, bill.id), /Accept the milestone/);
+});
+
+test("private settlement evidence is encrypted, scoped and committed without plaintext", () => {
+  const { preparer, approver, recipientId } = fixture();
+  const bill = createBill(preparer, { recipientId, reference: "EVIDENCE-1", title: "Private evidence fixture", amount: "1000000" });
+  const attemptId = randomUUID(), now = new Date().toISOString();
+  getDb().prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,created_at,updated_at) VALUES(?,?,?,'primary','prepared','{}','USDC','base','fixture','1000000','1000000','fixture.near',?,?)")
+    .run(attemptId, bill.payment_id!, approver.organizationId, now, now);
+  const text = "Private closure note for finance";
+  const commitment = retainPrivateEvidence(approver, attemptId, "settlement:delivered", text);
+  assert.match(commitment, /^sha256:[a-f0-9]{64}$/);
+  assert.notEqual(row<{ ciphertext: string }>("SELECT ciphertext FROM private_settlement_evidence WHERE attempt_id=?", attemptId)!.ciphertext, text);
+  assert.equal(listPrivateEvidence(approver, attemptId)[0].receipt, text);
+  assert.deepEqual(listPrivateEvidence({ ...approver, organizationId: "unrelated" }, attemptId), []);
+  getDb().prepare("UPDATE private_settlement_evidence SET expires_at=? WHERE attempt_id=?").run(new Date(Date.now() - 1000).toISOString(), attemptId);
+  assert.equal(listPrivateEvidence(approver, attemptId)[0].receipt, null);
 });

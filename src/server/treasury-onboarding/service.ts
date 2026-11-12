@@ -1,7 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { base58 } from "@scure/base";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { row, rows } from "../db";
@@ -9,6 +6,7 @@ import { configureTreasury } from "../payments/service";
 import { NATIVE_USDC } from "../payments/policy";
 import { validNearAccount } from "../payments/near";
 import { atomic } from "../../lib/money";
+import { reviewedArtifactHash } from "../near-artifacts";
 import type { WalletTransaction } from "../payments/types";
 
 const Account=z.string().refine(validNearAccount,"Enter a valid NEAR account");
@@ -24,20 +22,12 @@ const Quote=Factory.omit({paused:true}).extend({account_id:Account});
 const Creation=z.object({account_id:Account,owner_id:Account,slug:z.string(),generation:z.string(),token_contract:Account,per_payment_limit:Atomic,daily_limit:Atomic,status:z.enum(["pending","ready","failed","refunding","refunded"]),treasury_funding:Atomic,factory_storage_fee:Atomic,refund_amount:Atomic,created_at_ms:z.string()});
 interface Settings {network:Network;factoryId:string;factoryCodeHash:string;treasuryCodeHash:string}
 
-function artifactHash(envName:string,fileName:string):string {
-  const configured=process.env[envName];
-  if(configured) {
-    try{if(base58.decode(configured).length===32)return configured;}catch{}
-    throw new ApiError(503,`${envName} must be the base58 SHA-256 hash of the reviewed contract artifact`,"FACTORY_SETUP_REQUIRED");
-  }
-  try{return base58.encode(createHash("sha256").update(readFileSync(resolve(".tools/wasm",fileName))).digest());}catch{throw new ApiError(503,`Build the reviewed contracts or configure ${envName} before creating company treasuries`,"FACTORY_SETUP_REQUIRED");}
-}
 
 function settings():Settings {
   const network=process.env.NEAR_NETWORK || "testnet",factoryId=process.env.NEAR_FACTORY_ID;
   if(network!=="mainnet"&&network!=="testnet")throw new ApiError(503,"Choose mainnet or testnet for NEAR_NETWORK","FACTORY_SETUP_REQUIRED");
   if(!factoryId||!validNearAccount(factoryId))throw new ApiError(503,"Configure a deployed NEAR_FACTORY_ID for this network to enable wallet-created treasuries","FACTORY_SETUP_REQUIRED");
-  return {network,factoryId,factoryCodeHash:artifactHash("NEAR_FACTORY_CODE_HASH","float_factory.wasm"),treasuryCodeHash:artifactHash("NEAR_TREASURY_CODE_HASH","float_treasury.wasm")};
+  return {network,factoryId,factoryCodeHash:reviewedArtifactHash("NEAR_FACTORY_CODE_HASH","float_factory.wasm"),treasuryCodeHash:reviewedArtifactHash("NEAR_TREASURY_CODE_HASH","float_treasury.wasm")};
 }
 
 async function rpc<T>(config:Settings,method:string,params:unknown):Promise<T> {

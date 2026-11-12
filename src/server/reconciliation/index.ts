@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { listPrivateEvidence } from "./evidence";
 import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
 import { accountingExport } from "./export";
@@ -11,6 +12,7 @@ export { getFundingReceipt, verifyFundingCredit } from "./funding";
 export { reconciliationQueue } from "./service";
 export { prepareSourceRecovery } from "./source";
 export const reconciliationRoutes = new Hono<AppEnv>();
+reconciliationRoutes.get("/attempts/:id/evidence", (c) => c.json({ evidence: listPrivateEvidence(c.get("access"), c.req.param("id")) }));
 
 reconciliationRoutes.get("/", (c) => {
   const parsed = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }).safeParse(c.req.query());

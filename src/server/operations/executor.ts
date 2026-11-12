@@ -8,6 +8,7 @@ import type { AccessContext } from "../context";
 import type { ChainPayment, Payment, PayoutAttempt, TreasuryConfig } from "../payments/types";
 import { isPaused, iso, notify, workerConfiguration } from "./service";
 import { assertLease } from "./worker";
+import { executionTerms, type ExecutionRecord } from "../reconciliation/direct";
 import type { AgentMandate, OperationJob } from "./types";
 
 interface Submission { tx_hash: string; signed_transaction_ciphertext: string; status: string; executor_account_id: string }
@@ -46,11 +47,12 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   if (chainConfig.paused || isPaused(job.organization_id)) return blocked("Company or onchain treasury payments are paused.");
   if (chainConfig.token_contract !== config.token_contract || chainConfig.owner_id === worker.accountId || !chainConfig.executors.includes(worker.accountId) || chainConfig.approvers.includes(worker.accountId)) return blocked("A dedicated executor role is required. The worker cannot act as owner or approver.");
   if (chain.policy_version !== chainConfig.policy_version || BigInt(chain.expires_at_ms) <= BigInt(Date.now())) return blocked("The onchain policy or payment approval expired. Renew it in the owner wallet.");
-  const quote = JSON.parse(attempt.quote) as { quote: { deadline?: string }; quoteRequest: { deadline: string } };
-  const deadline = Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline);
+  const quote = JSON.parse(attempt.quote) as ExecutionRecord;
+  const terms = executionTerms(quote);
+  const deadline = Date.parse(terms.deadline);
   if (deadline <= Date.now() || String(deadline) !== exact.route.deadline_ms) return blocked("The owner-authorized quote expired or its deadline changed.");
   if (chain.amount !== payment.amount || chain.max_fee !== payment.max_fee || chain.reference !== `float:${payment.id}` || chain.recipient_id !== payment.recipient_id
-    || exact.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex") || exact.route.kind !== "intents"
+    || exact.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex") || exact.route.kind !== terms.kind
     || exact.route.input_amount !== attempt.amount_in || exact.route.output_amount !== attempt.expected_output || exact.route.source_receiver !== attempt.deposit_address
     || exact.destination.asset_id !== attempt.destination_asset || exact.destination.network !== attempt.destination_network || exact.destination.address !== attempt.destination_address
     || exact.use_backup !== (attempt.route === "backup")) return blocked("The stored payment and the exact onchain route disagree. Reconcile them before signing.");

@@ -3,6 +3,7 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { view, validNearAccount } from "../payments/near";
+import { purgePrivateEvidence } from "../reconciliation/evidence";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import type { AgentMandate, Notice, OperationJob, RecurringRule, RecurringRuleView, TemplatePayment, TemplateSnapshot } from "./types";
 
@@ -154,6 +155,7 @@ export async function prepareExecutorRole(access: AccessContext, enabled: boolea
 export function purgeRetention(access: AccessContext) {
   requirePermission(access, "documents:manage");
   const result = getDb().prepare("DELETE FROM assistant_drafts WHERE organization_id=? AND expires_at<=?").run(access.organizationId, iso());
+  purgePrivateEvidence(access.organizationId);
   return { purged: Number(result.changes) };
 }
 export function overview(access: AccessContext) {

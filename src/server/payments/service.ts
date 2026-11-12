@@ -4,8 +4,10 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { atomic as parseAtomic, usdToToken } from "../../lib/money";
 import { assertCanStartDeposit, assertSameQuote, checkStatus, getSupportedTokens, nativeUsdc, notifyDeposit, requestQuote, type QuoteResponse, type Token } from "./intents";
 import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
-import { validNearAccount, view } from "./near";
+import { contractCodeHash, validNearAccount, view } from "./near";
+import { reviewedArtifactHash } from "../near-artifacts";
 import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
+import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
 
 const now = () => new Date().toISOString();
@@ -85,6 +87,7 @@ export async function configureTreasury(access: AccessContext, input: { nearAcco
   requirePermission(access, "company:manage");
   if (!validNearAccount(input.nearAccountId) || !validNearAccount(input.tokenContract)) throw new ApiError(422, "Enter valid NEAR account IDs", "INVALID_ACCOUNT");
   const config: TreasuryConfig = { organization_id: access.organizationId, near_account_id: input.nearAccountId, network: input.network, token_contract: input.tokenContract };
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "float_treasury.wasm")) throw new ApiError(409, "This account does not run the reviewed FLOAT treasury contract", "TREASURY_CODE_MISMATCH");
   const contract = await view<{ token_contract: string; owner_id: string }>(config, "get_config");
   if (contract.token_contract !== input.tokenContract) throw new ApiError(422, "The treasury contract uses another settlement token", "SETTLEMENT_TOKEN_MISMATCH");
   if (config.network === "mainnet" && config.token_contract !== "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1") throw new ApiError(422, "Live settlement requires native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
@@ -101,6 +104,7 @@ export async function configureTreasury(access: AccessContext, input: { nearAcco
 export async function syncTreasury(access: AccessContext) {
   requirePermission(access, "company:read");
   const config = configFor(access);
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "float_treasury.wasm")) throw new ApiError(409, "Treasury code changed. Review the contract before recognizing balances or preparing payments", "TREASURY_CODE_MISMATCH");
   const actual = await view<{ balance: string; reserved: string; available: string; in_flight: string; confirmed_at_ms: string }>(config, "get_balance");
   const confirmed = atomic(actual.balance, true);
   transaction(() => {
@@ -467,7 +471,8 @@ export async function prepareSettlement(access: AccessContext, attemptId: string
   const reconciled = await reconcilePayment(access, attempt.payment_id);
   if (reconciled.payment.status === "paid") return { ...reconciled, walletActions: [] };
   if (input.outcome === "delivered" && (reconciled.attempt?.provider_status !== "SUCCESS" || !reconciled.attempt.destination_tx_hash)) throw new ApiError(409, "The provider has not supplied a matching destination transaction", "DELIVERY_UNVERIFIED");
-  return { ...reconciled, requiresReporterAttestation: true, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt: input.receipt })] };
+  const receipt = retainPrivateEvidence(access, attemptId, `settlement:${input.outcome}`, input.receipt);
+  return { ...reconciled, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt })] };
 }
 
 export async function prepareRefundConfirmation(access: AccessContext, attemptId: string, input: { refundAmount: string; receipt: string }) {
@@ -478,7 +483,8 @@ export async function prepareRefundConfirmation(access: AccessContext, attemptId
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
   if (chainAttempt?.status !== "refund_pending") throw new ApiError(409, "Report route closure and the pending refund on NEAR first", "REFUND_NOT_REPORTED");
-  return { attempt, requiresReporterAttestation: true, walletActions: [action(config, "confirm_refund", { payment_id: attempt.payment_id, attempt_id: attemptId, refund_amount: atomic(input.refundAmount, true).toString(), receipt: input.receipt })] };
+  const receipt = retainPrivateEvidence(access, attemptId, "refund", input.receipt);
+  return { attempt, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "confirm_refund", { payment_id: attempt.payment_id, attempt_id: attemptId, refund_amount: atomic(input.refundAmount, true).toString(), receipt })] };
 }
 
 export async function prepareFunding(access: AccessContext, input: { originAsset: string; amount: string; refundAddress: string; reference: string; paymentId?: string; exactOutput?: boolean; dry?: boolean }) {

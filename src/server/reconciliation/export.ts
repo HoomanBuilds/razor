@@ -33,12 +33,16 @@ export function accountingExport(access: AccessContext): string {
   const paymentById = new Map(payments.map((payment) => [payment.id, payment]));
   const billByPayment = new Map(bills.filter((bill) => bill.payment_id).map((bill) => [bill.payment_id!, bill]));
   const payrollByPayment = new Map(payroll.filter((item) => item.payment_id).map((item) => [item.payment_id, item]));
+  const billById = new Map(bills.map((bill) => [bill.id, bill]));
+  const runs = new Map(rows<{ id: string; reference: string; period_start: string; period_end: string }>("SELECT id,reference,period_start,period_end FROM payroll_runs WHERE organization_id=?", access.organizationId).map((run) => [run.id, run]));
   const sourceProofs = new Map(rows<{ attempt_id: string; receipt_id: string }>("SELECT attempt_id,receipt_id FROM payment_source_receipts WHERE organization_id=?", access.organizationId).map((proof) => [proof.attempt_id, proof.receipt_id]));
   const common = (payment: Payment | undefined): RecordRow => {
     if (!payment) return {};
-    const bill = billByPayment.get(payment.id);
+    const metadata = json<{ billId?: string; runId?: string }>(payment.metadata, {});
+    const bill = billByPayment.get(payment.id) ?? (metadata.billId ? billById.get(metadata.billId) : undefined);
     const item = payrollByPayment.get(payment.id);
-    return { payment_id: payment.id, recipient_id: payment.recipient_id, recipient_name: names.get(payment.recipient_id), payment_kind: payment.kind, payment_reference: payment.reference, bill_id: bill?.id, bill_reference: bill?.reference, payroll_run_id: item?.run_id, payroll_reference: item?.reference, period_start: item?.period_start, period_end: item?.period_end };
+    const run = metadata.runId ? runs.get(metadata.runId) : undefined;
+    return { payment_id: payment.id, recipient_id: payment.recipient_id, recipient_name: names.get(payment.recipient_id), payment_kind: payment.kind, payment_reference: payment.reference, bill_id: bill?.id, bill_reference: bill?.reference, payroll_run_id: item?.run_id ?? run?.id, payroll_reference: item?.reference ?? run?.reference, period_start: item?.period_start ?? run?.period_start, period_end: item?.period_end ?? run?.period_end };
   };
   const records: RecordRow[] = [];
   for (const payment of payments) {
