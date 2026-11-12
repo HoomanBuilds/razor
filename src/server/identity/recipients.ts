@@ -137,6 +137,12 @@ recipientPortalRoutes.get("/:token",(c)=>{
   const recipient=invitedRecipient(c.req.param("token"),c.get("userId"));
   return c.json({recipient,organization:row("SELECT id,name FROM organizations WHERE id = ?",recipient.organization_id),backupAsset:"USDC",backupNetworks:BACKUP_NETWORKS});
 });
+recipientPortalRoutes.get("/:token/payments",(c)=>{
+  const recipient=invitedRecipient(c.req.param("token"),c.get("userId"));
+  if(!row("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'payments'")) throw new ApiError(503,"Payment history is not configured yet. Your saved payout preferences remain available.","PAYMENT_HISTORY_SETUP_REQUIRED");
+  const payments=rows("SELECT p.id,p.kind,p.reference,p.amount,p.status,p.scheduled_for,p.created_at,p.updated_at,a.destination_asset,a.destination_network,a.destination_address,a.destination_tx_hash,a.state AS route_status FROM payments p LEFT JOIN payout_attempts a ON a.id = (SELECT latest.id FROM payout_attempts latest WHERE latest.payment_id = p.id AND latest.organization_id = p.organization_id ORDER BY latest.created_at DESC LIMIT 1) WHERE p.organization_id = ? AND p.recipient_id = ? ORDER BY p.created_at DESC LIMIT 100",recipient.organization_id,recipient.id);
+  return c.json({payments,amountAsset:"USDC",amountDecimals:6});
+});
 recipientPortalRoutes.post("/:token/confirm",async(c)=>{
   const input=validateRoute(PreferenceInput.parse(await c.req.json())),userId=c.get("userId"),recipient=invitedRecipient(c.req.param("token"),userId);
   if(input.fallbackConsent && (!input.backupNetwork || !input.backupAddress)) throw new ApiError(400,"Choose a complete backup route before consenting to USDC fallback","BACKUP_INCOMPLETE");
