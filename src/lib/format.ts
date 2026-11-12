@@ -3,8 +3,8 @@ export function usd(micro: string | bigint = "0"): string {
   const negative = value < 0n;
   const absolute = negative ? -value : value;
   const whole = (absolute / 1_000_000n).toLocaleString("en-US");
-  const cents = ((absolute % 1_000_000n) / 10_000n).toString().padStart(2, "0");
-  return `${negative ? "-" : ""}$${whole}.${cents}`;
+  const fraction = (absolute % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "").padEnd(2, "0");
+  return `${negative ? "-" : ""}$${whole}.${fraction}`;
 }
 
 export function microUsd(value: string, allowZero = false): string {

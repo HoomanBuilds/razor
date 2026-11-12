@@ -23,7 +23,7 @@ export function Action({ busy, children, ...props }: ButtonHTMLAttributes<HTMLBu
 export function Status({ value }: { value: string }) {
   const positive = ["paid", "settled", "active", "confirmed", "approved"].includes(value);
   const held = /hold|fail|disput|refund|cancel|exception|unfunded/.test(value);
-  const labels: Record<string, string> = { approved_unfunded: "Needs funds", prepared: "Awaiting authorization", reported_delivered: "Delivery reported", recovery_pending: "Recovery in progress", unknown: "Needs reconciliation", held: "Held for review", closed_unfunded: "Closed without transfer", pending_confirmation: "Needs confirmation", awaiting_consent: "Needs consent", setup_required: "Setup required" };
+  const labels: Record<string, string> = { approved_unfunded: "Needs funds", prepared: "Route prepared", reported_delivered: "Delivery reported", recovery_pending: "Recovery in progress", unknown: "Needs reconciliation", held: "Held for review", closed_unfunded: "Closed without transfer", pending_confirmation: "Needs confirmation", awaiting_consent: "Needs consent", setup_required: "Setup required" };
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-medium", positive ? "bg-emerald-50 text-emerald-800" : held ? "bg-amber-50 text-amber-900" : "bg-muted text-muted-foreground")}>{labels[value] ?? value.replaceAll("_", " ")}</span>;
 }
 

@@ -12,7 +12,7 @@ export interface FundingWalletActionProps {
   onSubmitted:(txHash:string)=>Promise<void>;
 }
 
-interface BoundQuote {quoteRequest:{originAsset:string;refundTo:string;dry:boolean;deadline:string;depositType:string};quote:{amountIn:string;depositAddress:string;depositMemo?:string;deadline?:string;amountInUsd?:string}}
+interface BoundQuote {quoteRequest:{originAsset:string;refundTo:string;dry:boolean;deadline:string;depositType:string};quote:{amountIn:string;depositAddress:string;depositMemo?:string;deadline?:string;timeWhenInactive?:string;amountInUsd?:string}}
 interface SourceReceipt {hash:string;confirmed:boolean;sender:string}
 const EVM_CHAINS:Record<string,Chain>={eth:mainnet,base,arb:arbitrum,pol:polygon,op:optimism,bsc,avax:avalanche,gnosis,aurora,bera:berachain,monad,plasma,scroll,linea,mantle,blast,celo,zksync:zkSync,abs:abstract};
 const NEAR_ACCOUNT=/^(([a-z0-9]+[-_])*[a-z0-9]+\.)*([a-z0-9]+[-_])*[a-z0-9]+$/;
@@ -24,6 +24,8 @@ export function validateFundingQuote(funding:FundingWalletActionProps["funding"]
   if(token.assetId!==funding.origin_asset || quote?.quoteRequest?.originAsset!==funding.origin_asset || quote.quote?.amountIn!==funding.amount_in || quote.quote.depositAddress!==funding.deposit_address || (quote.quote.depositMemo || null)!==(funding.deposit_memo || null) || quote.quoteRequest.dry!==false || quote.quoteRequest.depositType!=="ORIGIN_CHAIN" || typeof quote.quoteRequest.refundTo!=="string" || !quote.quoteRequest.refundTo) throw new Error("The funding instructions do not match the quoted asset, amount and destination. Create a fresh funding request.");
   if(!/^[1-9]\d*$/.test(funding.amount_in) || !Number.isInteger(token.decimals) || token.decimals<0 || token.decimals>38) throw new Error("The funding amount or token decimals are invalid.");
   const deadline=Date.parse(quote.quote.deadline || quote.quoteRequest.deadline);
+  const inactive=Date.parse(quote.quote.timeWhenInactive || "");
+  if(Number.isFinite(inactive) && inactive<=Date.now())throw new Error("These deposit instructions need refreshing before a new transfer. Check any existing deposit first.");
   if(!Number.isFinite(deadline) || deadline<=Date.now()) throw new Error("This funding quote expired. Create a fresh request before transferring.");
   if(funding.status!=="pending_deposit") throw new Error("This funding request has already moved past the deposit step. Check its status before making another transfer.");
   return quote;
