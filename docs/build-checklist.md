@@ -15,20 +15,20 @@ Product: a NEAR-based company payments and payroll platform with easy onboarding
 
 Current catalog coverage: **90 feature requirements: 82 core and 8 optional**. End-to-end, recovery and track checks below are additional verification gates, not extra features to inflate that count.
 
-All boxes start unchecked. No implementation audit has been performed as part of creating this checklist.
+The first evidence review on 12 November 2026 verifies **9 of 127 checks: 8 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
 
 | Review field | Current value |
 | --- | --- |
-| Last full build review | Not performed |
-| Build or deployment reviewed | Not recorded |
-| Selected optional features | Not recorded |
-| Target track evidence | Real-World Money, Autonomous Business, Privacy & Private AI |
+| Last full build review | Pending; partial source and recorded-evidence review on 2026-11-12 |
+| Build or deployment reviewed | Source snapshot `6f3edfa`, plus integrator follow-ups; earlier local workflow artifacts do not record a commit hash |
+| Selected optional features | No optional requirement verified; optional netting remains separate from core completion |
+| Target track evidence | Planned: Real-World Money, Autonomous Business, Privacy & Private AI; live demonstrations pending |
 
 ## 1. A new payer can arrive and start working
 
 - [ ] `AUTH-01` A fresh user can sign up and return with Google or a simple email option without a company invitation, operator setup or pre-existing wallet.
-- [ ] `AUTH-02` A supported wallet-first user authenticates through a verified, fresh, domain-bound challenge; a connected address alone cannot impersonate its owner.
-- [ ] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews editable USDC and time-zone defaults without manual database setup.
+- [x] `AUTH-02` A supported wallet-first user authenticates through a verified, fresh, domain-bound challenge; a connected address alone cannot impersonate its owner.
+- [x] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews editable USDC and time-zone defaults without manual database setup.
 - [ ] `AUTH-04` A new company can add payees and prepare and preview payroll or bills before funding; execution clearly identifies missing authority or money.
 - [ ] `AUTH-05` Social login and wallet linking require verified control and return the user to the same authorized workspaces without email-only account merging.
 - [ ] `AUTH-06` Invitations can be accepted, expired and revoked; assigned roles are enforced beyond the interface.
@@ -71,12 +71,12 @@ All boxes start unchecked. No implementation audit has been performed as part of
 ## 5. Employees, contractors and other payees
 
 - [ ] `REC-01` Employee, contractor, freelancer and supplier profiles preserve their relationship and payment status.
-- [ ] `REC-02` Authenticated recipients can confirm their own payout details and view only their own records.
+- [x] `REC-02` Authenticated recipients can confirm their own payout details and view only their own records.
 - [ ] `REC-03` Primary preferences store the exact token, network, compatible address and required supported destination metadata.
-- [ ] `REC-04` A distinct recipient-confirmed native USDC backup is available on an enabled curated network, with explicit fallback consent.
+- [x] `REC-04` A distinct recipient-confirmed native USDC backup is available on an enabled curated network, with explicit fallback consent.
 - [ ] `REC-05` Invalid addresses, unsupported assets and temporarily unavailable routes are distinguished from ready destinations; an EVM address does not imply a network.
 - [ ] `REC-06` Destination changes are versioned and notified; affected unexecuted payments cannot silently follow changed addresses.
-- [ ] `REC-07` CSV import validates individual rows, invites recipients and resolves missing data before automated payout activation.
+- [x] `REC-07` CSV import validates individual rows, invites recipients and resolves missing data before automated payout activation.
 
 ## 6. Employee payroll
 
@@ -91,7 +91,7 @@ All boxes start unchecked. No implementation audit has been performed as part of
 
 ## 7. Contractor, freelancer and supplier payments
 
-- [ ] `BILL-01` Invoice or structured-request intake records supplier, reference, amount, settlement unit, line items and due date.
+- [x] `BILL-01` Invoice or structured-request intake records supplier, reference, amount, settlement unit, line items and due date.
 - [ ] `BILL-02` NEAR AI Cloud produces a private draft extraction with missing or inconsistent fields flagged; human review precedes approved liability creation.
 - [ ] `BILL-03` Reused invoice references, document fingerprints and suspiciously similar local requests are flagged before another payment.
 - [ ] `BILL-04` A milestone payout links to approved terms and acceptance evidence; missing acceptance prevents release.
@@ -107,7 +107,7 @@ All boxes start unchecked. No implementation audit has been performed as part of
 - [ ] `ROUTE-03` A valid permitted primary is preferred; expired pre-execution quotes are refreshed within the same mandate before considering backup.
 - [ ] `ROUTE-04` USDC backup executes only with the confirmed profile, allowed trigger, recipient consent, company approval, available funds and permitted cost.
 - [ ] `ROUTE-05` Each logical obligation has distinct execution-attempt identities, route evidence and correctly reserved funds.
-- [ ] `ROUTE-06` Unknown, contradictory or delayed outcomes hold the payment for reconciliation without automatically issuing another payout.
+- [x] `ROUTE-06` Unknown, contradictory or delayed outcomes hold the payment for reconciliation without automatically issuing another payout.
 - [ ] `ROUTE-07` Recovered funds and incurred fees are confirmed before backup or reservation release; a reported refund alone is insufficient.
 - [ ] `ROUTE-08` Invalid backups, insufficient funds, partial delivery and changed terms remain visible with the appropriate next action.
 - [ ] `ROUTE-09` Company and recipient notices show actual delivered amount, network, receipt and reason for backup or hold without exposing unrelated private data.
@@ -123,7 +123,7 @@ Run these against the defined [fallback rules](specs/payouts-and-fallback.md). R
 - [ ] `FALL-05` A refund with unreconciled funds stays in recovery; only confirmed closure, recovered availability and permitted costs enable backup.
 - [ ] `FALL-06` A profile change after approval cannot silently redirect payment to a new primary or backup address.
 - [ ] `FALL-07` An over-budget backup or insufficient balance holds the obligation without reducing entitlement or exceeding authorization.
-- [ ] `FALL-08` A primary already using USDC needs another confirmed network to establish a distinct backup.
+- [x] `FALL-08` A primary already using USDC needs another confirmed network to establish a distinct backup.
 - [ ] `FALL-09` Worker concurrency, duplicate callbacks and service restarts do not create overlapping payable attempts.
 - [ ] `FALL-10` Partial delivery is reconciled before a separately authorized remainder payment; the full obligation is not resent.
 - [ ] `FALL-11` An Intents outage cannot trigger an unapproved alternate-provider, direct-chain or third-destination payment.
@@ -136,7 +136,7 @@ Run these against the defined [fallback rules](specs/payouts-and-fallback.md). R
 - [ ] `AI-03` The assistant prepares pay runs, explains coverage gaps and flags unusual changes without approving its own proposals.
 - [ ] `AI-04` Every automated financial action identifies the agent, permitted recipients, amounts, time window, actions and maximum cost.
 - [ ] `AI-05` The actual contract or verified custody boundary rejects unauthorized destinations, amounts, duplicates and paused execution even if the model requests them.
-- [ ] `AI-06` Private inference failure or failed required verification does not leak documents to another provider; allowed manual workflows still function.
+- [x] `AI-06` Private inference failure or failed required verification does not leak documents to another provider; allowed manual workflows still function.
 - [ ] `AI-07` The owner can inspect, pause and revoke agent activity without losing the financial history.
 
 ## 10. Privacy, accounting and audit
@@ -218,5 +218,10 @@ Append a row for each meaningful review. Use the same IDs as the checkboxes. Evi
 | Review date | Build or deployment | IDs reviewed | Result | Evidence and unresolved issues |
 | --- | --- | --- | --- | --- |
 | No build review recorded | - | - | Unreviewed | All checks remain unverified |
+| 2026-11-12 | Earlier local development candidate; hash not recorded | `AUTH-02`, `AUTH-03` | Verified locally | Actual signed EVM challenge and company creation in `.data/workflow-check-result.json`; identity checks cover domain, expiry, replay, forged signatures, owner role and editable company defaults. This does not establish social or NEAR wallet onboarding. |
+| 2026-11-12 | Source through `6f3edfa`; focused identity, import and recipient-workspace checks reported passing | `REC-02`, `REC-04`, `REC-07`, `BILL-01`, `FALL-08` | Verified local behavior | Recipient confirmation was exercised in the local API workflow. Focused checks cover recipient isolation, invitation expiry versus permanent access, exact intake terms, idempotent imports, pending confirmation and full native-USDC asset identity when rejecting a same-network backup. No backup payout was performed. |
+| 2026-11-12 | Payment policy, assistant checks and treasury VM tests reported passing | `ROUTE-06`, `AI-06` | Verified local rejection paths | Unresolved attempts block backup, provider success is only reported delivery, and source-sent is not paid. Missing private-inference configuration sends no document to a provider; invalid required evidence is rejected and manual invoice intake remains usable. These checks do not establish live settlement or successful private inference. |
+| 2026-11-12 | Earlier local API and browser candidate; later feature slices reviewed in source | All remaining core requirements, journeys and track gates | Partial or unverified | Recorded workflow reached invoice and payroll `approved_unfunded`, prevented an exact duplicate and returned 403 for an unrelated company. Treasury stayed zero. Browser overview and payroll rendered without console exceptions or horizontal overflow at 390 px. A live catalog returned 230 assets across 39 chains at that moment. No funds, contract deployment or private inference was executed. |
+| 2026-11-12 | Integrator follow-ups after `6f3edfa` | `AUTH-04`, `DATA-03`, `TRE-05`, `PAY-03`, `PAY-04`, `BILL-05`, `UX-02` | Changes integrated; final verification pending | Payment-management routes and panel were wired; plaintext dispute text was removed from ordinary activity; resumed unsigned public funding quotes now revalidate the frozen treasury target and can disable deposits while preserving tracking. Integrator reports TypeScript checks passing. Combined HTTP, test and production-build checks for the final candidate remain pending; planner and client-reserve gates stay open. |
 
 Record in-progress, blocked or failed work in the log while leaving its checkbox unchecked. When a failure is corrected, add a new verification entry rather than rewriting history.
