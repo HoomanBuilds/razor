@@ -24,7 +24,7 @@ const ProfileInput = z.object({
   primaryAsset: z.string().trim().min(1).max(240).default("USDC"), primaryNetwork: z.string().trim().min(2).max(80), primaryAddress: z.string().trim().min(2).max(200),
   backupNetwork: z.preprocess((value)=>typeof value==="string"?canonicalNetwork(value):value,z.enum(BACKUP_NETWORKS).nullable().optional()), backupAddress: z.string().trim().min(2).max(200).nullable().optional(),
 });
-const PreferenceInput = ProfileInput.pick({primaryAsset:true,primaryNetwork:true,primaryAddress:true,backupNetwork:true,backupAddress:true}).extend({expectedVersion:z.number().int().positive(),fallbackConsent:z.boolean().default(false)});
+export const PreferenceInput = ProfileInput.pick({primaryAsset:true,primaryNetwork:true,primaryAddress:true,backupNetwork:true,backupAddress:true}).extend({expectedVersion:z.number().int().positive(),fallbackConsent:z.boolean().default(false)});
 
 function familyFor(network: string): string | undefined {
   if (EVM_NETWORKS.has(network)) return "evm";
@@ -54,7 +54,7 @@ function validateBackupAsset(input:{primaryAsset:string;primaryNetwork:string;ba
   if(primary.assetId===usdc.assetId)throw new ApiError(400,"Choose another network for the native USDC backup when your primary is already native USDC","BACKUP_SAME_NETWORK");
 }
 
-async function validateProfile<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;backupNetwork?:string|null;backupAddress?:string|null}>(input:T):Promise<T> {
+export async function validateProfile<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;backupNetwork?:string|null;backupAddress?:string|null}>(input:T):Promise<T> {
   validateRoute(input);
   if(input.primaryNetwork===input.backupNetwork) {
     let tokens:Token[]|null=null;
@@ -80,7 +80,7 @@ export function listRecipients(orgId:string):RecipientRecord[] {
   return rows<RecipientRecord>(`SELECT ${RECIPIENT_COLUMNS} FROM recipients WHERE organization_id = ? AND archived = 0 ORDER BY created_at DESC`,orgId).map(serialize);
 }
 
-function saveVersion(recipient:RecipientRecord,userId:string) {
+export function saveVersion(recipient:RecipientRecord,userId:string) {
   getDb().prepare("INSERT INTO recipient_versions (recipient_id,version,profile_ciphertext,changed_by,created_at) VALUES (?,?,?,?,?)").run(recipient.id,recipient.version,encrypt(JSON.stringify(recipient)),userId,new Date().toISOString());
 }
 
