@@ -13,6 +13,7 @@ import { Bills, Payroll } from "./business";
 import { Recipients } from "./recipients";
 import { Payments } from "./payments";
 import { Treasury } from "./treasury";
+import { OperationsPanel } from "./operations";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -50,7 +51,7 @@ function Workspace() {
 function CompanyWorkspace({ session, organization, section, revision, refresh, navigate, notify }: { session: NonNullable<ReturnType<typeof useIdentity>["session"]>; organization: Organization; section: Section; revision: number; refresh: () => void; navigate: (next: Section) => void; notify: (message: string) => void }) {
   const base = `/organizations/${organization.id}`;
   const { data, error } = useResource<{ recipients: Recipient[] }>(`${base}/recipients`, revision);
-  return <WorkspaceContext.Provider value={{ session, organization, base, recipients: data?.recipients ?? [], revision, refresh, navigate, notify }}>{error && <p role="alert" className="mb-4 text-sm text-amber-900">Payee directory: {error}</p>}{section === "overview" ? <Overview /> : section === "payments" ? <Payments /> : section === "payroll" ? <Payroll /> : section === "bills" ? <Bills /> : section === "recipients" ? <Recipients /> : section === "treasury" ? <Treasury /> : section === "assistant" ? <Assistant /> : section === "activity" ? <ActivityLog /> : <CompanySettings />}</WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={{ session, organization, base, recipients: data?.recipients ?? [], revision, refresh, navigate, notify }}>{error && <p role="alert" className="mb-4 text-sm text-amber-900">Payee directory: {error}</p>}{section === "overview" ? <Overview /> : section === "payments" ? <div className="grid gap-6"><Payments /><OperationsPanel /></div> : section === "payroll" ? <Payroll /> : section === "bills" ? <Bills /> : section === "recipients" ? <Recipients /> : section === "treasury" ? <Treasury /> : section === "assistant" ? <Assistant /> : section === "activity" ? <ActivityLog /> : <CompanySettings />}</WorkspaceContext.Provider>;
 }
 
 function CreateCompany({ onCreated, onCancel }: { onCreated: (id: string) => Promise<void>; onCancel?: () => void }) {
