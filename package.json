@@ -4,22 +4,25 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=24.22.1"
   },
   "scripts": {
-    "dev": "next dev --hostname 0.0.0.0",
-    "build": "next build",
+    "dev": "NODE_OPTIONS=--max-old-space-size=1536 next dev --webpack --hostname 0.0.0.0",
+    "build": "NODE_OPTIONS=--max-old-space-size=1536 next build --webpack",
     "start": "next start --hostname 0.0.0.0",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "typecheck": "NODE_OPTIONS=--max-old-space-size=1024 tsc --noEmit",
+    "test": "node --max-old-space-size=1024 --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {
     "@defuse-protocol/one-click-sdk-typescript": "^0.1.26",
     "@hot-labs/near-connect": "^0.12.0",
+    "@nearai/inference-sdk": "^0.3.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@privy-io/react-auth": "^3.51.3",
     "@scure/base": "^2.4.0",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hono": "^4.13.18",
