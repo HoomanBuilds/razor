@@ -3,6 +3,12 @@ import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync
 import { freemem, setPriority } from "node:os";
 import { dirname, resolve } from "node:path";
 
+const [major, minor, patch] = process.versions.node.split(".").map(Number);
+if (major < 24 || major === 24 && (minor < 22 || minor === 22 && patch < 1)) {
+  console.error("Use Node 24.22.1 or later. Run nvm install and nvm use in this repository first.");
+  process.exit(1);
+}
+
 const [mode, ...args] = process.argv.slice(2);
 if (!["build", "dev"].includes(mode)) throw new Error("Choose build or dev.");
 

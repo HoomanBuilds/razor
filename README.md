@@ -7,6 +7,7 @@ Company payments and payroll using NEAR treasury contracts and NEAR Intents. Com
 Use Node 24.22.1 or later. The pinned version is in `.nvmrc`.
 
 ```sh
+nvm install
 nvm use
 npm ci
 cp .env.example .env.local
