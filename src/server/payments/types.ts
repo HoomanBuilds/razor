@@ -45,6 +45,8 @@ export interface PayoutAttempt {
   destination_asset: string;
   destination_network: string;
   destination_address: string;
+  destination_decimals?: number | null;
+  destination_symbol?: string | null;
   expected_output: string;
   amount_in: string;
   deposit_address: string;
@@ -64,6 +66,9 @@ export interface FundingLeg {
   payment_id: string | null;
   reference: string;
   origin_asset: string;
+  origin_network?: string | null;
+  origin_decimals?: number | null;
+  origin_symbol?: string | null;
   amount_in: string;
   expected_output: string;
   quote: string;

@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { atomic as parseAtomic, usdToToken } from "../../lib/money";
-import { assertSameQuote, checkStatus, getSupportedTokens, nativeUsdc, notifyDeposit, requestQuote, type QuoteResponse, type Token } from "./intents";
+import { assertCanStartDeposit, assertSameQuote, checkStatus, getSupportedTokens, nativeUsdc, notifyDeposit, requestQuote, type QuoteResponse, type Token } from "./intents";
 import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
 import { validNearAccount, view } from "./near";
 import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
+import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -256,6 +257,7 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
   const tokens = await getSupportedTokens();
   const origin = nativeUsdc(tokens, "near");
   const destination = resolveAsset(tokens, recipient, !!input.useBackup);
+  if (input.useBackup && recipient.primary_network === destination.blockchain && (recipient.primary_asset === destination.assetId || recipient.primary_asset === "USDC")) throw new ApiError(409, "A native-USDC backup must use a different receiving network", "BACKUP_NETWORK_DUPLICATE");
   const address = input.useBackup ? recipient.backup_address! : recipient.primary_address;
   if (!address) throw new ApiError(422, "Confirm the receiving destination first", "DESTINATION_REQUIRED");
   const outputFor = (token: Token) => {
@@ -263,20 +265,23 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
   };
   const output = outputFor(destination);
   const makeQuote = (token: Token, receivingAddress: string, dry: boolean) => requestQuote({ dry, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: token.assetId, amount: outputFor(token), recipient: receivingAddress, recipientType: "DESTINATION_CHAIN", refundTo: config.near_account_id, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString() });
-  if (input.useBackup && !attempts.some((attempt) => attempt.route === "primary")) {
+  if (input.useBackup && !attempts.some(hasProvenPrimaryFailure)) {
     let primaryAvailable = false;
     try {
-      await makeQuote(resolveAsset(tokens, recipient, false), recipient.primary_address, true);
+      const primary = resolveAsset(tokens, recipient, false);
+      if (primary.blockchain !== "near" || primary.assetId !== origin.assetId) await makeQuote(primary, recipient.primary_address, true);
       primaryAvailable = true;
     } catch (error) {
       if (!(error instanceof ApiError) || !["PRIMARY_UNAVAILABLE", "USDC_UNAVAILABLE", "USDC_NETWORK_UNSUPPORTED", "ROUTE_UNAVAILABLE"].includes(error.code)) throw error;
     }
     if (primaryAvailable) throw new ApiError(409, "The preferred payout route is available. Use the preferred destination first", "PRIMARY_AVAILABLE");
   }
-  const quote = await makeQuote(destination, address, !!input.dry);
-  checkBudget(payment, quote.quote.amountIn);
+  const direct = destination.blockchain === "near" && destination.assetId === origin.assetId;
+  const quote: ExecutionRecord = direct ? { kind: "direct", network: "near", assetId: destination.assetId, recipient: address, amountIn: payment.amount, amountOut: payment.amount, deadline: new Date(Date.now() + 5 * 60_000).toISOString(), authorization: "NEAR treasury approval" } satisfies DirectExecution : await makeQuote(destination, address, !!input.dry);
+  const terms = executionTerms(quote);
+  checkBudget(payment, terms.amountIn);
   if (input.dry) return { quote, dry: true, valuation: destination.symbol === "USDC" ? null : { price: destination.price, priceUpdatedAt: destination.priceUpdatedAt, entitlement: payment.amount } };
-  if (!validNearAccount(quote.quote.depositAddress!) || quote.quote.depositMemo) throw new ApiError(502, "The NEAR source route returned incompatible funding instructions", "SOURCE_ROUTE_INVALID");
+  if (!validNearAccount(terms.sourceReceiver) || !isDirectExecution(quote) && quote.quote.depositMemo) throw new ApiError(502, "The NEAR source route returned incompatible funding instructions", "SOURCE_ROUTE_INVALID");
   const attemptId = id();
   const walletActions = await buildWalletActions(config, payment, recipient, attemptId, quote, !!input.useBackup, tokens);
   transaction(() => {
@@ -285,8 +290,9 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
     if (latest.status === "paid" || latest.status === "cancelled") throw new ApiError(409, "Payment is no longer executable", "PAYMENT_CHANGED");
     if (row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')", paymentId)) throw new ApiError(409, "Another payout attempt was prepared while quoting", "ATTEMPT_ACTIVE");
     if (latest.reserved_amount === "0") throw new ApiError(409, "This payment no longer has reserved funds", "PAYMENT_UNFUNDED");
-    checkBudget(latest, quote.quote.amountIn);
-    getDb().prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,deposit_memo,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(attemptId, paymentId, access.organizationId, input.useBackup ? "backup" : "primary", "prepared", json(quote), destination.assetId, destination.blockchain, address, output, quote.quote.amountIn, quote.quote.depositAddress!, quote.quote.depositMemo ?? null, now(), now());
+    checkBudget(latest, terms.amountIn);
+    getDb().prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,deposit_memo,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(attemptId, paymentId, access.organizationId, input.useBackup ? "backup" : "primary", "prepared", json(quote), destination.assetId, destination.blockchain, address, output, terms.amountIn, terms.sourceReceiver, isDirectExecution(quote) ? null : quote.quote.depositMemo ?? null, now(), now());
+    getDb().prepare("UPDATE payout_attempts SET destination_decimals=?,destination_symbol=? WHERE id=?").run(destination.decimals, destination.symbol, attemptId);
     getDb().prepare("UPDATE payments SET status='prepared',hold_reason=NULL,updated_at=? WHERE id=?").run(now(), paymentId);
   });
   return { attempt: getAttempt(access, attemptId), walletActions, dry: false };
@@ -296,8 +302,9 @@ function action(config: TreasuryConfig, methodName: string, args: unknown, depos
   return { receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }] };
 }
 
-async function buildWalletActions(config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: QuoteResponse, backup: boolean, tokens: Token[]): Promise<WalletTransaction[]> {
-  const expires = Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline);
+async function buildWalletActions(config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: ExecutionRecord, backup: boolean, tokens: Token[]): Promise<WalletTransaction[]> {
+  const terms = executionTerms(quote);
+  const expires = Date.parse(terms.deadline);
   if (expires <= Date.now()) throw new ApiError(409, "This quote expired. Close the unused attempt and quote again", "QUOTE_EXPIRED");
   let primaryAsset = recipient.primary_asset;
   if (primaryAsset === "USDC") primaryAsset = nativeUsdc(tokens, recipient.primary_network).assetId;
@@ -322,10 +329,18 @@ async function buildWalletActions(config: TreasuryConfig, payment: Payment, reci
   if (existing && BigInt(existing.expires_at_ms) < BigInt(expires)) throw new ApiError(409, "The approved onchain obligation expires before this quote", "APPROVAL_EXPIRED");
   const chainAttempt = existing?.attempts.find((attempt) => attempt.id === attemptId);
   if (existing?.attempts.some((attempt) => attempt.id !== attemptId && !["refunded", "transfer_failed", "discarded"].includes(attempt.status))) throw new ApiError(409, "An earlier onchain source may still deliver", "ONCHAIN_ATTEMPT_UNRESOLVED");
-  const route = { kind: "intents", source_receiver: quote.quote.depositAddress!, input_amount: quote.quote.amountIn, output_amount: quote.quote.amountOut, quote_id: quote.correlationId, quote_hash: createHash("sha256").update(json(quote)).digest("hex"), deadline_ms: String(expires) };
+  const route = { kind: terms.kind, source_receiver: terms.sourceReceiver, input_amount: terms.amountIn, output_amount: terms.amountOut, quote_id: terms.quoteId, quote_hash: createHash("sha256").update(json(quote)).digest("hex"), deadline_ms: String(expires) };
   if (chainAttempt && (chainAttempt.status !== "prepared" || chainAttempt.route.quote_hash !== route.quote_hash)) throw new ApiError(409, "This onchain attempt is no longer awaiting signature", "ONCHAIN_ATTEMPT_UNRESOLVED");
   if (!chainAttempt) actions.push(action(config, "create_attempt", { payment_id: payment.id, attempt_id: attemptId, use_backup: backup, route }));
   if (!chainAttempt?.authorized) actions.push(action(config, "authorize_attempt", { payment_id: payment.id, attempt_id: attemptId }, "1"));
+  if (isDirectExecution(quote)) {
+    if (quote.assetId !== `nep141:${config.token_contract}` || terms.amountIn !== payment.amount || terms.amountOut !== payment.amount) throw new ApiError(409, "Direct NEAR delivery must equal the approved native-USDC entitlement", "DIRECT_TERMS_INVALID");
+    const token = { ...config, near_account_id: config.token_contract };
+    if (!await view(token, "storage_balance_of", { account_id: terms.sourceReceiver })) {
+      const bounds = await view<{ min: string }>(token, "storage_balance_bounds");
+      actions.push(action(token, "storage_deposit", { account_id: terms.sourceReceiver, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
+    }
+  }
   actions.push(action(config, "execute_payment", { payment_id: payment.id, attempt_id: attemptId }));
   return actions;
 }
@@ -362,7 +377,9 @@ export async function markAttemptSubmitted(access: AccessContext, attemptId: str
   if (!chainAttempt || chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex")) throw new ApiError(409, "The treasury has not recorded this authorized attempt. Resume the wallet actions first", "SOURCE_ATTEMPT_UNVERIFIED");
   getDb().prepare("UPDATE payout_attempts SET state='submitted',source_tx_hash=?,updated_at=? WHERE id=?").run(txHash, now(), attemptId);
   getDb().prepare("UPDATE payments SET status='in_flight',updated_at=? WHERE id=?").run(now(), attempt.payment_id);
-  try { await notifyDeposit(attempt.deposit_address, txHash, attempt.deposit_memo); } catch {}
+  if (!isDirectExecution(JSON.parse(attempt.quote))) {
+    try { await notifyDeposit(attempt.deposit_address, txHash, attempt.deposit_memo); } catch {}
+  }
   await reconcilePayment(access, attempt.payment_id);
   return getAttempt(access, attemptId);
 }
@@ -380,8 +397,10 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
   let provider: Awaited<ReturnType<typeof checkStatus>> | null = null;
   let providerError: string | null = null;
   try {
+    if (!isDirectExecution(JSON.parse(attempt.quote))) {
     provider = await checkStatus(attempt.deposit_address, attempt.deposit_memo);
     assertSameQuote(JSON.parse(attempt.quote), provider.quoteResponse);
+    }
   } catch (error) {
     providerError = error instanceof ApiError ? error.message : "Routing evidence is temporarily unavailable";
   }
@@ -429,8 +448,9 @@ export async function closeUnfundedAttempt(access: AccessContext, attemptId: str
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
   if (chainAttempt && ["discarded", "transfer_failed", "refunded"].includes(chainAttempt.status)) return { ...await reconcilePayment(access, attempt.payment_id), walletActions: [] };
   if (chainAttempt?.status === "prepared") return { attempt, walletActions: [action(config, "discard_attempt", { payment_id: attempt.payment_id, attempt_id: attemptId })] };
-  const quote = JSON.parse(attempt.quote) as QuoteResponse;
-  if (!chainAttempt && attempt.state === "prepared" && Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline) <= Date.now()) {
+  const quote = JSON.parse(attempt.quote) as ExecutionRecord;
+  const originalDeadline = isDirectExecution(quote) ? quote.deadline : quote.quote.deadline ?? quote.quoteRequest.deadline;
+  if (!chainAttempt && attempt.state === "prepared" && Date.parse(originalDeadline) <= Date.now()) {
     transaction(() => {
       getDb().prepare("UPDATE payout_attempts SET state='closed_unfunded',updated_at=? WHERE id=? AND state='prepared'").run(now(), attemptId);
       getDb().prepare("UPDATE payments SET status='approved',hold_reason=NULL,updated_at=? WHERE id=? AND status='prepared'").run(now(), attempt.payment_id);
@@ -470,16 +490,20 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   if (existing) {
     const request = (JSON.parse(existing.quote) as QuoteResponse).quoteRequest;
     if (existing.origin_asset !== input.originAsset || existing.payment_id !== (input.paymentId ?? null) || request.amount !== input.amount || request.refundTo !== input.refundAddress || request.swapType !== (input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT")) throw new ApiError(409, "Funding reference already has different terms", "IDEMPOTENCY_CONFLICT");
+    if (existing.source_tx_hash || existing.status === "confirmed" || existing.provider_status && existing.provider_status !== "PENDING_DEPOSIT") throw new ApiError(409, "This funding leg has already started. Reconcile it before preparing another deposit", "FUNDING_ALREADY_STARTED");
+    assertCanStartDeposit(JSON.parse(existing.quote));
     return existing;
   }
   const tokens = await getSupportedTokens();
-  if (!tokens.some((token) => token.assetId === input.originAsset)) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
+  const sourceToken = tokens.find((token) => token.assetId === input.originAsset);
+  if (!sourceToken) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
   const destination = nativeUsdc(tokens, "near");
   if (input.paymentId) getPayment(access, input.paymentId);
-  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString(), customRecipientMsg: "float:funding" });
+  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "float:funding" });
   if (input.dry) return { dry: true, quote };
   const fundingId = id();
   getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(fundingId, access.organizationId, input.paymentId ?? null, input.reference, input.originAsset, quote.quote.amountIn, quote.quote.amountOut, json(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, "pending_deposit", now(), now());
+  getDb().prepare("UPDATE funding_legs SET origin_network=?,origin_decimals=?,origin_symbol=? WHERE id=?").run(sourceToken.blockchain, sourceToken.decimals, sourceToken.symbol, fundingId);
   return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)!;
 }
 
@@ -492,10 +516,15 @@ export async function reconcileFunding(access: AccessContext, fundingId: string,
   requirePermission(access, "payments:prepare");
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
   if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
+  if (funding.status === "confirmed") return { funding, treasury: await syncTreasury(access) };
   if (sourceTxHash) {
     if (funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
     getDb().prepare("UPDATE funding_legs SET source_tx_hash=?,updated_at=? WHERE id=?").run(sourceTxHash, now(), fundingId);
-    try { await notifyDeposit(funding.deposit_address, sourceTxHash, funding.deposit_memo); } catch {}
+    try {
+      const sourceToken = (await getSupportedTokens()).find((token) => token.assetId === funding.origin_asset);
+      const sender = sourceToken?.blockchain === "near" ? (JSON.parse(funding.quote) as QuoteResponse).quoteRequest.refundTo : undefined;
+      await notifyDeposit(funding.deposit_address, sourceTxHash, funding.deposit_memo, sender);
+    } catch {}
   }
   const status = await checkStatus(funding.deposit_address, funding.deposit_memo);
   assertSameQuote(JSON.parse(funding.quote), status.quoteResponse);
