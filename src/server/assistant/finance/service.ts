@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { paymentBudget } from "../../../lib/payment-budget";
 import { ApiError, requirePermission, type AccessContext } from "../../context";
 import { getDb, row, rows, transaction } from "../../db";
 import { decrypt, encrypt } from "../../identity/crypto";
@@ -46,9 +47,10 @@ export function duplicateInvoiceWarnings(invoices:Invoice[]) {
 export function financeInsights(access:AccessContext) {
   requirePermission(access,"payments:read");
   const treasury=getTreasury(access),open=rows<OpenPayment>("SELECT id,recipient_id,reference,kind,status,amount,max_fee,total_spent,reserved_amount,scheduled_for,hold_reason,metadata FROM payments WHERE organization_id=? AND status NOT IN ('paid','cancelled') ORDER BY COALESCE(scheduled_for,created_at)",access.organizationId);
-  let upcoming=0n,unreserved=0n,drafts=0n,committed=0n;
+  let upcoming=0n,unreserved=0n,drafts=0n,committed=0n,awaitingReconciliation=0n;
   const budgets=open.map(payment=>{
-    const remaining=BigInt(payment.amount)+BigInt(payment.max_fee)-BigInt(payment.total_spent),cost=remaining>0n?remaining:0n,reserve=BigInt(payment.reserved_amount),needed=cost>reserve?cost-reserve:0n;
+    const budget=paymentBudget(payment),cost=budget.remaining,needed=budget.unreserved;
+    awaitingReconciliation+=budget.awaitingReconciliation;
     upcoming+=cost;unreserved+=needed;if(payment.status==="draft")drafts+=cost;else committed+=cost;
     const {metadata,...summary}=payment;
     let reference=payment.reference;
@@ -63,7 +65,7 @@ export function financeInsights(access:AccessContext) {
   for(const payment of open)if(BigInt(payment.total_spent)>BigInt(payment.amount)+BigInt(payment.max_fee))warnings.push({code:"BUDGET_OVERAGE",message:"Recorded payment spend exceeds its approved amount and fee budget. Review its receipts.",paymentId:payment.id});
   let privateAI:ReturnType<typeof getAssistantConfig>|{ready:false;reason:string;retentionDays:null};
   try{privateAI=getAssistantConfig();}catch(error){privateAI={ready:false,reason:error instanceof Error?error.message:"Private AI configuration needs attention",retentionDays:null};}
-  return {cash:{balance:treasury.balance,reserved:treasury.reserved,available:treasury.available,lastSyncedAt:treasury.lastSyncedAt},coverage:{upcomingUSDC:upcoming.toString(),unreservedUSDC:unreserved.toString(),draftUSDC:drafts.toString(),committedUSDC:committed.toString(),shortfallUSDC:shortfall.toString(),includesDrafts:true},upcoming:budgets.slice(0,100),held:budgets.filter(item=>/held|hold|recovery|unknown/.test(item.status)||item.hold_reason).slice(0,100),openCount:open.length,warnings,privateAI};
+  return {cash:{balance:treasury.balance,reserved:treasury.reserved,available:treasury.available,lastSyncedAt:treasury.lastSyncedAt},coverage:{upcomingUSDC:upcoming.toString(),unreservedUSDC:unreserved.toString(),draftUSDC:drafts.toString(),committedUSDC:committed.toString(),shortfallUSDC:shortfall.toString(),includesDrafts:true,awaitingReconciliationUSDC:awaitingReconciliation.toString()},upcoming:budgets.slice(0,100),held:budgets.filter(item=>/held|hold|recovery|unknown/.test(item.status)||item.hold_reason).slice(0,100),openCount:open.length,warnings,privateAI};
 }
 
 function selectedRecipients(access:AccessContext,input:PlanningInput):SelectedRecipient[] {
