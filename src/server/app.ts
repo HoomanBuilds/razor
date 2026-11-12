@@ -7,6 +7,7 @@ import { businessRoutes } from "./business/routes";
 import { assistantRoutes } from "./assistant";
 import { onboardingRoutes } from "./treasury-onboarding";
 import { operationsRoutes } from "./operations";
+import { reconciliationRoutes } from "./reconciliation";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.onError((error, c) => {
@@ -27,4 +28,5 @@ app.route("/organizations/:orgId", businessRoutes);
 app.route("/organizations/:orgId/assistant", assistantRoutes);
 app.route("/organizations/:orgId/onboarding", onboardingRoutes);
 app.route("/organizations/:orgId/operations", operationsRoutes);
+app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
 app.notFound((c) => c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404));

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
-import { approvePayment, createPayment, getPayment, listLedger, listPayments } from "../payments";
+import { approvePayment, createPayment, getPayment } from "../payments";
 import { decrypt, encrypt } from "../identity/crypto";
+import { accountingExport } from "../reconciliation/export";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
@@ -163,11 +164,5 @@ export function approvePayrollRun(access: AccessContext, id: string) {
 }
 
 export function report(access: AccessContext) {
-  requirePermission(access, "reports:read");
-  const payments = listPayments(access), ledger = listLedger(access);
-  const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  const lines = [["record_type", "id", "reference", "recipient_id", "amount_micro_usdc", "status", "created_at"]];
-  for (const payment of payments) lines.push(["payment", payment.id, payment.reference, payment.recipient_id, payment.amount, payment.status, payment.created_at]);
-  for (const entry of ledger) lines.push(["ledger", String((entry as Record<string, unknown>).id ?? ""), JSON.stringify(entry), "", "", "", ""]);
-  return lines.map((line) => line.map(escape).join(",")).join("\r\n");
+  return accountingExport(access);
 }

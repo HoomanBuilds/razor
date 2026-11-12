@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { WalletButtons } from "@/components/auth/sign-in-panel";
 import { TeamAccessPanel } from "./team-access";
+import { Reconciliation } from "./reconciliation";
 import { useIdentity } from "@/components/auth/identity-provider";
 import { api, RequestError } from "@/lib/api";
 import { microUsd } from "@/lib/format";
@@ -24,7 +25,7 @@ export function CompanySettings() {
 export function ActivityLog() {
   const { base, revision } = useWorkspace();
   const { data, error, loading } = useResource<{ activity: { id: string; action: string; entity_id: string; created_at: string }[] }>(`${base}/activity`, revision);
-  return <div className="grid gap-6"><Panel title="Accounting exports" description="Download company obligations and ledger records with stable identifiers for reconciliation."><a className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href={`/api${base}/reports/export`} download>Download accounting CSV</a></Panel><Panel title="Activity history" description="Company actions, approvals and reconciliation events.">{error && <p role="alert">{error}</p>}{loading ? <Empty>Loading activity...</Empty> : !data?.activity.length ? <Empty>Company activity will appear here.</Empty> : <DataTable columns={["Action", "Record", "Time"]}>{data.activity.map((entry) => <tr key={entry.id}><td className="font-medium">{entry.action.replaceAll(".", " ")}</td><td className="font-mono text-xs">{entry.entity_id}</td><td className="text-xs">{new Date(entry.created_at).toLocaleString()}</td></tr>)}</DataTable>}</Panel></div>;
+  return <div className="grid gap-6"><Panel title="Accounting exports" description="Download company obligations and ledger records with stable identifiers for reconciliation."><a className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href={`/api${base}/reports/export`} download>Download accounting CSV</a></Panel><Reconciliation /><Panel title="Activity history" description="Company actions, approvals and reconciliation events.">{error && <p role="alert">{error}</p>}{loading ? <Empty>Loading activity...</Empty> : !data?.activity.length ? <Empty>Company activity will appear here.</Empty> : <DataTable columns={["Action", "Record", "Time"]}>{data.activity.map((entry) => <tr key={entry.id}><td className="font-medium">{entry.action.replaceAll(".", " ")}</td><td className="font-mono text-xs">{entry.entity_id}</td><td className="text-xs">{new Date(entry.created_at).toLocaleString()}</td></tr>)}</DataTable>}</Panel></div>;
 }
 
 export function Assistant() {
