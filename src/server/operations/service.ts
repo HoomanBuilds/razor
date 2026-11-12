@@ -4,6 +4,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { view, validNearAccount } from "../payments/near";
 import { purgePrivateEvidence } from "../reconciliation/evidence";
+import { purgeFinancePlans } from "../assistant/finance";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import type { AgentMandate, Notice, OperationJob, RecurringRule, RecurringRuleView, TemplatePayment, TemplateSnapshot } from "./types";
 
@@ -156,6 +157,7 @@ export function purgeRetention(access: AccessContext) {
   requirePermission(access, "documents:manage");
   const result = getDb().prepare("DELETE FROM assistant_drafts WHERE organization_id=? AND expires_at<=?").run(access.organizationId, iso());
   purgePrivateEvidence(access.organizationId);
+  purgeFinancePlans();
   return { purged: Number(result.changes) };
 }
 export function overview(access: AccessContext) {

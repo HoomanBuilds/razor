@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { paymentLabel } from "@/lib/payment-label";
 import { api, RequestError } from "@/lib/api";
 import { dateLabel, microUsd, usd } from "@/lib/format";
 import type { PublicFundingRequest } from "@/server/funding-requests/types";
@@ -27,7 +28,7 @@ export function FundingRequestsPanel() {
       <Field label="Requested USDC"><input className={control} name="amount" required inputMode="decimal" placeholder="2500.00" /></Field>
       <Field label="Link expires"><select className={control} name="days" defaultValue="7"><option value="1">In 1 day</option><option value="7">In 7 days</option><option value="30">In 30 days</option></select></Field>
       <Field label="Shared funding purpose" hint="Anyone with the link sees this purpose. Keep individual payroll details in your workspace."><input className={control} name="purpose" required maxLength={500} placeholder="Project deposit or company top-up" /></Field>
-      <Field label="Linked unpaid obligation (optional)"><select className={control} name="payment"><option value="">General company funding</option>{payments.data?.payments.filter((payment) => !["paid", "cancelled"].includes(payment.status)).map((payment) => <option key={payment.id} value={payment.id}>{payment.reference} - {usd(payment.amount)}</option>)}</select></Field>
+      <Field label="Linked unpaid obligation (optional)"><select className={control} name="payment"><option value="">General company funding</option>{payments.data?.payments.filter((payment) => !["paid", "cancelled"].includes(payment.status)).map((payment) => <option key={payment.id} value={payment.id}>{paymentLabel(payment)} - {usd(payment.amount)}</option>)}</select></Field>
       <div className="md:col-span-2"><Action disabled={!!busy} busy={busy === "create"}>Create funding link</Action></div>
     </form></Panel>}
     {error && <p role="alert" className="rounded-lg border p-4 text-sm text-destructive">{error}</p>}

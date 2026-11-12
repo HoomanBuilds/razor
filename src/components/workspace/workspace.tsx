@@ -16,6 +16,7 @@ import { Payments } from "./payments";
 import { Treasury } from "./treasury";
 import { FundingRequestsPanel } from "./funding-requests";
 import { OperationsPanel } from "./operations";
+import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -55,7 +56,7 @@ function CompanyWorkspace({ session, organization, section, revision, refresh, n
   const base = `/organizations/${organization.id}`;
   const [invoiceReview, setInvoiceReview] = useState<InvoiceReview | null>(null);
   const { data, error } = useResource<{ recipients: Recipient[] }>(`${base}/recipients`, revision);
-  return <WorkspaceContext.Provider value={{ session, organization, base, recipients: data?.recipients ?? [], revision, refresh, navigate, notify, invoiceReview, analyzeInvoice: (review) => { setInvoiceReview(review); navigate("assistant"); } }}>{error && <p role="alert" className="mb-4 text-sm text-amber-900">Payee directory: {error}</p>}{section === "overview" ? <Overview /> : section === "payments" ? <div className="grid gap-6"><Payments /><OperationsPanel /></div> : section === "payroll" ? <Payroll /> : section === "bills" ? <div className="grid gap-6"><InvoiceInbox /><Bills /></div> : section === "recipients" ? <Recipients /> : section === "treasury" ? <div className="grid gap-6"><Treasury /><FundingRequestsPanel /></div> : section === "assistant" ? <Assistant /> : section === "activity" ? <ActivityLog /> : <CompanySettings />}</WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={{ session, organization, base, recipients: data?.recipients ?? [], revision, refresh, navigate, notify, invoiceReview, analyzeInvoice: (review) => { setInvoiceReview(review); navigate("assistant"); } }}>{error && <p role="alert" className="mb-4 text-sm text-amber-900">Payee directory: {error}</p>}{section === "overview" ? <Overview /> : section === "payments" ? <div className="grid gap-6"><Payments /><PaymentManagementPanel mode="payments" /><OperationsPanel /></div> : section === "payroll" ? <Payroll /> : section === "bills" ? <div className="grid gap-6"><InvoiceInbox /><Bills /></div> : section === "recipients" ? <Recipients /> : section === "treasury" ? <div className="grid gap-6"><Treasury /><FundingRequestsPanel /></div> : section === "assistant" ? <Assistant /> : section === "activity" ? <ActivityLog /> : <CompanySettings />}</WorkspaceContext.Provider>;
 }
 
 function CreateCompany({ onCreated, onCancel }: { onCreated: (id: string) => Promise<void>; onCancel?: () => void }) {

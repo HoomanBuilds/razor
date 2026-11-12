@@ -12,6 +12,8 @@ import { reconciliationRoutes } from "./reconciliation";
 import { companyInvoiceIntakeRoutes, recipientWorkspaceRoutes } from "./recipient-workspace";
 import { treasuryPolicyRoutes } from "./treasury-policy";
 import { fundingRequestRoutes, publicFundingRoutes } from "./funding-requests";
+import { paymentManagementRoutes } from "./payment-management";
+import { financeRoutes } from "./assistant/finance";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", bodyLimit({ maxSize: 1_048_576, onError: (c) => c.json({ error: "Submit a request smaller than 1 MB", code: "REQUEST_TOO_LARGE" }, 413) }));
@@ -39,4 +41,6 @@ app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
 app.route("/organizations/:orgId/intake", companyInvoiceIntakeRoutes);
 app.route("/organizations/:orgId/treasury-policy", treasuryPolicyRoutes);
 app.route("/organizations/:orgId/funding-requests", fundingRequestRoutes);
+app.route("/organizations/:orgId/payment-management", paymentManagementRoutes);
+app.route("/organizations/:orgId/assistant/finance", financeRoutes);
 app.notFound((c) => c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404));
