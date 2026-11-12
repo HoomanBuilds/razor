@@ -102,7 +102,7 @@ export function disputeBill(access: AccessContext, id: string, reason: string) {
   if (bill.payment_id && getPayment(access, bill.payment_id).status !== "draft") throw new ApiError(409, "Reconcile the approved payment before changing this bill", "PAYMENT_EXISTS");
   getDb().prepare("UPDATE bills SET status = 'disputed', dispute_reason = ?, updated_at = ? WHERE id = ?").run(encrypt(reason), new Date().toISOString(), id);
   if (bill.payment_id) getDb().prepare("UPDATE payments SET hold_reason = ? WHERE id = ?").run("This invoice is disputed", bill.payment_id);
-  activity(access, "bill.disputed", id, { reason });
+  activity(access, "bill.disputed", id, { status: "disputed" });
   return { id, status: "disputed" };
 }
 
