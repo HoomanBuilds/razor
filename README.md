@@ -33,6 +33,6 @@ npm test
 npm run build
 ```
 
-Builds use a capped Node heap and one Next.js worker. Run Rust builds with one job and serialize them with application builds. Stop the development server before a production build. These settings reduce memory pressure on a development laptop.
+Builds use a capped Node heap and one Next.js worker. A shared worktree lock prevents concurrent FLOAT development servers and production builds. Compilation requires 4 GB of available memory to start and stops if available memory stays below 3 GB. Run Rust builds with one job and serialize them with application builds. Stop the development server before a production build.
 
 The [product specifications](docs/README.md), [build checklist](docs/build-checklist.md) and [source notices](THIRD_PARTY_NOTICES.md) describe intended behavior, verified progress and reused source. An implemented screen is not evidence of a live payment. Public deployment, provider credentials, onchain setup and real settlement verification must be completed before advertising those integrations as live.
