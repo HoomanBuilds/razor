@@ -7,6 +7,7 @@ import { approvePayment, revalidatePaymentRecipient } from "../src/server/paymen
 import { microUsd } from "../src/lib/format";
 import { parsePayrollCsv } from "../src/lib/csv";
 import type { AccessContext } from "../src/server/context";
+import { acceptBillMilestone, addBillInstallment, getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "a1".repeat(32);
@@ -56,4 +57,22 @@ test("USDC and payroll imports preserve precision and reject duplicate recipient
   const recipients = [{ id: "r1", email: "one@example.test" }];
   assert.deepEqual(parsePayrollCsv('email,amount\r\none@example.test,"1200.50"', recipients), { r1: "1200.50" });
   assert.throws(() => parsePayrollCsv("email,amount\none@example.test,1\none@example.test,2", recipients), /more than once/);
+});
+
+test("milestone acceptance gates release and installments preserve the unpaid invoice liability", () => {
+  const { preparer, approver, recipientId } = fixture();
+  const bill = createBill(preparer, { recipientId, reference: "MILESTONE-1", title: "Build contract", amount: "1000000000" });
+  setBillTerms(preparer, bill.id, { paymentAmount: "200000000", maxFee: "1000000", requiresAcceptance: true });
+  assert.throws(() => approveBill(approver, bill.id), /Accept the milestone/);
+  acceptBillMilestone(approver, bill.id, "Design deliverable reviewed and accepted");
+  approveBill(approver, bill.id);
+  assert.throws(() => addBillInstallment(preparer, bill.id, { amount: "800000000", maxFee: "1000000" }), /earlier installment/);
+  getDb().prepare("UPDATE payments SET status='paid',delivered_amount=amount WHERE id=?").run(bill.payment_id!);
+  assert.equal(getBillTerms(preparer, bill.id).remainingLiability, "800000000");
+  assert.throws(() => addBillInstallment(preparer, bill.id, { amount: "900000000", maxFee: "1000000" }), /remaining invoice/);
+  const next = addBillInstallment(preparer, bill.id, { amount: "800000000", maxFee: "1000000" });
+  assert.equal(next.remainingLiability, "800000000");
+  assert.equal(next.uncommitted, "0");
+  assert.equal(next.installments.length, 2);
+  assert.throws(() => approveBill(approver, bill.id), /Accept the milestone/);
 });

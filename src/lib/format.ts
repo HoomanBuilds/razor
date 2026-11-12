@@ -15,6 +15,12 @@ export function microUsd(value: string, allowZero = false): string {
   return amount.toString();
 }
 
+export function usdcInput(value: string): string {
+  const amount = BigInt(value);
+  const fraction = (amount % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return `${amount / 1_000_000n}${fraction ? `.${fraction}` : ""}`;
+}
+
 export function dateLabel(value?: string | null): string {
   if (!value) return "Unscheduled";
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });

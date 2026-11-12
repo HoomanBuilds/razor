@@ -9,6 +9,7 @@ type Bill = {
   amount: string; max_fee: string; due_date: string | null; status: string;
   line_items: string; evidence: string | null; document_hash: string | null;
   payment_id: string | null; accepted_at: string | null; created_at: string; updated_at: string;
+  requires_acceptance: number; milestone_accepted_at: string | null;
 };
 type PayrollRun = {
   id: string; organization_id: string; reference: string; period_start: string; period_end: string;
@@ -42,7 +43,12 @@ export function activity(access: AccessContext, action: string, entityId: string
 export function listBills(access: AccessContext) {
   requirePermission(access, "payments:read");
   return rows<Bill>("SELECT * FROM bills WHERE organization_id = ? ORDER BY created_at DESC", access.organizationId)
-    .map(readableBill).map((bill) => ({ ...bill, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null }));
+    .map(readableBill).map((bill) => {
+      const installments = rows<{ amount: string; status: string }>("SELECT p.amount,p.status FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=?", bill.id);
+      const delivered = installments.filter((item) => item.status === "paid").reduce((sum, item) => sum + BigInt(item.amount), 0n);
+      const status = bill.status === "disputed" ? "disputed" : delivered === BigInt(bill.amount) ? "paid" : delivered > 0n ? "partially_paid" : bill.status;
+      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), remainingLiability: (BigInt(bill.amount) - delivered).toString() };
+    });
 }
 
 export function createBill(access: AccessContext, input: {
@@ -65,7 +71,7 @@ export function createBill(access: AccessContext, input: {
   return transaction((db) => {
     db.prepare("INSERT INTO bills (id, organization_id, recipient_id, reference, title, amount, max_fee, due_date, line_items, evidence, document_hash, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, access.organizationId, input.recipientId, input.reference, encrypt(input.title), value, fee, input.dueDate ?? null, encrypt(JSON.stringify(input.lineItems ?? [])), input.evidence ? encrypt(input.evidence) : null, input.documentHash ?? null, access.userId, now, now);
-    const payment = createPayment(access, { recipientId: input.recipientId, reference: `bill:${id}`, amount: value, maxFee: fee, kind: "invoice", scheduledFor: input.dueDate, metadata: { billId: id } });
+    const payment = createPayment(access, { recipientId: input.recipientId, reference: `bill:${id}`, amount: value, maxFee: fee, kind: "invoice", scheduledFor: input.dueDate, metadata: { billId: id, displayReference: input.reference } });
     db.prepare("UPDATE bills SET payment_id = ? WHERE id = ?").run(payment.id, id);
     activity(access, "bill.created", id);
     return readableBill(row<Bill>("SELECT * FROM bills WHERE id = ?", id)!);
@@ -77,6 +83,7 @@ export function approveBill(access: AccessContext, id: string) {
   const bill = row<Bill>("SELECT * FROM bills WHERE id = ? AND organization_id = ?", id, access.organizationId);
   if (!bill) throw new ApiError(404, "Bill not found", "NOT_FOUND");
   if (bill.status === "disputed") throw new ApiError(409, "Resolve the dispute before approval", "BILL_DISPUTED");
+  if (bill.requires_acceptance && !bill.milestone_accepted_at) throw new ApiError(409, "Accept the milestone with evidence before approving release", "MILESTONE_ACCEPTANCE_REQUIRED");
   if (!bill.payment_id) throw new ApiError(409, "Ask the preparer to finish this bill's payment draft", "PAYMENT_DRAFT_REQUIRED");
   return transaction((db) => {
     db.prepare("UPDATE bills SET status = 'approved', accepted_at = COALESCE(accepted_at,?), updated_at = ? WHERE id = ?")
@@ -92,7 +99,7 @@ export function disputeBill(access: AccessContext, id: string, reason: string) {
   const bill = row<Bill>("SELECT * FROM bills WHERE id = ? AND organization_id = ?", id, access.organizationId);
   if (!bill) throw new ApiError(404, "Bill not found", "NOT_FOUND");
   if (bill.payment_id && getPayment(access, bill.payment_id).status !== "draft") throw new ApiError(409, "Reconcile the approved payment before changing this bill", "PAYMENT_EXISTS");
-  getDb().prepare("UPDATE bills SET status = 'disputed', updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+  getDb().prepare("UPDATE bills SET status = 'disputed', dispute_reason = ?, updated_at = ? WHERE id = ?").run(encrypt(reason), new Date().toISOString(), id);
   if (bill.payment_id) getDb().prepare("UPDATE payments SET hold_reason = ? WHERE id = ?").run("This invoice is disputed", bill.payment_id);
   activity(access, "bill.disputed", id, { reason });
   return { id, status: "disputed" };
@@ -130,7 +137,7 @@ export function createPayrollRun(access: AccessContext, input: {
     db.prepare("INSERT INTO payroll_runs (id,organization_id,reference,period_start,period_end,scheduled_for,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
       .run(id, access.organizationId, input.reference, input.periodStart, input.periodEnd, input.scheduledFor ?? null, access.userId, now, now);
     for (const item of items) {
-      const payment = createPayment(access, { recipientId: item.recipientId, reference: `payroll:${id}:${item.recipientId}`, amount: item.amount, maxFee: item.maxFee, kind: "payroll", scheduledFor: input.scheduledFor, metadata: { runId: id, periodStart: input.periodStart, periodEnd: input.periodEnd } });
+      const payment = createPayment(access, { recipientId: item.recipientId, reference: `payroll:${id}:${item.recipientId}`, amount: item.amount, maxFee: item.maxFee, kind: "payroll", scheduledFor: input.scheduledFor, metadata: { runId: id, displayReference: input.reference, periodStart: input.periodStart, periodEnd: input.periodEnd } });
       db.prepare("INSERT INTO payroll_items (id,run_id,recipient_id,amount,max_fee,note,payment_id) VALUES (?,?,?,?,?,?,?)")
         .run(randomUUID(), id, item.recipientId, item.amount, item.maxFee, item.note ? encrypt(item.note) : null, payment.id);
     }

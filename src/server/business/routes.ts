@@ -4,6 +4,7 @@ import type { AppEnv } from "../context";
 import { requirePermission } from "../context";
 import { rows } from "../db";
 import { approveBill, approvePayrollRun, createBill, createPayrollRun, disputeBill, getPayrollRun, listBills, listPayrollRuns, report } from "./service";
+import { acceptBillMilestone, addBillInstallment, getBillTerms, resolveBillDispute, setBillTerms } from "./bill-terms";
 
 const money = z.string().regex(/^\d+$/);
 const billInput = z.object({ recipientId: z.string().min(1), reference: z.string().trim().min(1).max(120), title: z.string().trim().min(1).max(240), amount: money, maxFee: money.optional(), dueDate: z.string().datetime().optional(), lineItems: z.array(z.unknown()).max(100).optional(), evidence: z.string().max(5000).optional(), documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional() });
@@ -14,6 +15,11 @@ businessRoutes.get("/bills", (c) => c.json({ bills: listBills(c.get("access")) }
 businessRoutes.post("/bills", async (c) => c.json({ bill: createBill(c.get("access"), billInput.parse(await c.req.json())) }, 201));
 businessRoutes.post("/bills/:id/approve", (c) => c.json({ payment: approveBill(c.get("access"), c.req.param("id")) }));
 businessRoutes.post("/bills/:id/dispute", async (c) => c.json(disputeBill(c.get("access"), c.req.param("id"), z.object({ reason: z.string().min(3).max(2000) }).parse(await c.req.json()).reason)));
+businessRoutes.get("/bills/:id/terms", (c) => c.json(getBillTerms(c.get("access"), c.req.param("id"))));
+businessRoutes.post("/bills/:id/terms", async (c) => c.json(setBillTerms(c.get("access"), c.req.param("id"), z.object({ paymentAmount: money, maxFee: money, requiresAcceptance: z.boolean() }).parse(await c.req.json()))));
+businessRoutes.post("/bills/:id/accept", async (c) => c.json(acceptBillMilestone(c.get("access"), c.req.param("id"), z.object({ evidence: z.string().trim().min(3).max(5000) }).parse(await c.req.json()).evidence)));
+businessRoutes.post("/bills/:id/resolve", async (c) => c.json(resolveBillDispute(c.get("access"), c.req.param("id"), z.object({ resolution: z.string().trim().min(3).max(5000) }).parse(await c.req.json()).resolution)));
+businessRoutes.post("/bills/:id/installments", async (c) => c.json(addBillInstallment(c.get("access"), c.req.param("id"), z.object({ amount: money, maxFee: money }).parse(await c.req.json()))));
 businessRoutes.get("/payroll", (c) => c.json({ runs: listPayrollRuns(c.get("access")) }));
 businessRoutes.post("/payroll", async (c) => c.json({ run: createPayrollRun(c.get("access"), payrollInput.parse(await c.req.json())) }, 201));
 businessRoutes.get("/payroll/:id", (c) => c.json({ run: getPayrollRun(c.get("access"), c.req.param("id")) }));

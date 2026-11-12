@@ -7,12 +7,14 @@ import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, control, DataTable, Empty, Field, Panel, Status } from "./shared";
 import type { Bill, PayrollRun } from "./types";
+import { BillTerms } from "./bill-terms";
 
 function dollars(value: FormDataEntryValue | null, allowZero = false): string {
   try { return microUsd(String(value ?? ""), allowZero); } catch (cause) { throw new RequestError((cause as Error).message, 400, "INVALID_AMOUNT"); }
 }
 
 export function Bills() {
+  const [selectedBill, setSelectedBill] = useState("");
   const { base, recipients, revision, refresh, navigate } = useWorkspace();
   const { data, error: loadError, loading } = useResource<{ bills: Bill[] }>(`${base}/bills`, revision);
   const { busy, error, run } = useAction();
@@ -26,7 +28,7 @@ export function Bills() {
     <div className="md:col-span-3"><Field label="Acceptance evidence or notes"><textarea name="evidence" className={control} maxLength={5000} rows={2} placeholder="Link or reference to the approved work" /></Field></div>
     <div className="flex items-center gap-4 md:col-span-3"><Action busy={busy === "create"} disabled={!recipients.length}>Save draft</Action><button type="button" className="text-sm text-primary" onClick={() => navigate("recipients")}>Add a payee</button><button type="button" className="text-sm text-primary" onClick={() => navigate("assistant")}>Analyze an invoice privately</button></div>
   </form>{error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</Panel>
-  <Panel title="Bills" description="Draft, approved and disputed invoices stay linked to their payment status.">{loadError && <p role="alert">{loadError}</p>}{loading ? <Empty>Loading bills...</Empty> : !data?.bills.length ? <Empty>Your first invoice will appear here.</Empty> : <DataTable columns={["Invoice", "Payee", "Amount", "Due", "Status", "Action"]}>{data.bills.map((bill) => <tr key={bill.id}><td><div className="font-medium">{bill.reference}</div><div className="mt-1 text-xs text-muted-foreground">{bill.title}</div></td><td>{recipients.find((recipient) => recipient.id === bill.recipient_id)?.name ?? "Payee"}</td><td className="tabular-nums">{usd(bill.amount)}</td><td>{dateLabel(bill.due_date)}</td><td><Status value={bill.payment?.status ?? bill.status} /></td><td><div className="flex gap-2">{bill.status === "draft" && <Action busy={busy === bill.id} disabled={!!busy} onClick={() => void run(bill.id, async () => { await api(`${base}/bills/${bill.id}/approve`, {}); refresh(); })}>Approve</Action>}{bill.payment && <button className="text-primary" onClick={() => navigate("payments")}>View payment</button>}</div></td></tr>)}</DataTable>}</Panel></div>;
+  {selectedBill && <BillTerms id={selectedBill} close={() => setSelectedBill("")} />}<Panel title="Bills" description="Draft, approved and disputed invoices stay linked to their payment status.">{loadError && <p role="alert">{loadError}</p>}{loading ? <Empty>Loading bills...</Empty> : !data?.bills.length ? <Empty>Your first invoice will appear here.</Empty> : <DataTable columns={["Invoice", "Payee", "Amount", "Due", "Status", "Action"]}>{data.bills.map((bill) => <tr key={bill.id}><td><div className="font-medium">{bill.reference}</div><div className="mt-1 text-xs text-muted-foreground">{bill.title}</div></td><td>{recipients.find((recipient) => recipient.id === bill.recipient_id)?.name ?? "Payee"}</td><td className="tabular-nums">{usd(bill.amount)}</td><td>{dateLabel(bill.due_date)}</td><td><Status value={["paid", "partially_paid"].includes(bill.status) ? bill.status : bill.payment?.status ?? bill.status} /></td><td><div className="flex flex-wrap gap-2"><button className="text-xs text-primary" onClick={() => setSelectedBill(bill.id)}>Manage terms</button>{bill.payment?.status === "draft" && bill.status !== "disputed" && <Action busy={busy === bill.id} disabled={!!busy} onClick={() => void run(bill.id, async () => { await api(`${base}/bills/${bill.id}/approve`, {}); refresh(); })}>Approve</Action>}{bill.payment && <button className="text-primary" onClick={() => navigate("payments")}>View payment</button>}</div></td></tr>)}</DataTable>}</Panel></div>;
 }
 
 export function Payroll() {
