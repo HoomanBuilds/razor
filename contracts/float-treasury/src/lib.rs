@@ -602,6 +602,13 @@ impl Treasury {
             attempt.authorized && attempt.status == AttemptStatus::Prepared,
             "ATTEMPT_NOT_AUTHORIZED"
         );
+        if attempt.use_backup {
+            require!(
+                self.backup_assets.get(&attempt.destination.network)
+                    == Some(&attempt.destination.asset_id),
+                "BACKUP_USDC_NOT_CONFIGURED"
+            );
+        }
         require!(attempt.route.deadline_ms.0 > now_ms(), "QUOTE_EXPIRED");
         let amount = attempt.route.input_amount.0;
         require!(
