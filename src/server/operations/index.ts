@@ -1,0 +1,22 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import type { AppEnv } from "../context";
+import * as service from "./service";
+import { tickOperations } from "./worker";
+
+export { tickOperations, enqueueOperations } from "./worker";
+export const operationsRoutes = new Hono<AppEnv>();
+operationsRoutes.get("/overview", (c) => c.json(service.overview(c.get("access"))));
+operationsRoutes.get("/jobs", (c) => c.json({ jobs: service.listJobs(c.get("access")) }));
+operationsRoutes.post("/jobs/:id/retry", (c) => c.json(service.retryJob(c.get("access"), c.req.param("id"))));
+operationsRoutes.post("/tick", async (c) => { service.manager(c.get("access")); return c.json(await tickOperations({ organizationId: c.get("access").organizationId, maxJobs: 5 })); });
+operationsRoutes.get("/recurring", (c) => c.json({ recurring: service.listRecurring(c.get("access")) }));
+operationsRoutes.post("/recurring", async (c) => c.json({ recurring: service.createRecurring(c.get("access"), z.object({ kind: z.enum(["bill", "payroll"]), entityId: z.string().min(1), intervalDays: z.number().int().min(1).max(365), nextRunAt: z.string().datetime(), maxAmount: z.string().regex(/^[1-9]\d*$/).max(39) }).parse(await c.req.json())) }, 201));
+operationsRoutes.patch("/recurring/:id", async (c) => c.json({ recurring: service.setRecurring(c.get("access"), c.req.param("id"), z.object({ enabled: z.boolean() }).parse(await c.req.json()).enabled) }));
+operationsRoutes.get("/notices", (c) => c.json({ notices: service.listNotices(c.get("access")) }));
+operationsRoutes.post("/notices/:id/read", (c) => c.json(service.readNotice(c.get("access"), c.req.param("id"))));
+operationsRoutes.get("/mandate", (c) => c.json({ mandate: service.getMandate(c.get("access")), worker: service.workerConfiguration(c.get("access").organizationId) }));
+operationsRoutes.put("/mandate", async (c) => c.json({ mandate: service.saveMandate(c.get("access"), z.object({ enabled: z.boolean(), maxAmount: z.string().regex(/^[1-9]\d*$/).max(39), expiresAt: z.string().datetime() }).parse(await c.req.json())) }));
+operationsRoutes.post("/mandate/role", async (c) => c.json(await service.prepareExecutorRole(c.get("access"), z.object({ enabled: z.boolean() }).parse(await c.req.json()).enabled)));
+operationsRoutes.post("/mandate/pause", (c) => c.json({ mandate: service.pauseMandate(c.get("access")) }));
+operationsRoutes.post("/retention/purge", (c) => c.json(service.purgeRetention(c.get("access"))));
