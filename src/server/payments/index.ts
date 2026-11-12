@@ -47,6 +47,7 @@ paymentsRoutes.get("/payments", (c) => c.json({ payments: service.listPayments(c
 paymentsRoutes.post("/payments", async (c) => c.json({ payment: service.createPayment(c.get("access"), await body(c.req.raw, paymentInput)) }, 201));
 paymentsRoutes.get("/payments/:id", (c) => c.json({ payment: service.getPayment(c.get("access"), c.req.param("id")), attempts: service.listAttempts(c.get("access"), c.req.param("id")) }));
 paymentsRoutes.post("/payments/:id/approve", (c) => c.json({ payment: service.approvePayment(c.get("access"), c.req.param("id")) }));
+paymentsRoutes.post("/payments/:id/revalidate", (c) => c.json({ payment: service.revalidatePaymentRecipient(c.get("access"), c.req.param("id")) }));
 paymentsRoutes.post("/payments/:id/cancel", async (c) => c.json(await service.cancelPayment(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/payments/:id/quote", async (c) => c.json(await service.preparePaymentQuote(c.get("access"), c.req.param("id"), await body(c.req.raw, quoteInput))));
 paymentsRoutes.post("/payments/:id/reconcile", async (c) => c.json(await service.reconcilePayment(c.get("access"), c.req.param("id"))));

@@ -156,15 +156,38 @@ export function createPayment(access: AccessContext, input: CreatePaymentInput):
   });
 }
 
+export function revalidatePaymentRecipient(access: AccessContext, paymentId: string): Payment {
+  requirePermission(access, "payments:prepare");
+  return transaction(() => {
+    const payment = getPayment(access, paymentId);
+    if (payment.status !== "draft" || payment.approved_at || listAttempts(access, paymentId).length) throw new ApiError(409, "Cancel the approved obligation and prepare a new one before changing its recipient terms", "FRESH_APPROVAL_REQUIRED");
+    const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=? AND archived=0", payment.recipient_id, access.organizationId);
+    if (!recipient) throw new ApiError(409, "Choose an active recipient", "RECIPIENT_UNAVAILABLE");
+    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
+    getDb().prepare("UPDATE payments SET recipient_version=?,recipient_snapshot=?,updated_at=? WHERE id=?").run(recipient.version, json(snapshot), now(), paymentId);
+    return getPayment(access, paymentId);
+  });
+}
+
 export function approvePayment(access: AccessContext, paymentId: string): Payment {
   requirePermission(access, "payments:approve");
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
+    const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string };
+    if (metadata.billId) {
+      const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, paymentId);
+      if (!bill || bill.status !== "approved") throw new ApiError(409, "Approve the underlying invoice before approving its payment", "BILL_APPROVAL_REQUIRED");
+    }
+    if (metadata.runId) {
+      const run = row<{ status: string }>("SELECT status FROM payroll_runs WHERE id=? AND organization_id=?", metadata.runId, access.organizationId);
+      if (!run || run.status !== "approved") throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
+    }
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
     if (!["draft", "approved_unfunded", "held"].includes(payment.status)) throw new ApiError(409, "This obligation cannot be approved in its current state", "PAYMENT_STATE_CHANGED");
-    const recipient = row<{ version: number }>("SELECT version FROM recipients WHERE id = ? AND organization_id = ?", payment.recipient_id, access.organizationId);
+    const recipient = row<{ version: number; preference_status: string; archived: number }>("SELECT version,preference_status,archived FROM recipients WHERE id = ? AND organization_id = ?", payment.recipient_id, access.organizationId);
     if (!recipient || recipient.version !== payment.recipient_version) throw new ApiError(409, "Recipient details changed. Prepare a new payment for approval", "RECIPIENT_CHANGED");
+    if (recipient.archived || recipient.preference_status !== "confirmed") throw new ApiError(409, "Ask the recipient to confirm the payment details before approval", "RECIPIENT_CONFIRMATION_REQUIRED");
     const current = balance(access.organizationId);
     const required = atomic(payment.amount) + atomic(payment.max_fee, true) - atomic(payment.total_spent, true);
     if (required < atomic(payment.amount)) throw new ApiError(409, "The approved fee budget is exhausted", "COST_LIMIT_EXCEEDED");

@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 let database: DatabaseSync | undefined;
+let transactionDepth = 0;
 
 export function getDb(): DatabaseSync {
   if (database) return database;
@@ -32,15 +33,20 @@ export function getDb(): DatabaseSync {
 
 export function transaction<T>(action: (db: DatabaseSync) => T): T {
   const db = getDb();
-  db.exec("BEGIN IMMEDIATE");
+  const depth = transactionDepth++;
+  const savepoint = `float_transaction_${depth}`;
+  db.exec(depth ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
   try {
     const result = action(db);
     if (result instanceof Promise) throw new Error("Database transactions must not contain asynchronous work");
-    db.exec("COMMIT");
+    db.exec(depth ? `RELEASE SAVEPOINT ${savepoint}` : "COMMIT");
     return result;
   } catch (error) {
-    db.exec("ROLLBACK");
+    db.exec(depth ? `ROLLBACK TO SAVEPOINT ${savepoint}` : "ROLLBACK");
+    if (depth) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
     throw error;
+  } finally {
+    transactionDepth--;
   }
 }
 
