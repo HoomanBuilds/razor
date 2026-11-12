@@ -9,6 +9,7 @@ import { reviewedArtifactHash } from "../near-artifacts";
 import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
 import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
+import { clientReserveTotals } from "../client-reserves/accounting";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -59,8 +60,11 @@ function ledger(organizationId: string, reference: string, entryType: string, am
 export function getTreasury(access: AccessContext) {
   requirePermission(access, "company:read");
   const current = balance(access.organizationId);
-  const available = BigInt(current.balance) - BigInt(current.effectiveReserved);
-  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
+  const clients = clientReserveTotals(access.organizationId);
+  const totalReserved = BigInt(current.effectiveReserved) + BigInt(clients.clientReserved);
+  const available = BigInt(current.balance) - totalReserved;
+  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.effectiveReserved, ...clients,
+    totalReserved: totalReserved.toString(), reserveDeficit: (available < 0n ? -available : 0n).toString(), available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
 }
 
 export function listNetworks(access: AccessContext) {
@@ -196,7 +200,7 @@ export function approvePayment(access: AccessContext, paymentId: string): Paymen
     const current = balance(access.organizationId);
     const required = atomic(payment.amount) + atomic(payment.max_fee, true) - atomic(payment.total_spent, true);
     if (required < atomic(payment.amount)) throw new ApiError(409, "The approved fee budget is exhausted", "COST_LIMIT_EXCEEDED");
-    const funded = BigInt(current.balance) - BigInt(current.effectiveReserved) >= required;
+    const funded = BigInt(current.balance) - BigInt(current.effectiveReserved) - BigInt(clientReserveTotals(access.organizationId).clientReserved) >= required;
     if (funded && payment.reserved_amount === "0") ledger(access.organizationId, `reserve:${paymentId}:${id()}`, "payment_reserved", required.toString(), current.balance, (BigInt(current.reserved) + required).toString(), { paymentId });
     getDb().prepare("UPDATE payments SET status=?,approved_by=COALESCE(approved_by,?),approved_at=COALESCE(approved_at,?),reserved_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(funded ? "approved" : "approved_unfunded", access.userId, now(), funded ? required.toString() : "0", funded ? null : "Fund the payment entitlement and approved costs", now(), paymentId);
     return getPayment(access, paymentId);
