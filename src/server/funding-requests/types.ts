@@ -25,4 +25,5 @@ export interface PublicFundingRequest {
 }
 export interface PublicQuoteResult {
   funding: PublicFundingLeg; token: Token; request: PublicFundingRequest;
+  depositAllowed?: boolean; depositBlockedReason?: string;
 }

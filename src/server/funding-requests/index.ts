@@ -29,7 +29,7 @@ publicFundingRoutes.post("/quote", async (c) => {
 });
 publicFundingRoutes.post("/resume", async (c) => {
   const input = z.object({ token, idempotencyKey: key }).strict().parse(await c.req.json());
-  return c.json(service.resumePublicQuote(input.token, input.idempotencyKey));
+  return c.json(await service.resumePublicQuote(input.token, input.idempotencyKey));
 });
 publicFundingRoutes.post("/reconcile", async (c) => {
   const input = z.object({ token, fundingId: z.string().min(1).max(128), idempotencyKey: key.optional(), sourceTxHash: z.string().min(8).max(160).optional() }).strict().parse(await c.req.json());

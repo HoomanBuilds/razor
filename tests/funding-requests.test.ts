@@ -71,7 +71,7 @@ test("one active funding leg is idempotent and provider reporting cannot fulfill
   const first = await preparePublicQuote(created.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: active.key });
   const second = await preparePublicQuote(created.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: active.key });
   assert.equal(first.funding.id, second.funding.id);
-  assert.equal(resumePublicQuote(created.link.token, active.key).funding.id, active.fundingId);
+  assert.equal((await resumePublicQuote(created.link.token, active.key)).funding.id, active.fundingId);
   await assert.rejects(() => preparePublicQuote(created.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: randomUUID() }), /still unresolved/);
   await assert.rejects(() => preparePublicQuote(created.link.token, { originAsset: active.originAsset, refundAddress: "another-refund", idempotencyKey: active.key }), /different source terms/);
   await assert.rejects(() => reconcilePublicFunding(created.link.token, { fundingId: active.fundingId, sourceTxHash: "unowned-hash-123" }), (error: ApiError) => error.status === 403);
@@ -81,13 +81,18 @@ test("one active funding leg is idempotent and provider reporting cannot fulfill
   assert.equal(getPublicFundingRequest(created.link.token).confirmedAmount, "0");
   assert.equal(getPublicFundingRequest(created.link.token).remainingAmount, input.amount);
   assert.equal(row<{ n: number }>("SELECT COUNT(*) AS n FROM funding_legs WHERE organization_id=?", access.organizationId)!.n, 1);
+  getDb().prepare("UPDATE memberships SET status='removed' WHERE organization_id=?").run(access.organizationId);
+  const blocked = await resumePublicQuote(created.link.token, active.key);
+  assert.equal(blocked.depositAllowed, false);
+  assert.match(blocked.depositBlockedReason ?? "", /owner wallet/);
+  assert.equal(getPublicFundingRequest(created.link.token).remainingAmount, input.amount);
 });
 
 test("expired and revoked requests reject new quotes while retaining existing tracking", async () => {
   const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
   getDb().prepare("UPDATE funding_requests SET expires_at=? WHERE id=?").run(new Date(Date.now() - 1_000).toISOString(), created.request.id);
   await assert.rejects(() => preparePublicQuote(created.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: active.key }), /expired/);
-  assert.equal(resumePublicQuote(created.link.token, active.key).request.status, "expired");
+  assert.equal((await resumePublicQuote(created.link.token, active.key)).request.status, "expired");
   const another = await createFundingRequest(access, input);
   revokeFundingRequest(access, another.request.id);
   await assert.rejects(() => preparePublicQuote(another.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: randomUUID() }), /revoked/);

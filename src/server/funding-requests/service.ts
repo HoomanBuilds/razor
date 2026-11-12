@@ -148,11 +148,16 @@ function quoteResult(request: FundingRequestRecord, quote: RequestQuote): Public
   const funding: PublicFundingLeg = { id: leg.id, origin_asset: leg.origin_asset, amount_in: leg.amount_in, expected_output: leg.expected_output, deposit_address: leg.deposit_address, deposit_memo: leg.deposit_memo, quote: leg.quote, status: publicLegStatus(request, leg), source_tx_hash: leg.source_tx_hash };
   return { funding, token: JSON.parse(quote.origin_token_json) as Token, request: publicView(request) };
 }
-export function resumePublicQuote(token: string, idempotencyKey: string): PublicQuoteResult {
+export async function resumePublicQuote(token: string, idempotencyKey: string): Promise<PublicQuoteResult> {
   const request = requestForToken(token); validateKey(idempotencyKey);
   const quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND key_hash=? AND funding_id IS NOT NULL", request.id, hashToken(idempotencyKey));
   if (!quote) throw new ApiError(404, "This browser has no saved funding quote", "FUNDING_QUOTE_NOT_FOUND");
-  return quoteResult(request, quote);
+  const result = quoteResult(request, quote);
+  if (result.funding.status === "pending_deposit" && !result.funding.source_tx_hash && !["expired", "revoked", "fulfilled", "paused"].includes(result.request.status)) {
+    try { await frozenTarget(request); }
+    catch (error) { return { ...result, depositAllowed: false, depositBlockedReason: error instanceof ApiError ? error.message : "The company treasury could not be reverified. Check the existing leg before sending funds." }; }
+  }
+  return result;
 }
 
 export async function preparePublicQuote(token: string, input: { originAsset: string; refundAddress: string; idempotencyKey: string }): Promise<PublicQuoteResult> {
@@ -171,7 +176,7 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
       .run(id, request.id, keyHash, `funding-link:${request.capability_id}`, input.originAsset, input.refundAddress, initial.remainingAmount, owner, until, now(), now());
     return { id };
   });
-  if (claim.existing) return quoteResult(request, claim.existing);
+  if (claim.existing) return resumePublicQuote(token, input.idempotencyKey);
   try {
     const config = await frozenTarget(request), tokens = await getSupportedTokens(), origin = tokens.find((item) => item.assetId === input.originAsset), destination = nativeUsdc(tokens, "near");
     if (!origin) throw new ApiError(422, "Choose a live supported source asset", "ASSET_UNSUPPORTED");
@@ -179,6 +184,7 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
     const deadline = new Date(Math.min(Date.now() + 2 * 60 * 60_000, Date.parse(request.expires_at))).toISOString();
     const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: `float:funding-request:${request.id}` });
     if (quote.quote.amountOut !== initial.remainingAmount || Date.parse(quote.quote.deadline ?? deadline) > Date.parse(request.expires_at)) throw new ApiError(502, "The signed quote changed the fixed amount or request expiry", "FUNDING_QUOTE_MISMATCH");
+    await frozenTarget(request);
     return transaction(() => {
       const current = requestForToken(token); assertOpen(current);
       const reserved = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE id=? AND state='quoting' AND reservation_owner=? AND lease_expires_at>?", claim.id!, owner, now());
