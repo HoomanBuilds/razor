@@ -8,6 +8,7 @@ export interface IdentitySession {
   organizations:Array<{id:string;name:string;role:string;permissions:string[];timezone:string;settlement_asset:string;near_network:string;treasury_account_id:string|null}>;
   wallets:Array<{id:string;family:WalletFamily;address:string;network:string;label:string|null}>;
   activeOrganizationId:string|null;
+  recipientProfileCount?:number;
   permissions:string[];
 }
 

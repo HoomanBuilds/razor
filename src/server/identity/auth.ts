@@ -104,7 +104,8 @@ authRoutes.post("/challenge", async (c) => {
   const address = normalizeWallet(input.family, input.address);
   const session = currentSession(c);
   if (input.purpose === "link" && !session) throw new ApiError(401, "Sign in before linking a wallet", "UNAUTHENTICATED");
-  const network = input.family === "near" ? process.env.NEAR_NETWORK || "testnet" : input.network || (input.family === "solana" ? "solana" : "evm");
+  if (input.purpose === "link" && Date.now() - Date.parse(session!.created_at) > 3600000) throw new ApiError(403, "Sign in again before linking a new sign-in wallet", "FRESH_SIGN_IN_REQUIRED");
+  const network = input.family === "near" ? process.env.NEAR_NETWORK || "testnet" : input.family === "solana" ? "solana" : "evm";
   const recent = row<{ count: number }>("SELECT count(*) AS count FROM auth_challenges WHERE address = ? AND created_at > ?", address, new Date(Date.now() - 60000).toISOString());
   if ((recent?.count || 0) >= 8) throw new ApiError(429, "Please wait before requesting another sign-in challenge", "RATE_LIMITED");
   const id = randomUUID(), nonce = randomBytes(32).toString("hex"), recipient = new URL(appOrigin()).host;
@@ -155,6 +156,7 @@ authRoutes.post("/privy", async (c) => {
   }
   const current = currentSession(c);
   if (input.link && !current) throw new ApiError(401, "Sign in before linking another identity", "UNAUTHENTICATED");
+  if (input.link && Date.now() - Date.parse(current!.created_at) > 3600000) throw new ApiError(403, "Sign in again before linking another identity", "FRESH_SIGN_IN_REQUIRED");
   const userId = transaction((db) => {
     const existing = row<{ user_id: string }>("SELECT user_id FROM user_identities WHERE provider = 'privy' AND subject = ?", profile.subject);
     if (existing && input.link && existing.user_id !== current!.user_id) throw new ApiError(409, "This sign-in is already linked to another account", "IDENTITY_ALREADY_LINKED");
@@ -174,9 +176,10 @@ authRoutes.post("/privy", async (c) => {
 authRoutes.get("/session", requireUser, (c) => {
   const userId=c.get("userId");
   const activeOrganizationId=currentSession(c)?.organization_id || null;
+  const recipientProfileCount=row<{count:number}>("SELECT count(*) AS count FROM recipients WHERE user_id=?",userId)?.count ?? 0;
   let permissions:string[]=[];
   if(activeOrganizationId) { try { permissions=getAccess(userId,activeOrganizationId).permissions; } catch { getDb().prepare("UPDATE sessions SET organization_id = NULL WHERE id = ?").run(currentSession(c)!.id); } }
-  return c.json({ user: row("SELECT id,email,name FROM users WHERE id = ?",userId), organizations: organizationsFor(userId), wallets: rows("SELECT id,family,address,network,label,created_at FROM linked_wallets WHERE user_id = ?",userId), activeOrganizationId: permissions.length?activeOrganizationId:null, permissions });
+  return c.json({ user: row("SELECT id,email,name FROM users WHERE id = ?",userId), organizations: organizationsFor(userId), wallets: rows("SELECT id,family,address,network,label,created_at FROM linked_wallets WHERE user_id = ?",userId), activeOrganizationId: permissions.length?activeOrganizationId:null, permissions, recipientProfileCount });
 });
 
 authRoutes.post("/logout", requireUser, (c) => { revokeSession(c); return c.json({ ok: true }); });

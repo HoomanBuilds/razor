@@ -47,6 +47,10 @@ test("wallet proofs are origin-bound, reject forged signatures and cannot replay
   assert.equal((await request("/auth/wallet",{challengeId:challenge.challengeId,signature:await signed.account.signMessage({message:challenge.message})})).status,401);
   const session=await(await request("/auth/session",undefined,signed.cookie)).json();
   assert.equal(session.wallets[0].address,signed.account.address.toLowerCase());
+  const canonical=await(await request("/auth/challenge",{family:"evm",address:signed.account.address,network:"base"})).json();
+  assert.equal(canonical.network,"evm");
+  getDb().prepare("UPDATE sessions SET created_at=? WHERE user_id=?").run(new Date(Date.now()-2*3600000).toISOString(),session.user.id);
+  assert.equal((await request("/auth/challenge",{family:"evm",address:signed.account.address,purpose:"link"},signed.cookie)).status,403);
 });
 
 test("social login requires configured verification keys and accepts only correctly scoped signed JWTs",async()=>{

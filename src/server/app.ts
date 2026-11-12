@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { ZodError } from "zod";
 import { ApiError, type AppEnv } from "./context";
 import { identityRoutes, requireOrganization, requireUser } from "./identity";
@@ -8,8 +9,10 @@ import { assistantRoutes } from "./assistant";
 import { onboardingRoutes } from "./treasury-onboarding";
 import { operationsRoutes } from "./operations";
 import { reconciliationRoutes } from "./reconciliation";
+import { companyInvoiceIntakeRoutes, recipientWorkspaceRoutes } from "./recipient-workspace";
 
 export const app = new Hono<AppEnv>().basePath("/api");
+app.use("*", bodyLimit({ maxSize: 1_048_576, onError: (c) => c.json({ error: "Submit a request smaller than 1 MB", code: "REQUEST_TOO_LARGE" }, 413) }));
 app.onError((error, c) => {
   if (error instanceof ApiError) return c.json({ error: error.message, code: error.code }, error.status as 400);
   if (error instanceof ZodError) return c.json({ error: "Check the submitted fields", code: "VALIDATION_ERROR", fields: error.flatten() }, 400);
@@ -22,6 +25,7 @@ app.route("/", identityRoutes);
 app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
 app.route("/assets", assetRoutes);
+app.route("/recipient-workspace", recipientWorkspaceRoutes);
 app.use("/organizations/:orgId/*", requireUser, requireOrganization("company:read"));
 app.route("/organizations/:orgId", paymentsRoutes);
 app.route("/organizations/:orgId", businessRoutes);
@@ -29,4 +33,5 @@ app.route("/organizations/:orgId/assistant", assistantRoutes);
 app.route("/organizations/:orgId/onboarding", onboardingRoutes);
 app.route("/organizations/:orgId/operations", operationsRoutes);
 app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
+app.route("/organizations/:orgId/intake", companyInvoiceIntakeRoutes);
 app.notFound((c) => c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404));

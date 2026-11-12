@@ -12,7 +12,11 @@ export interface WorkspaceContextValue {
   refresh: () => void;
   navigate: (section: Section) => void;
   notify: (message: string) => void;
+  invoiceReview: InvoiceReview | null;
+  analyzeInvoice: (review: InvoiceReview | null) => void;
 }
+
+export interface InvoiceReview { id: string; recipientId: string; sourceFingerprint: string; reference: string; currency: string; text: string }
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 export function useWorkspace() {
