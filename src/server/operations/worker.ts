@@ -277,6 +277,8 @@ function recurringJob(job: OperationJob): JobResult {
         maxFee: payment.maxFee,
         dueDate: dueAt,
         lineItems: current.bill!.lineItems,
+        projectReference: current.bill!.projectReference,
+        costCenterReference: current.bill!.costCenterReference,
       });
       entityId = created.id;
       if (

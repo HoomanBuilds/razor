@@ -62,6 +62,8 @@ export function accountingExport(access: AccessContext): string {
     max_fee: string;
     status: string;
     created_at: string;
+    project_reference: string | null;
+    cost_center_reference: string | null;
   }>(
     "SELECT * FROM bills WHERE organization_id=? ORDER BY created_at,id",
     access.organizationId,
@@ -136,6 +138,8 @@ export function accountingExport(access: AccessContext): string {
       payment_reference: payment.reference,
       bill_id: bill?.id,
       bill_reference: bill?.reference,
+      project_reference: bill?.project_reference ? decrypt(bill.project_reference) : undefined,
+      cost_center_reference: bill?.cost_center_reference ? decrypt(bill.cost_center_reference) : undefined,
       payroll_run_id: item?.run_id ?? run?.id,
       payroll_reference: item?.reference ?? run?.reference,
       period_start: item?.period_start ?? run?.period_start,
@@ -335,6 +339,8 @@ export function accountingExport(access: AccessContext): string {
       bill_id: bill.id,
       bill_reference: bill.reference,
       description: decrypt(bill.title),
+      project_reference: bill.project_reference ? decrypt(bill.project_reference) : undefined,
+      cost_center_reference: bill.cost_center_reference ? decrypt(bill.cost_center_reference) : undefined,
       entitlement_usdc: usdc(bill.amount),
       entitlement_micro_usdc: bill.amount,
       max_cost_usdc: usdc(bill.max_fee),
@@ -372,6 +378,8 @@ export function accountingExport(access: AccessContext): string {
   const headers = [
     "record_type",
     "record_id",
+    "project_reference",
+    "cost_center_reference",
     "created_at",
     "status",
     "payment_id",

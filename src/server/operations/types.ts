@@ -24,6 +24,6 @@ export interface TemplatePayment {
 }
 export interface TemplateSnapshot {
   fingerprint: string; total: string; payments: TemplatePayment[];
-  bill?: { title: string; lineItems: unknown[]; requiresAcceptance: boolean };
+  bill?: { title: string; lineItems: unknown[]; requiresAcceptance: boolean; projectReference?: string; costCenterReference?: string };
   payroll?: { periodStart: string; periodEnd: string; scheduledFor: string | null };
 }

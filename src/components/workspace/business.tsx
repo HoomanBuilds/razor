@@ -64,6 +64,8 @@ export function Bills() {
                     )
                   : undefined,
                 evidence: values.get("evidence") || undefined,
+                projectReference: values.get("project") || undefined,
+                costCenterReference: values.get("costCenter") || undefined,
               });
               form.reset();
               refresh();
@@ -118,6 +120,12 @@ export function Bills() {
           </Field>
           <Field label="Due date" hint={organization.timezone}>
             <input name="due" type="datetime-local" className={control} />
+          </Field>
+          <Field label="Project reference (optional)">
+            <input name="project" className={control} maxLength={120} />
+          </Field>
+          <Field label="Cost center (optional)">
+            <input name="costCenter" className={control} maxLength={120} />
           </Field>
           <div className="md:col-span-3">
             <Field label="Acceptance evidence or notes">
@@ -190,6 +198,7 @@ export function Bills() {
                   <div className="mt-1 text-xs text-muted-foreground">
                     {bill.title}
                   </div>
+                  {(bill.project_reference || bill.cost_center_reference) && <p className="mt-1 text-xs text-muted-foreground">{[bill.project_reference && `Project: ${bill.project_reference}`, bill.cost_center_reference && `Cost center: ${bill.cost_center_reference}`].filter(Boolean).join(" · ")}</p>}
                 </td>
                 <td>
                   {recipients.find(

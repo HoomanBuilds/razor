@@ -168,6 +168,8 @@ export function captureTemplate(
       status: string;
       payment_id: string | null;
       requires_acceptance?: number;
+      project_reference: string | null;
+      cost_center_reference: string | null;
     }>(
       "SELECT * FROM bills WHERE id=? AND organization_id=?",
       entityId,
@@ -210,6 +212,8 @@ export function captureTemplate(
       title: decrypt(invoice.title),
       lineItems: JSON.parse(decrypt(invoice.line_items)),
       requiresAcceptance: !!invoice.requires_acceptance,
+      projectReference: invoice.project_reference ? decrypt(invoice.project_reference) : undefined,
+      costCenterReference: invoice.cost_center_reference ? decrypt(invoice.cost_center_reference) : undefined,
     };
     payments = [
       {

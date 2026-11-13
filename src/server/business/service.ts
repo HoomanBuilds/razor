@@ -11,6 +11,7 @@ type Bill = {
   line_items: string; evidence: string | null; document_hash: string | null;
   payment_id: string | null; accepted_at: string | null; created_at: string; updated_at: string;
   requires_acceptance: number; milestone_accepted_at: string | null;
+  project_reference: string | null; cost_center_reference: string | null;
 };
 type PayrollRun = {
   id: string; organization_id: string; reference: string; period_start: string; period_end: string;
@@ -20,7 +21,8 @@ type PayrollRun = {
 type PayrollItem = { id: string; run_id: string; recipient_id: string; amount: string; max_fee: string; note: string | null; payment_id: string | null };
 
 function readableBill(bill: Bill): Bill {
-  return { ...bill, title: decrypt(bill.title), line_items: decrypt(bill.line_items), evidence: bill.evidence ? decrypt(bill.evidence) : null };
+  return { ...bill, title: decrypt(bill.title), line_items: decrypt(bill.line_items), evidence: bill.evidence ? decrypt(bill.evidence) : null,
+    project_reference: bill.project_reference ? decrypt(bill.project_reference) : null, cost_center_reference: bill.cost_center_reference ? decrypt(bill.cost_center_reference) : null };
 }
 
 function amount(value: string, allowZero = false): string {
@@ -55,14 +57,19 @@ export function listBills(access: AccessContext) {
 export function createBill(access: AccessContext, input: {
   recipientId: string; reference: string; title: string; amount: string; maxFee?: string;
   dueDate?: string; lineItems?: unknown[]; evidence?: string; documentHash?: string;
+  projectReference?: string; costCenterReference?: string;
 }) {
   requirePermission(access, "payments:prepare");
   recipient(access, input.recipientId);
   const value = amount(input.amount);
   const fee = amount(input.maxFee ?? "1000000", true);
+  const projectReference = input.projectReference?.trim() || null;
+  const costCenterReference = input.costCenterReference?.trim() || null;
+  if ([projectReference, costCenterReference].some(value => value && value.length > 120)) throw new ApiError(400, "Use at most 120 characters for a project or cost center reference", "INVALID_BILL_ATTRIBUTION");
   const existing = row<Bill>("SELECT * FROM bills WHERE organization_id = ? AND recipient_id = ? AND reference = ?", access.organizationId, input.recipientId, input.reference);
   if (existing) {
-    if (existing.amount !== value || existing.max_fee !== fee || decrypt(existing.title) !== input.title || existing.due_date !== (input.dueDate ?? null)) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
+    const readable = readableBill(existing);
+    if (existing.amount !== value || existing.max_fee !== fee || readable.title !== input.title || existing.due_date !== (input.dueDate ?? null) || readable.project_reference !== projectReference || readable.cost_center_reference !== costCenterReference) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
     return readableBill(existing);
   }
   if (input.documentHash && row("SELECT id FROM bills WHERE organization_id = ? AND document_hash = ?", access.organizationId, input.documentHash)) {
@@ -70,8 +77,8 @@ export function createBill(access: AccessContext, input: {
   }
   const id = randomUUID(), now = new Date().toISOString();
   return transaction((db) => {
-    db.prepare("INSERT INTO bills (id, organization_id, recipient_id, reference, title, amount, max_fee, due_date, line_items, evidence, document_hash, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, access.organizationId, input.recipientId, input.reference, encrypt(input.title), value, fee, input.dueDate ?? null, encrypt(JSON.stringify(input.lineItems ?? [])), input.evidence ? encrypt(input.evidence) : null, input.documentHash ?? null, access.userId, now, now);
+    db.prepare("INSERT INTO bills (id, organization_id, recipient_id, reference, title, amount, max_fee, due_date, line_items, evidence, document_hash, created_by, created_at, updated_at, project_reference, cost_center_reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, access.organizationId, input.recipientId, input.reference, encrypt(input.title), value, fee, input.dueDate ?? null, encrypt(JSON.stringify(input.lineItems ?? [])), input.evidence ? encrypt(input.evidence) : null, input.documentHash ?? null, access.userId, now, now, projectReference ? encrypt(projectReference) : null, costCenterReference ? encrypt(costCenterReference) : null);
     const payment = createPayment(access, { recipientId: input.recipientId, reference: `bill:${id}`, amount: value, maxFee: fee, kind: "invoice", scheduledFor: input.dueDate, metadata: { billId: id, displayReference: input.reference } });
     db.prepare("UPDATE bills SET payment_id = ? WHERE id = ?").run(payment.id, id);
     activity(access, "bill.created", id);

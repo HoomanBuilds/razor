@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getDb, row, transaction } from "../src/server/db";
 import { createBill, approveBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
-import { approvePayment, revalidatePaymentRecipient } from "../src/server/payments";
+import { approvePayment, getPayment, revalidatePaymentRecipient } from "../src/server/payments";
 import { microUsd, usd } from "../src/lib/format";
 import { parsePayrollCsv } from "../src/lib/csv";
 import type { AccessContext } from "../src/server/context";
 import { acceptBillMilestone, addBillInstallment, getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
 import { listPrivateEvidence, retainPrivateEvidence } from "../src/server/reconciliation/evidence";
+import { accountingExport } from "../src/server/reconciliation/export";
+import { captureTemplate } from "../src/server/operations/service";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "a1".repeat(32);
@@ -93,4 +95,23 @@ test("private settlement evidence is encrypted, scoped and committed without pla
   assert.deepEqual(listPrivateEvidence({ ...approver, organizationId: "unrelated" }, attemptId), []);
   getDb().prepare("UPDATE private_settlement_evidence SET expires_at=? WHERE attempt_id=?").run(new Date(Date.now() - 1000).toISOString(), attemptId);
   assert.equal(listPrivateEvidence(approver, attemptId)[0].receipt, null);
+});
+
+test("invoice attribution stays private and survives recurring templates and accounting exports", () => {
+  const { preparer, approver, recipientId } = fixture();
+  const input = { recipientId, reference: "ATTRIBUTED-1", title: "Service", amount: "1000000", projectReference: "  Client rollout  ", costCenterReference: "Operations" };
+  const bill = createBill(preparer, input);
+  assert.equal(bill.project_reference, "Client rollout");
+  assert.equal(bill.cost_center_reference, "Operations");
+  const stored = row<{ project_reference: string; cost_center_reference: string }>("SELECT project_reference,cost_center_reference FROM bills WHERE id=?", bill.id)!;
+  assert.notEqual(stored.project_reference, bill.project_reference);
+  assert.notEqual(stored.cost_center_reference, bill.cost_center_reference);
+  assert.equal(createBill(preparer, input).id, bill.id);
+  assert.throws(() => createBill(preparer, { ...input, projectReference: "Other project" }), /different terms/);
+  approveBill(approver, bill.id);
+  const template = captureTemplate(preparer.organizationId, "bill", bill.id);
+  assert.equal(template.bill?.projectReference, "Client rollout");
+  const exported = accountingExport({ ...approver, permissions: [...approver.permissions, "reports:read"] });
+  assert(exported.includes('"project_reference"') && exported.includes('"Client rollout"'));
+  assert(!getPayment(preparer, bill.payment_id!).metadata.includes("Client rollout"));
 });
