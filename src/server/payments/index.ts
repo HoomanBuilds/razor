@@ -66,6 +66,7 @@ paymentsRoutes.post("/payments/:id/cancel", async (c) => c.json(await service.ca
 paymentsRoutes.post("/payments/:id/quote", async (c) => c.json(await service.preparePaymentQuote(c.get("access"), c.req.param("id"), await body(c.req.raw, quoteInput))));
 paymentsRoutes.post("/payments/:id/reconcile", async (c) => c.json(await service.reconcilePayment(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/attempts/:id/submitted", async (c) => c.json({ attempt: await service.markAttemptSubmitted(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ txHash: text }))).txHash) }));
+paymentsRoutes.post("/attempts/:id/approve", async (c) => c.json(await service.prepareAttemptApproval(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/attempts/:id/resume", async (c) => c.json(await service.resumeAttempt(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/attempts/:id/close", async (c) => c.json(await service.closeUnfundedAttempt(c.get("access"), c.req.param("id"))));
 paymentsRoutes.post("/attempts/:id/settlement", async (c) => c.json(await service.prepareSettlement(c.get("access"), c.req.param("id"), await body(c.req.raw, z.object({ outcome: z.enum(["delivered", "uncertain", "refund_pending"]), receipt: z.string().min(1).max(2000) })))));

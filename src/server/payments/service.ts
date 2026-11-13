@@ -6,10 +6,11 @@ import { assertCanStartDeposit, assertSameQuote, checkStatus, getSupportedTokens
 import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
 import { contractCodeHash, validNearAccount, view } from "./near";
 import { reviewedArtifactHash } from "../near-artifacts";
-import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
+import type { ApprovalStatus, ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
 import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
 import { clientReserveTotals } from "../client-reserves/accounting";
+import { checkedApprovalStatus } from "../treasury-policy/approvals";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -216,7 +217,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   const chain = config ? await view<ChainPayment | null>(config, "get_payment", { payment_id: paymentId }) : null;
   if (chain && chain.status !== "cancelled") {
-    if (!["proposed", "approved", "retryable", "held"].includes(chain.status)) throw new ApiError(409, "The existing onchain delivery must be reconciled before cancellation", "ONCHAIN_ATTEMPT_UNRESOLVED");
+    if (!["proposed", "awaiting_approvals", "approved", "retryable", "held"].includes(chain.status)) throw new ApiError(409, "The existing onchain delivery must be reconciled before cancellation", "ONCHAIN_ATTEMPT_UNRESOLVED");
     return { payment, walletActions: [action(config!, "cancel_payment", { payment_id: paymentId }, "1")] };
   }
   transaction(() => {
@@ -254,7 +255,6 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
   const config = configFor(access, true);
   const payment = getPayment(access, paymentId);
   if (!payment.approved_at || payment.status === "cancelled" || payment.status === "paid") throw new ApiError(409, "Approve an unpaid obligation before execution", "APPROVAL_REQUIRED");
-  if (payment.scheduled_for && Date.parse(payment.scheduled_for) > Date.now()) throw new ApiError(409, "This payment is scheduled for later", "PAYMENT_NOT_DUE");
   const recipient = ensureRecipient(payment, access);
   const attempts = rows<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at", paymentId);
   if (attempts.some((item) => activeStates.includes(item.state))) throw new ApiError(409, "An earlier attempt must be reconciled before preparing another", "ATTEMPT_ACTIVE");
@@ -285,13 +285,16 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
     if (primaryAvailable) throw new ApiError(409, "The preferred payout route is available. Use the preferred destination first", "PRIMARY_AVAILABLE");
   }
   const direct = destination.blockchain === "near" && destination.assetId === origin.assetId;
-  const quote: ExecutionRecord = direct ? { kind: "direct", network: "near", assetId: destination.assetId, recipient: address, amountIn: payment.amount, amountOut: payment.amount, deadline: new Date(Date.now() + 5 * 60_000).toISOString(), authorization: "NEAR treasury approval" } satisfies DirectExecution : await makeQuote(destination, address, !!input.dry);
+  const scheduledTime = payment.scheduled_for ? Math.max(0, Date.parse(payment.scheduled_for)) : 0;
+  const directDeadline = new Date(Math.max(Date.now(), scheduledTime) + 60 * 60_000).toISOString();
+  const quote: ExecutionRecord = direct ? { kind: "direct", network: "near", assetId: destination.assetId, recipient: address, amountIn: payment.amount, amountOut: payment.amount, deadline: directDeadline, authorization: "NEAR treasury approval" } satisfies DirectExecution : await makeQuote(destination, address, !!input.dry);
   const terms = executionTerms(quote);
+  if (scheduledTime > Date.now() && Date.parse(terms.deadline) < scheduledTime + 60_000) throw new ApiError(409, "The receiving route expires before the scheduled payment. Prepare it closer to the due time, or choose direct native USDC on NEAR", "SCHEDULE_OUTLIVES_ROUTE");
   checkBudget(payment, terms.amountIn);
   if (input.dry) return { quote, dry: true, valuation: destination.symbol === "USDC" ? null : { price: destination.price, priceUpdatedAt: destination.priceUpdatedAt, entitlement: payment.amount } };
   if (!validNearAccount(terms.sourceReceiver) || !isDirectExecution(quote) && quote.quote.depositMemo) throw new ApiError(502, "The NEAR source route returned incompatible funding instructions", "SOURCE_ROUTE_INVALID");
   const attemptId = id();
-  const walletActions = await buildWalletActions(config, payment, recipient, attemptId, quote, !!input.useBackup, tokens);
+  const plan = await buildWalletActions(access, config, payment, recipient, attemptId, quote, !!input.useBackup, tokens);
   transaction(() => {
     const latest = getPayment(access, paymentId);
     ensureRecipient(latest, access);
@@ -303,54 +306,111 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
     getDb().prepare("UPDATE payout_attempts SET destination_decimals=?,destination_symbol=? WHERE id=?").run(destination.decimals, destination.symbol, attemptId);
     getDb().prepare("UPDATE payments SET status='prepared',hold_reason=NULL,updated_at=? WHERE id=?").run(now(), paymentId);
   });
-  return { attempt: getAttempt(access, attemptId), walletActions, dry: false };
+  return { attempt: getAttempt(access, attemptId), ...plan, dry: false };
 }
 
 function action(config: TreasuryConfig, methodName: string, args: unknown, deposit = "0", gas = "100000000000000"): WalletTransaction {
   return { receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }] };
 }
 
-async function buildWalletActions(config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: ExecutionRecord, backup: boolean, tokens: Token[]): Promise<WalletTransaction[]> {
+interface ApprovalPlan {
+  network: string;
+  stage: "prepare" | "approve" | "execute" | "scheduled" | "waiting";
+  walletActions: WalletTransaction[];
+  approvalActions: WalletTransaction[];
+  approvalAccounts: string[];
+  approvals: ApprovalStatus | null;
+  message: string;
+}
+
+async function buildWalletActions(access: AccessContext, config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: ExecutionRecord, backup: boolean, tokens: Token[], approvalOnly = false): Promise<ApprovalPlan> {
   const terms = executionTerms(quote);
   const expires = Date.parse(terms.deadline);
-  if (expires <= Date.now()) throw new ApiError(409, "This quote expired. Close the unused attempt and quote again", "QUOTE_EXPIRED");
+  if (expires <= Date.now()) throw new ApiError(409, "This route expired. Close the unused attempt and prepare a new route with fresh approvals", "QUOTE_EXPIRED");
+  const scheduledTime = payment.scheduled_for ? Math.max(0, Date.parse(payment.scheduled_for)) : 0;
+  if (scheduledTime > Date.now() && expires < scheduledTime + 60_000) throw new ApiError(409, "This route expires before the scheduled payment. Prepare a fresh route closer to the due time", "SCHEDULE_OUTLIVES_ROUTE");
   let primaryAsset = recipient.primary_asset;
   if (primaryAsset === "USDC") primaryAsset = nativeUsdc(tokens, recipient.primary_network).assetId;
   const primary = { asset_id: primaryAsset, network: recipient.primary_network, address: recipient.primary_address };
   const backupDestination = recipient.backup_address ? { asset_id: nativeUsdc(tokens, recipient.backup_network!).assetId, network: recipient.backup_network!, address: recipient.backup_address } : null;
-  const [existing, currentRecipient, obligation] = await Promise.all([
+  const [existing, currentRecipient, obligation, policy] = await Promise.all([
     view<ChainPayment | null>(config, "get_payment", { payment_id: payment.id }),
-    view<{ primary: typeof primary; backup: typeof backupDestination; backup_consent: boolean; active: boolean } | null>(config, "get_recipient", { recipient_id: payment.recipient_id }),
+    view<{ primary: typeof primary; backup: typeof backupDestination; backup_consent: boolean; active: boolean; version: string } | null>(config, "get_recipient", { recipient_id: payment.recipient_id }),
     view<string | null>(config, "get_obligation", { reference: onchainReference(payment) }),
+    view<{ owner_id: string; approvers: string[]; policy_version: string; paused: boolean }>(config, "get_config"),
   ]);
+  if (policy.paused) throw new ApiError(409, "The NEAR treasury is paused", "ONCHAIN_PAUSED");
   if (obligation && obligation !== payment.id) throw new ApiError(409, "The onchain obligation reference is already in use", "ONCHAIN_OBLIGATION_CONFLICT");
-  if (existing && (existing.amount !== payment.amount || existing.max_fee !== payment.max_fee || existing.reference !== onchainReference(payment) || existing.recipient_id !== payment.recipient_id)) throw new ApiError(409, "The onchain obligation has different approved terms", "ONCHAIN_TERMS_MISMATCH");
+  if (existing && (existing.amount !== payment.amount || existing.max_fee !== payment.max_fee || existing.reference !== onchainReference(payment) || existing.recipient_id !== payment.recipient_id || existing.not_before_ms !== String(scheduledTime))) throw new ApiError(409, "The onchain obligation has different approved terms or schedule", "ONCHAIN_TERMS_MISMATCH");
   const sameDestination = (left: typeof primary | null | undefined, right: typeof primary | null | undefined) => !left && !right || !!left && !!right && left.asset_id === right.asset_id && left.network === right.network && left.address === right.address;
   const recipientMatches = currentRecipient?.active && currentRecipient.backup_consent === !!recipient.fallback_consent && sameDestination(currentRecipient.primary, primary) && sameDestination(currentRecipient.backup, backupDestination);
-  if (existing && !recipientMatches) throw new ApiError(409, "The onchain recipient changed after approval. Cancel and prepare a new obligation", "ONCHAIN_RECIPIENT_CHANGED");
-  const actions: WalletTransaction[] = [];
-  if (backupDestination && await view<string | null>(config, "get_backup_asset", { network: backupDestination.network }) !== backupDestination.asset_id) actions.push(action(config, "set_backup_asset", { network: backupDestination.network, asset_id: backupDestination.asset_id }, "1"));
-  if (!recipientMatches) actions.push(action(config, "set_recipient", { recipient_id: payment.recipient_id, primary, backup: backupDestination, backup_consent: !!recipient.fallback_consent, active: true }, "1"));
-  if (!existing) actions.push(action(config, "propose_payment", { payment_id: payment.id, recipient_id: payment.recipient_id, amount: payment.amount, max_fee: payment.max_fee, expires_at_ms: String(Date.parse(payment.approved_at!) + 30 * 86_400_000), reference: onchainReference(payment) }));
-  if (!existing || ["proposed", "held"].includes(existing.status)) actions.push(action(config, "approve_payment", { payment_id: payment.id }, "1"));
-  if (existing && !["proposed", "approved", "held", "retryable"].includes(existing.status)) throw new ApiError(409, "Reconcile the existing onchain delivery before resuming", "ONCHAIN_ATTEMPT_UNRESOLVED");
-  if (existing && BigInt(existing.expires_at_ms) < BigInt(expires)) throw new ApiError(409, "The approved onchain obligation expires before this quote", "APPROVAL_EXPIRED");
+  if (existing && (!recipientMatches || existing.recipient_version !== currentRecipient?.version)) throw new ApiError(409, "The onchain recipient changed after approval. Cancel and prepare a new obligation", "ONCHAIN_RECIPIENT_CHANGED");
+  if (existing && !["proposed", "awaiting_approvals", "approved", "held", "retryable"].includes(existing.status)) throw new ApiError(409, "Reconcile the existing onchain delivery before resuming", "ONCHAIN_ATTEMPT_UNRESOLVED");
+  const paymentExpiry = existing?.expires_at_ms ?? String(Date.parse(payment.approved_at!) + 30 * 86_400_000);
+  if (BigInt(paymentExpiry) < BigInt(expires)) throw new ApiError(409, "The obligation expires before this route. Cancel and review a new obligation", "APPROVAL_EXPIRED");
   const chainAttempt = existing?.attempts.find((attempt) => attempt.id === attemptId);
   if (existing?.attempts.some((attempt) => attempt.id !== attemptId && !["refunded", "transfer_failed", "discarded"].includes(attempt.status))) throw new ApiError(409, "An earlier onchain source may still deliver", "ONCHAIN_ATTEMPT_UNRESOLVED");
   const route = { kind: terms.kind, source_receiver: terms.sourceReceiver, input_amount: terms.amountIn, output_amount: terms.amountOut, quote_id: terms.quoteId, quote_hash: createHash("sha256").update(json(quote)).digest("hex"), deadline_ms: String(expires) };
-  if (chainAttempt && (chainAttempt.status !== "prepared" || chainAttempt.route.quote_hash !== route.quote_hash)) throw new ApiError(409, "This onchain attempt is no longer awaiting signature", "ONCHAIN_ATTEMPT_UNRESOLVED");
-  if (!chainAttempt) actions.push(action(config, "create_attempt", { payment_id: payment.id, attempt_id: attemptId, use_backup: backup, route }));
-  if (!chainAttempt?.authorized) actions.push(action(config, "authorize_attempt", { payment_id: payment.id, attempt_id: attemptId }, "1"));
+  const selected = backup ? backupDestination : primary;
+  if (!selected || !sameDestination(selected, { asset_id: isDirectExecution(quote) ? quote.assetId : quote.quoteRequest.destinationAsset, network: selected.network, address: isDirectExecution(quote) ? quote.recipient : quote.quoteRequest.recipient })) throw new ApiError(409, "The signed route has another receiving destination", "ONCHAIN_ROUTE_MISMATCH");
+  if (chainAttempt && (chainAttempt.status !== "prepared" || chainAttempt.use_backup !== backup || Object.entries(route).some(([key, value]) => chainAttempt.route[key as keyof typeof route] !== value))) throw new ApiError(409, "This onchain attempt no longer matches the prepared route", "ONCHAIN_ATTEMPT_UNRESOLVED");
+  if (isDirectExecution(quote) && (quote.assetId !== `nep141:${config.token_contract}` || terms.amountIn !== payment.amount || terms.amountOut !== payment.amount)) throw new ApiError(409, "Direct NEAR delivery must equal the approved native-USDC entitlement", "DIRECT_TERMS_INVALID");
+  const linked = rows<{ address: string }>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=?", access.userId, config.network);
+  const approvalAccounts = access.permissions.includes("payments:approve") ? linked.map((item) => item.address).filter((account) => account === policy.owner_id || policy.approvers.includes(account)) : [];
+  const plan: ApprovalPlan = { network: config.network, stage: "waiting", walletActions: [], approvalActions: [], approvalAccounts, approvals: null, message: "An authorized NEAR approver must review the exact route." };
+  if (existing && !chainAttempt && (existing.policy_version !== policy.policy_version || existing.status === "held")) {
+    const status = await view<ApprovalStatus>(config, "get_approval_status", { payment_id: payment.id, attempt_id: attemptId });
+    if (!status || status.policy_version !== policy.policy_version || !/^[a-f0-9]{64}$/.test(status.payment_terms_hash) || status.approval_amount !== (BigInt(payment.amount) + BigInt(payment.max_fee)).toString()) throw new ApiError(409, "The current obligation approval could not be verified", "APPROVAL_VIEW_INVALID");
+    plan.stage = "approve"; plan.approvals = status; plan.message = "Renew this obligation under the current policy before preparing its new exact route.";
+    if (approvalAccounts.length) plan.approvalActions = [action(config, "approve_payment", { payment_id: payment.id, expected_policy_version: status.policy_version, expected_terms_hash: status.payment_terms_hash }, "1")];
+    return plan;
+  }
+  if (existing && chainAttempt) {
+    plan.approvals = checkedApprovalStatus(await view<ApprovalStatus>(config, "get_approval_status", { payment_id: payment.id, attempt_id: attemptId }), payment.id, attemptId);
+    if (plan.approvals.approval_amount !== (BigInt(payment.amount) + BigInt(payment.max_fee)).toString() || plan.approvals.policy_version !== policy.policy_version) throw new ApiError(409, "The approval policy changed while reading this route. Refresh before signing", "POLICY_CHANGED");
+    if (approvalAccounts.some((account) => !plan.approvals!.payment_approvals.includes(account) || !plan.approvals!.attempt_approvals.includes(account))) plan.approvalActions = [
+      action(config, "approve_payment", { payment_id: payment.id, expected_policy_version: plan.approvals.policy_version, expected_terms_hash: plan.approvals.payment_terms_hash }, "1"),
+      action(config, "authorize_attempt", { payment_id: payment.id, attempt_id: attemptId, expected_policy_version: plan.approvals.policy_version, expected_terms_hash: plan.approvals.attempt_terms_hash }, "1"),
+    ];
+    if (plan.approvals.can_execute && !approvalOnly && access.permissions.includes("payments:execute")) {
+      plan.stage = "execute"; plan.message = "The current policy quorum is met. Execute only this approved route.";
+      if (isDirectExecution(quote)) {
+        const token = { ...config, near_account_id: config.token_contract };
+        if (!await view(token, "storage_balance_of", { account_id: terms.sourceReceiver })) {
+          const bounds = await view<{ min: string }>(token, "storage_balance_bounds");
+          plan.walletActions.push(action(token, "storage_deposit", { account_id: terms.sourceReceiver, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
+        }
+      }
+      plan.walletActions.push(action(config, "execute_payment", { payment_id: payment.id, attempt_id: attemptId }));
+    } else if (plan.approvals.payment_ready && plan.approvals.attempt_ready && scheduledTime > Date.now()) {
+      plan.stage = "scheduled"; plan.message = "The exact route has its quorum. The contract prevents source execution until the scheduled time; a configured restricted worker can execute it before expiry.";
+    } else if (plan.approvals.payment_ready && plan.approvals.attempt_ready) {
+      plan.stage = "waiting"; plan.message = plan.approvals.can_execute ? "The quorum is met. An authorized executor or configured restricted worker can execute this exact route before expiry." : "The quorum is met, but current treasury funds or spending limits block execution. Reconcile the treasury and refresh before sending.";
+    } else {
+      plan.stage = "approve"; plan.message = "Each distinct authorized wallet approves both the obligation and this exact route. Approval does not send the source payment.";
+    }
+    return plan;
+  }
+  if (approvalOnly) throw new ApiError(409, "A payer must prepare this exact route in the NEAR treasury before collecting approvals", "ROUTE_PREPARATION_REQUIRED");
+  requirePermission(access, "payments:execute");
+  plan.stage = "prepare"; plan.message = "Prepare and reserve this exact route on NEAR, then collect the required wallet approvals. This step does not execute the source payment.";
+  if (backupDestination && await view<string | null>(config, "get_backup_asset", { network: backupDestination.network }) !== backupDestination.asset_id) {
+    if (existing) throw new ApiError(409, "The owner must enable this exact native-USDC backup in treasury policy, then renew approvals", "BACKUP_POLICY_REQUIRED");
+    plan.walletActions.push(action(config, "set_backup_asset", { network: backupDestination.network, asset_id: backupDestination.asset_id }, "1"));
+  }
+  if (!recipientMatches) plan.walletActions.push(action(config, "set_recipient", { recipient_id: payment.recipient_id, primary, backup: backupDestination, backup_consent: !!recipient.fallback_consent, active: true }, "1"));
+  if (!existing) plan.walletActions.push(action(config, "propose_payment", { payment_id: payment.id, recipient_id: payment.recipient_id, amount: payment.amount, max_fee: payment.max_fee, expires_at_ms: paymentExpiry, not_before_ms: String(scheduledTime), reference: onchainReference(payment) }));
+  if (existing && existing.policy_version !== policy.policy_version) throw new ApiError(409, "This obligation uses an earlier policy. Renew its obligation approval before preparing another route", "POLICY_CHANGED");
+  if (existing?.status === "held") throw new ApiError(409, "This obligation needs renewed approval and enough confirmed funds before preparing another route", "PAYMENT_HELD");
   if (isDirectExecution(quote)) {
-    if (quote.assetId !== `nep141:${config.token_contract}` || terms.amountIn !== payment.amount || terms.amountOut !== payment.amount) throw new ApiError(409, "Direct NEAR delivery must equal the approved native-USDC entitlement", "DIRECT_TERMS_INVALID");
     const token = { ...config, near_account_id: config.token_contract };
     if (!await view(token, "storage_balance_of", { account_id: terms.sourceReceiver })) {
       const bounds = await view<{ min: string }>(token, "storage_balance_bounds");
-      actions.push(action(token, "storage_deposit", { account_id: terms.sourceReceiver, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
+      plan.walletActions.push(action(token, "storage_deposit", { account_id: terms.sourceReceiver, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
     }
   }
-  actions.push(action(config, "execute_payment", { payment_id: payment.id, attempt_id: attemptId }));
-  return actions;
+  plan.walletActions.push(action(config, "create_attempt", { payment_id: payment.id, attempt_id: attemptId, use_backup: backup, route }));
+  return plan;
 }
 
 export function getAttempt(access: AccessContext, attemptId: string): PayoutAttempt {
@@ -366,13 +426,24 @@ export function listAttempts(access: AccessContext, paymentId: string): PayoutAt
 }
 
 export async function resumeAttempt(access: AccessContext, attemptId: string) {
-  requirePermission(access, "payments:execute");
+  if (!access.permissions.includes("payments:execute") && !access.permissions.includes("payments:approve")) requirePermission(access, "payments:approve");
   assertRunning(access);
   const attempt = getAttempt(access, attemptId);
   if (attempt.state !== "prepared") throw new ApiError(409, "Reconcile this attempt before resuming", "ATTEMPT_STATE_CHANGED");
   const payment = getPayment(access, attempt.payment_id);
   const recipient = ensureRecipient(payment, access);
-  return { attempt, walletActions: await buildWalletActions(configFor(access, true), payment, recipient, attemptId, JSON.parse(attempt.quote), attempt.route === "backup", await getSupportedTokens()) };
+  return { attempt, ...await buildWalletActions(access, configFor(access, true), payment, recipient, attemptId, JSON.parse(attempt.quote), attempt.route === "backup", await getSupportedTokens(), !access.permissions.includes("payments:execute")) };
+}
+
+export async function prepareAttemptApproval(access: AccessContext, attemptId: string) {
+  requirePermission(access, "payments:approve");
+  assertRunning(access);
+  const attempt = getAttempt(access, attemptId);
+  if (attempt.state !== "prepared") throw new ApiError(409, "This attempt is no longer awaiting approvals", "ATTEMPT_STATE_CHANGED");
+  const payment = getPayment(access, attempt.payment_id);
+  const plan = await buildWalletActions(access, configFor(access, true), payment, ensureRecipient(payment, access), attempt.id, JSON.parse(attempt.quote), attempt.route === "backup", await getSupportedTokens(), true);
+  if (!plan.approvalAccounts.length) throw new ApiError(403, "Verify a NEAR wallet that is the treasury owner or an authorized approver on this network", "APPROVER_WALLET_REQUIRED");
+  return { attempt, ...plan };
 }
 
 export async function markAttemptSubmitted(access: AccessContext, attemptId: string, txHash: string) {
@@ -382,7 +453,7 @@ export async function markAttemptSubmitted(access: AccessContext, attemptId: str
   if (!["prepared", "submitted"].includes(attempt.state)) throw new ApiError(409, "This attempt is not awaiting submission", "ATTEMPT_STATE_CHANGED");
   const onchain = await view<ChainPayment | null>(configFor(access), "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = onchain?.attempts.find((item) => item.id === attemptId);
-  if (!chainAttempt || chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex")) throw new ApiError(409, "The treasury has not recorded this authorized attempt. Resume the wallet actions first", "SOURCE_ATTEMPT_UNVERIFIED");
+  if (!chainAttempt || !["sending", "source_sent", "uncertain", "refund_pending", "refund_verifying", "refunded", "delivered", "transfer_failed"].includes(chainAttempt.status) || chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex")) throw new ApiError(409, "The treasury has not recorded this authorized attempt. Resume the wallet actions first", "SOURCE_ATTEMPT_UNVERIFIED");
   getDb().prepare("UPDATE payout_attempts SET state='submitted',source_tx_hash=?,updated_at=? WHERE id=?").run(txHash, now(), attemptId);
   getDb().prepare("UPDATE payments SET status='in_flight',updated_at=? WHERE id=?").run(now(), attempt.payment_id);
   if (!isDirectExecution(JSON.parse(attempt.quote))) {

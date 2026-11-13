@@ -95,6 +95,8 @@ export interface ChainAttempt {
   id: string;
   status: string;
   authorized: boolean;
+  approvals: string[];
+  approval_policy_version: string;
   use_backup: boolean;
   route: { kind: string; source_receiver: string; input_amount: string; output_amount: string; quote_id: string; quote_hash: string; deadline_ms: string };
   refund_amount: string;
@@ -110,6 +112,10 @@ export interface ChainPayment {
   reservation: string;
   incurred_cost: string;
   expires_at_ms: string;
+  not_before_ms: string;
+  recipient_version: string;
+  policy_version: string;
+  approvals: string[];
   status: string;
   attempts: ChainAttempt[];
 }
@@ -117,4 +123,21 @@ export interface ChainPayment {
 export interface WalletTransaction {
   receiverId: string;
   actions: { type: "FunctionCall"; params: { methodName: string; args: unknown; gas: string; deposit: string } }[];
+}
+
+export interface ApprovalTier { up_to: string; required_approvals: number }
+export interface ApprovalStatus {
+  policy_version: string;
+  approval_amount: string;
+  required_approvals: number;
+  payment_terms_hash: string;
+  payment_approvals: string[];
+  payment_collected: number;
+  payment_ready: boolean;
+  attempt_id: string | null;
+  attempt_terms_hash: string | null;
+  attempt_approvals: string[];
+  attempt_collected: number;
+  attempt_ready: boolean;
+  can_execute: boolean;
 }

@@ -5,9 +5,10 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { view } from "../payments/near";
 import { reconcilePayment } from "../payments/service";
 import type { AccessContext } from "../context";
-import type { ChainPayment, Payment, PayoutAttempt, TreasuryConfig } from "../payments/types";
+import type { ApprovalStatus, ChainPayment, Payment, PayoutAttempt, TreasuryConfig } from "../payments/types";
 import { isPaused, iso, notify, workerConfiguration } from "./service";
 import { assertLease } from "./worker";
+import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { executionTerms, type ExecutionRecord } from "../reconciliation/direct";
 import type { AgentMandate, OperationJob } from "./types";
 
@@ -47,6 +48,10 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   if (chainConfig.paused || isPaused(job.organization_id)) return blocked("Company or onchain treasury payments are paused.");
   if (chainConfig.token_contract !== config.token_contract || chainConfig.owner_id === worker.accountId || !chainConfig.executors.includes(worker.accountId) || chainConfig.approvers.includes(worker.accountId)) return blocked("A dedicated executor role is required. The worker cannot act as owner or approver.");
   if (chain.policy_version !== chainConfig.policy_version || BigInt(chain.expires_at_ms) <= BigInt(Date.now())) return blocked("The onchain policy or payment approval expired. Renew it in the owner wallet.");
+  if (BigInt(chain.not_before_ms) > BigInt(Date.now()) || chain.not_before_ms !== String(payment.scheduled_for ? Math.max(0, Date.parse(payment.scheduled_for)) : 0)) return blocked("The onchain schedule is not due or differs from the approved obligation.");
+  let quorum: ApprovalStatus;
+  try { quorum = checkedApprovalStatus(await view<ApprovalStatus>(config, "get_approval_status", { payment_id: payment.id, attempt_id: attempt.id }), payment.id, attempt.id); } catch { return blocked("The treasury approval quorum could not be verified. Refresh the reviewed contract state."); }
+  if (!quorum.can_execute || quorum.policy_version !== chainConfig.policy_version || quorum.approval_amount !== (BigInt(payment.amount) + BigInt(payment.max_fee)).toString()) return blocked("The current amount-based approval quorum is incomplete or stale. Every required wallet must approve the exact route.");
   const quote = JSON.parse(attempt.quote) as ExecutionRecord;
   const terms = executionTerms(quote);
   const deadline = Date.parse(terms.deadline);
