@@ -1,3 +1,4 @@
+mod partial;
 mod retained;
 mod types;
 pub use retained::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
@@ -72,6 +73,7 @@ pub struct Treasury {
     payments: IterableMap<String, Payment>,
     obligations: IterableMap<String, String>,
     spent_by_day: IterableMap<u64, u128>,
+    partial_receipts: IterableMap<String, String>,
 }
 
 #[near]
@@ -120,6 +122,7 @@ impl Treasury {
             payments: IterableMap::new(b"p"),
             obligations: IterableMap::new(b"o"),
             spent_by_day: IterableMap::new(b"d"),
+            partial_receipts: IterableMap::new(b"t"),
         }
     }
 
@@ -721,6 +724,8 @@ impl Treasury {
             sent_day: U64(0),
             refund_amount: U128(0),
             receipt: None,
+            actual_output: U128(0),
+            credited_amount: U128(0),
         });
         self.payments.insert(payment_id.clone(), payment.clone());
         emit(
@@ -960,6 +965,8 @@ impl Treasury {
         if success {
             if attempt.route.kind == RouteKind::Direct {
                 attempt.status = AttemptStatus::Delivered;
+                attempt.actual_output = attempt.route.output_amount;
+                attempt.credited_amount = payment.amount;
                 payment.status = PaymentStatus::Paid;
                 self.finish_unsettled_payment();
             } else {
@@ -998,6 +1005,7 @@ impl Treasury {
         attempt_id: String,
         outcome: SettlementOutcome,
         receipt: String,
+        actual_output: Option<U128>,
     ) -> Payment {
         self.assert_reporter();
         validate_receipt(&receipt);
@@ -1009,6 +1017,7 @@ impl Treasury {
             ),
             "PAYMENT_NOT_IN_FLIGHT"
         );
+        let entitlement = payment.amount;
         let attempt = last_attempt_mut(&mut payment, &attempt_id);
         require!(
             matches!(
@@ -1020,15 +1029,33 @@ impl Treasury {
         attempt.receipt = Some(receipt);
         match outcome {
             SettlementOutcome::Delivered => {
+                let actual = actual_output.expect("ACTUAL_OUTPUT_REQUIRED");
+                require!(
+                    actual.0 >= attempt.route.output_amount.0,
+                    "DELIVERY_BELOW_EXPECTED"
+                );
                 attempt.status = AttemptStatus::Delivered;
+                attempt.actual_output = actual;
+                attempt.credited_amount = entitlement;
                 payment.status = PaymentStatus::Paid;
                 self.finish_unsettled_payment();
             }
             SettlementOutcome::Uncertain => {
+                if let Some(actual) = actual_output {
+                    require!(
+                        actual.0 >= attempt.actual_output.0,
+                        "OUTPUT_CANNOT_DECREASE"
+                    );
+                    attempt.actual_output = actual;
+                }
                 attempt.status = AttemptStatus::Uncertain;
                 payment.status = PaymentStatus::RecoveryPending;
             }
             SettlementOutcome::RefundPending => {
+                require!(
+                    attempt.actual_output.0 == 0 && actual_output.unwrap_or(U128(0)).0 == 0,
+                    "DELIVERY_ALREADY_OBSERVED"
+                );
                 attempt.status = AttemptStatus::RefundPending;
                 payment.status = PaymentStatus::RecoveryPending;
             }
@@ -1061,6 +1088,7 @@ impl Treasury {
             attempt.status == AttemptStatus::RefundPending,
             "REFUND_NOT_REPORTED"
         );
+        require!(attempt.actual_output.0 == 0, "DELIVERY_ALREADY_OBSERVED");
         require!(
             refund_amount.0 <= attempt.route.input_amount.0,
             "REFUND_EXCEEDS_INPUT"

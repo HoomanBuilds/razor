@@ -195,6 +195,7 @@ fn refund_reservation_uses_actual_cash_and_cumulative_fee_budget() {
         "attempt-1".into(),
         SettlementOutcome::RefundPending,
         "provider-refund-pending".into(),
+        None,
     );
     drop(treasury.confirm_refund(
         "payment".into(),
@@ -328,6 +329,7 @@ fn ownership_recovery_waits_for_final_settlement_even_after_source_callback() {
         "attempt-1".into(),
         SettlementOutcome::Uncertain,
         "uncertain-final-receipt".into(),
+        None,
     );
     assert!(
         catch_unwind(AssertUnwindSafe(
@@ -340,6 +342,7 @@ fn ownership_recovery_waits_for_final_settlement_even_after_source_callback() {
         "attempt-1".into(),
         SettlementOutcome::Delivered,
         "delivered-final-receipt".into(),
+        Some(U128(100)),
     );
     assert_eq!(treasury.unsettled_payments, 0);
     treasury.transfer_ownership(account("new.testnet"));
@@ -982,4 +985,202 @@ fn retained_assets_require_owner_identity_and_pause_but_retirement_preserves_wit
         U128(500)
     );
     assert_eq!(treasury.get_balance().reserved, U128(110));
+}
+
+fn partial_source() -> Treasury {
+    let mut treasury = setup(false);
+    prepare(&mut treasury, "attempt-1", false, 102);
+    execute(&mut treasury, "attempt-1");
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result("payment".into(), "attempt-1".into()));
+    call("owner.testnet", 0);
+    treasury
+}
+
+#[test]
+fn partial_closure_preserves_source_cost_and_cannot_retry_the_original() {
+    let mut treasury = partial_source();
+    let hash = treasury.get_payment("payment".into()).unwrap().attempts[0]
+        .route
+        .quote_hash
+        .clone();
+    let payment = treasury.report_partial_settlement(
+        "payment".into(),
+        "attempt-1".into(),
+        hash.clone(),
+        U128(60),
+        U128(60),
+        true,
+        "terminal-partial-proof".into(),
+    );
+    assert_eq!(payment.status, PaymentStatus::PartiallyPaid);
+    assert_eq!(payment.amount, U128(100));
+    assert_eq!(payment.attempts[0].actual_output, U128(60));
+    assert_eq!(payment.attempts[0].credited_amount, U128(60));
+    assert_eq!(payment.attempts[0].route.input_amount, U128(102));
+    assert_eq!(treasury.get_balance().balance, U128(898));
+    assert_eq!(treasury.get_balance().reserved, U128(0));
+    assert_eq!(treasury.unsettled_payments, 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.report_partial_settlement(
+            "payment".into(),
+            "attempt-1".into(),
+            hash,
+            U128(60),
+            U128(60),
+            true,
+            "terminal-partial-proof".into()
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| prepare(
+            &mut treasury,
+            "attempt-2",
+            false,
+            42
+        )))
+        .is_err()
+    );
+    call("owner.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.cancel_payment("payment".into())
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn partial_closure_requires_reporter_exact_quote_amount_bounds_and_terminal_evidence() {
+    let mut treasury = partial_source();
+    let hash = treasury.get_payment("payment".into()).unwrap().attempts[0]
+        .route
+        .quote_hash
+        .clone();
+    call("agent.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.report_partial_settlement(
+            "payment".into(),
+            "attempt-1".into(),
+            hash.clone(),
+            U128(60),
+            U128(60),
+            true,
+            "partial-proof".into()
+        )))
+        .is_err()
+    );
+    call("owner.testnet", 0);
+    for (actual, credit, closed, quote) in [
+        (0, 60, true, hash.clone()),
+        (100, 60, true, hash.clone()),
+        (60, 0, true, hash.clone()),
+        (60, 100, true, hash.clone()),
+        (60, 60, false, hash.clone()),
+        (60, 60, true, "0".repeat(64)),
+    ] {
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| treasury.report_partial_settlement(
+                "payment".into(),
+                "attempt-1".into(),
+                quote,
+                U128(actual),
+                U128(credit),
+                closed,
+                "partial-proof".into()
+            )))
+            .is_err()
+        );
+    }
+    assert_eq!(
+        treasury.get_payment("payment".into()).unwrap().status,
+        PaymentStatus::InFlight
+    );
+    assert_eq!(treasury.unsettled_payments, 1);
+}
+
+#[test]
+fn full_delivery_requires_actual_output_and_short_output_never_closes_as_paid() {
+    let mut treasury = partial_source();
+    for actual in [None, Some(U128(0)), Some(U128(60))] {
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| treasury.report_settlement(
+                "payment".into(),
+                "attempt-1".into(),
+                SettlementOutcome::Delivered,
+                "delivery-proof".into(),
+                actual
+            )))
+            .is_err()
+        );
+    }
+    assert_eq!(
+        treasury.get_payment("payment".into()).unwrap().status,
+        PaymentStatus::InFlight
+    );
+    assert_eq!(
+        treasury
+            .report_settlement(
+                "payment".into(),
+                "attempt-1".into(),
+                SettlementOutcome::Delivered,
+                "delivery-proof".into(),
+                Some(U128(100))
+            )
+            .status,
+        PaymentStatus::Paid
+    );
+}
+
+#[test]
+fn observed_partial_output_cannot_be_turned_into_full_refund_recovery() {
+    let mut treasury = partial_source();
+    treasury.report_settlement(
+        "payment".into(),
+        "attempt-1".into(),
+        SettlementOutcome::Uncertain,
+        "observed-output-proof".into(),
+        Some(U128(60)),
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.report_settlement(
+            "payment".into(),
+            "attempt-1".into(),
+            SettlementOutcome::RefundPending,
+            "refund-proof".into(),
+            None
+        )))
+        .is_err()
+    );
+    let hash = treasury.get_payment("payment".into()).unwrap().attempts[0]
+        .route
+        .quote_hash
+        .clone();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.report_partial_settlement(
+            "payment".into(),
+            "attempt-1".into(),
+            hash.clone(),
+            U128(50),
+            U128(50),
+            true,
+            "smaller-output-proof".into()
+        )))
+        .is_err()
+    );
+    assert_eq!(
+        treasury
+            .report_partial_settlement(
+                "payment".into(),
+                "attempt-1".into(),
+                hash,
+                U128(60),
+                U128(60),
+                true,
+                "terminal-partial-proof".into()
+            )
+            .status,
+        PaymentStatus::PartiallyPaid
+    );
 }

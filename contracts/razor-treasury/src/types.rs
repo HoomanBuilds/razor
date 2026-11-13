@@ -64,6 +64,7 @@ pub enum PaymentStatus {
     Paid,
     Cancelled,
     AwaitingApprovals,
+    PartiallyPaid,
 }
 
 #[near(serializers = [borsh, json])]
@@ -80,6 +81,7 @@ pub enum AttemptStatus {
     Refunded,
     TransferFailed,
     Delivered,
+    PartiallyDelivered,
 }
 
 #[near(serializers = [borsh, json])]
@@ -105,6 +107,8 @@ pub struct Attempt {
     pub sent_day: U64,
     pub refund_amount: U128,
     pub receipt: Option<String>,
+    pub actual_output: U128,
+    pub credited_amount: U128,
 }
 
 #[near(serializers = [borsh, json])]
