@@ -15,12 +15,12 @@ Product: a NEAR-based company payments and payroll platform with easy onboarding
 
 Current catalog coverage: **90 feature requirements: 82 core and 8 optional**. End-to-end, recovery and track checks below are additional verification gates, not extra features to inflate that count.
 
-The evidence review on 13 November 2026 verifies **12 of 127 checks: 11 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
+The evidence review on 13 November 2026 verifies **13 of 127 checks: 12 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
 
 | Review field | Current value |
 | --- | --- |
-| Last full build review | Pending; targeted local production-build review passed on 2026-11-13 |
-| Build or deployment reviewed | Local production candidate `26ced9d`; no deployed payment or private-inference evidence |
+| Last full build review | Combined production build, local HTTP workflow and targeted browser review passed on 2026-11-13 |
+| Build or deployment reviewed | Local production candidate `c8b66d6`; no deployed payment or private-inference evidence |
 | Selected optional features | Project/cost-center reporting, retained assets and consented netting integrated. None of the optional requirements is fully verified |
 | Target track evidence | Planned: Real-World Money, Autonomous Business, Privacy & Private AI; live demonstrations pending |
 
@@ -28,7 +28,7 @@ The evidence review on 13 November 2026 verifies **12 of 127 checks: 11 of 82 co
 
 - [ ] `AUTH-01` A fresh user can sign up and return with Google or a simple email option without a company invitation, operator setup or pre-existing wallet.
 - [x] `AUTH-02` A supported wallet-first user authenticates through a verified, fresh, domain-bound challenge; a connected address alone cannot impersonate its owner.
-- [ ] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews the USDC accounting unit and chooses its time zone without manual database setup; funding and primary receiving assets remain selectable.
+- [x] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews the USDC accounting unit and chooses its time zone without manual database setup; funding and primary receiving assets remain selectable.
 - [x] `AUTH-04` A new company can add payees and prepare and preview payroll or bills before funding; execution clearly identifies missing authority or money.
 - [ ] `AUTH-05` Social login and wallet linking require verified control and return the user to the same authorized workspaces without email-only account merging.
 - [ ] `AUTH-06` Invitations can be accepted, expired and revoked; assigned roles are enforced beyond the interface.
@@ -229,5 +229,7 @@ Append a row for each meaningful review. Use the same IDs as the checkboxes. Evi
 | 2026-11-13 | `8fc1f9b`, local focused review | `BILL-03`; partial `DATA-07`, `NET-06`, `TRE-09` | Duplicate safeguards verified locally; integrations remain open | Invoice intake rejects changed reused references and source-document copies; similar requests appear in the exact approval review and a new warning invalidates an older review token. Thirteen focused invoice/reconciliation checks passed. Cleared-debt reports have nine passing project/clearing checks; six clearing contract VM checks passed. Pay-from-wallet has twelve passing focused checks and its mounted integration passes TypeScript. These are local checks, not live funding, refund, clearing or payout evidence. |
 
 | 2026-11-13 | Product clarification from the user | `AUTH-03`, `TRE-01`, `REC-03`, `REC-04` | Acceptance wording clarified; no new verification checkbox | The user clarified that payers may use any supported funding asset and recipients may choose any supported primary payout asset. Both receive optional fee/compatibility suggestions; backups always use native USDC on curated popular networks. Company accounting stays in USDC. The earlier ambiguous editable company-settlement selector is replaced by reviewing that accounting unit; asset choice belongs to funding and receiving. The historical correction remains above. |
+
+| 2026-11-13 | Application suite `8af0e72`; final UI/compiler and built-app workflow `c8b66d6` | Revised `AUTH-03`; all integrated feature families reviewed; financial journeys remain open | Combined local build and workflow passed | All 104 application checks passed. Full TypeScript and production build passed under the shared 1.5 GB heap/3 GB available-memory guard. Treasury 23, clearing 6 and factory 4 VM checks passed, and fresh treasury/factory/clearing WASMs compiled. `.data/razor-final-workflow-result.json` records fresh signed sessions, owner-created company/time zone, recipient isolation, 204 USDC payroll plus 1 USDC ceiling, stale-review rejection, milestone approval and all new recovery routes. `.data/razor-final-browser-result.json` covers payment-task setup, Treasury/refunds/retained states, clearing, payroll and recipient history with zero runtime exceptions and 390 px document width. No fake balance, live transfer, contract deployment or successful private inference was used. All feature worktrees and the local review server were removed or stopped. |
 
 Record in-progress, blocked or failed work in the log while leaving its checkbox unchecked. When a failure is corrected, add a new verification entry rather than rewriting history.
