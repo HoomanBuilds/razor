@@ -25,6 +25,7 @@ import { retainedAssetRoutes } from "./retained-assets";
 import { clearingRoutes } from "./clearing";
 import { paymentFundingRoutes } from "./payment-funding";
 import { fundingRefundRoutes } from "./funding-refunds";
+import { partialSettlementRoutes } from "./partial-settlement";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use(
@@ -47,7 +48,7 @@ app.onError((error, c) => {
       { error: error.message, code: error.code },
       error.status as 400,
     );
-  if (/^(CLEARING_LOCKED|CLEARED_LIABILITY):/.test(error.message)) {
+  if (/^(CLEARING_LOCKED|CLEARED_LIABILITY|PARTIAL_LIABILITY):/.test(error.message)) {
     const separator = error.message.indexOf(":");
     return c.json({ error: error.message.slice(separator + 1).trim(), code: error.message.slice(0, separator) }, 409);
   }
@@ -100,6 +101,7 @@ app.route("/organizations/:orgId/retained-assets", retainedAssetRoutes);
 app.route("/organizations/:orgId/clearing", clearingRoutes);
 app.route("/organizations/:orgId/payment-funding", paymentFundingRoutes);
 app.route("/organizations/:orgId/funding-refunds", fundingRefundRoutes);
+app.route("/organizations/:orgId/partial-settlements", partialSettlementRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );

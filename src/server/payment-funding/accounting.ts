@@ -21,7 +21,7 @@ export function fundingPositions(organizationId: string) {
     const task = tasks.get(payment.id), legs = funding.filter(leg => leg.payment_id === payment.id);
     const credit = legs.reduce((sum, leg) => sum + verifiedLinkedCredit(organizationId, leg), 0n);
     const budget = paymentBudget(payment);
-    const clientCash = clientPositions.filter(position => position.payment?.id === payment.id && !["released", "terms_changed"].includes(position.state)).reduce((sum, position) => sum + position.clientReserved, 0n);
+    const clientCash = clientPositions.filter(position => (position.activePaymentId ?? position.payment?.id) === payment.id && !["released", "terms_changed"].includes(position.state)).reduce((sum, position) => sum + position.clientReserved, 0n);
     const committed = BigInt(task?.cash_committed ?? "0");
     const outstanding = budget.remaining > BigInt(payment.reserved_amount) + clientCash ? budget.remaining - BigInt(payment.reserved_amount) - clientCash : 0n;
     const closed = ["paid", "cancelled", "partially_paid"].includes(payment.status);

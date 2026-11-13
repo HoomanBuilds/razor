@@ -16,6 +16,7 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | [Account notifications](specs/notifications.md) | Personal/company updates, optional email preferences and honest provider acceptance |
 | [Project reporting](specs/project-reporting.md) | Classified receipts, client-fund protection, costs, commitments and cost-center views |
 | [Pay from wallet](specs/pay-from-wallet.md) | Resumable obligation funding, linked cash, shortfall quotes and payout recovery |
+| [Partial payout recovery](specs/partial-settlement.md) | Explicit partial delivery, original liability retirement and separately approved remainders |
 | [Source funding refunds](specs/funding-refunds.md) | Exact original-asset recovery, final receipts and explicitly distinguished human attestations |
 | [Retained assets](specs/retained-assets.md) | Separate NEAR token holdings, owner controls and indicative valuations |
 | [Business clearing](specs/business-clearing.md) | Exact company consents, conserved setoff and residual payments |
