@@ -93,6 +93,7 @@ test("owner-only retained operations keep token units outside USDC accounting an
     assert.equal(withdraw.walletActions.at(-1)?.actions[0].params.methodName, "withdraw_retained_asset");
     assert.equal((withdraw.walletActions.at(-1)!.actions[0].params.args as { expected_epoch: string }).expected_epoch, "7");
     const overview = await retainedOverview(access);
+    assert(overview.configured);
     assert.equal(overview.holdings[0].indicativeValueMicroUsd, "12500000");
     assert.equal(overview.holdings[0].priceUpdatedAt, null);
     assert(overview.holdings[0].priceObservedAt);
