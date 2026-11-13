@@ -2,11 +2,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../../context";
 import { planningInput } from "./plans";
-import { deleteFinancePlan, financeInsights, financePlanEvidence, listFinancePlans, prepareFinancePlan, proposeFinancePlan } from "./service";
+import { deleteFinancePlan, financeInsights, financePlanEvidence, financePlanHistory, prepareFinancePlan, proposeFinancePlan } from "./service";
 
 export const financeRoutes=new Hono<AppEnv>();
 financeRoutes.get("/insights",c=>c.json(financeInsights(c.get("access"))));
-financeRoutes.get("/plans",c=>c.json({plans:listFinancePlans(c.get("access"))}));
+financeRoutes.get("/plans",c=>c.json(financePlanHistory(c.get("access"),c.req.query())));
 financeRoutes.get("/plans/:id/evidence",c=>{
   const evidence=financePlanEvidence(c.get("access"),c.req.param("id"));
   c.header("Cache-Control","no-store");

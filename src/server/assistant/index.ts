@@ -6,7 +6,7 @@ export * from "./service";
 export const assistantRoutes = new Hono<AppEnv>();
 
 assistantRoutes.get("/config", (c) => c.json(service.assistantConfiguration(c.get("access"))));
-assistantRoutes.get("/drafts", (c) => c.json({ drafts: service.listDrafts(c.get("access")) }));
+assistantRoutes.get("/drafts",c=>c.json(service.invoiceDraftHistory(c.get("access"),c.req.query())));
 assistantRoutes.get("/drafts/:id/evidence", (c) => {
   const evidence=service.getDraftEvidence(c.get("access"),c.req.param("id"));
   c.header("Cache-Control","no-store");

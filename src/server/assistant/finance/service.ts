@@ -13,6 +13,7 @@ import { parseUnits } from "../../../lib/money";
 import { getAssistantConfig, requirePrivateAiConfig } from "../config";
 import { runVerifiedPrivateInference } from "../client";
 import { sha256 } from "../verification";
+import { privateHistoryQuery, privateHistoryWindow } from "../../private-history";
 import { financeSourceFingerprint, planningInput, validateModelPlan, type PlanningInput, type PlanSource, type SelectedRecipient } from "./plans";
 
 interface OpenPayment {id:string;recipient_id:string;reference:string;kind:string;status:string;amount:string;max_fee:string;total_spent:string;reserved_amount:string;scheduled_for:string|null;hold_reason:string|null;metadata:string;delivered_amount:string}
@@ -69,9 +70,19 @@ function readable(item:StoredPlan) {
   return {id:item.id,...payload,hash:item.plan_hash,retained:true,createdAt:item.created_at,expiresAt:item.expires_at,preparedRunId:item.prepared_run_id,requiresReview:true};
 }
 
+export function financePlanHistory(access:AccessContext,input:unknown={}) {
+  plannerPermission(access);
+  const query=privateHistoryQuery.parse(input);
+  return transaction(()=>{
+    purgeFinancePlans();
+    const total=row<{total:number}>("SELECT COUNT(*) AS total FROM finance_plans WHERE organization_id=?",access.organizationId)!.total,{offset,...page}=privateHistoryWindow(total,query);
+    const plans=rows<StoredPlan>("SELECT * FROM finance_plans WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",access.organizationId,page.pageSize,offset).map(readable);
+    return {plans,...page};
+  });
+}
+
 export function listFinancePlans(access:AccessContext) {
-  plannerPermission(access);purgeFinancePlans();
-  return rows<StoredPlan>("SELECT * FROM finance_plans WHERE organization_id=? ORDER BY created_at DESC LIMIT 100",access.organizationId).map(readable);
+  return financePlanHistory(access,{pageSize:100}).plans;
 }
 
 export function financePlanEvidence(access:AccessContext,id:string) {
