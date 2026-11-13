@@ -35,18 +35,24 @@ export function validateFundingQuote(funding:FundingWalletActionProps["funding"]
   return quote;
 }
 
+export function selectFundingAccount(accounts: readonly string[], refundTo: string, evm = false) {
+  const account = accounts.find(value => evm ? value.toLowerCase() === refundTo.toLowerCase() : value === refundTo);
+  if (!account) throw new Error("Connect the account selected as this quote's refund address, or create a new quote for the account you control.");
+  return account;
+}
+
 async function transferEvm(props:FundingWalletActionProps,quote:BoundQuote,onHash:(hash:string,sender:string)=>void):Promise<SourceReceipt> {
   const chain=EVM_CHAINS[props.token.blockchain],provider=(window as unknown as {ethereum?:EIP1193Provider}).ethereum;
   if(!chain || !provider) throw new Error("Open a compatible EVM wallet, or use the deposit instructions below.");
   if(props.funding.deposit_memo) throw new Error("This route requires a memo. Use a wallet that supports the exact deposit instructions.");
   if(!isAddress(props.funding.deposit_address)) throw new Error("The quote returned an invalid EVM deposit address. Create another funding request.");
-  const wallet=createWalletClient({chain,transport:custom(provider)}),[sender]=await wallet.requestAddresses();
+  const wallet=createWalletClient({chain,transport:custom(provider)}),sender=getAddress(selectFundingAccount(await wallet.requestAddresses(),quote.quoteRequest.refundTo,true));
   if(!sender) throw new Error("Select a source account in your wallet.");
   if(sender.toLowerCase()!==quote.quoteRequest.refundTo.toLowerCase()) throw new Error("Connect the wallet entered as this quote's refund address, or create a new funding request using your connected wallet.");
   if(await wallet.getChainId()!==chain.id) await wallet.switchChain({id:chain.id});
   if(await wallet.getChainId()!==chain.id) throw new Error(`Switch your wallet to ${chain.name}, then try again.`);
   const current=await wallet.getAddresses();
-  if(current[0]?.toLowerCase()!==sender.toLowerCase()) throw new Error("Your wallet changed accounts. Reconnect before continuing.");
+  if(!current.some(account=>account.toLowerCase()===sender.toLowerCase())) throw new Error("Your wallet changed accounts. Reconnect before continuing.");
   const rpc=createPublicClient({chain,transport:http()}),amount=BigInt(props.funding.amount_in),destination=getAddress(props.funding.deposit_address);
   let hash:`0x${string}`;
   let expectedTo=destination,expectedData:`0x${string}`="0x",expectedValue=amount;
@@ -84,7 +90,7 @@ async function transferEvm(props:FundingWalletActionProps,quote:BoundQuote,onHas
 async function transferNear(props:FundingWalletActionProps,quote:BoundQuote,onHash:(hash:string,sender:string)=>void):Promise<SourceReceipt> {
   const connector=await getNearConnector();
   if(connector.network!=="mainnet") throw new Error("This deposit uses NEAR mainnet. Your Razor wallet connection is on testnet. Use the mainnet deposit instructions below.");
-  const {wallet,accounts}=await connectNearWallet(),sender=accounts[0].accountId,contract=props.token.contractAddress;
+  const {wallet,accounts}=await connectNearWallet(),sender=selectFundingAccount(accounts.map(account=>account.accountId),quote.quoteRequest.refundTo),contract=props.token.contractAddress;
   if(sender!==quote.quoteRequest.refundTo) throw new Error("Connect the NEAR account entered as this quote's refund address, or create a new funding request.");
   if(props.funding.deposit_memo || !contract || !NEAR_ACCOUNT.test(contract) || !NEAR_ACCOUNT.test(props.funding.deposit_address)) throw new Error("Use a NEAR wallet that can follow these exact token deposit instructions.");
   const {JsonRpcProvider}=await import("near-api-js"),rpc=new JsonRpcProvider({url:process.env.NEXT_PUBLIC_NEAR_RPC_URL || "https://rpc.mainnet.near.org"});
