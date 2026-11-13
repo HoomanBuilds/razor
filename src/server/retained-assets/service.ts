@@ -168,7 +168,7 @@ export async function prepareRetainedRecovery(access: AccessContext, input: { to
   const result = await nearTransactionStatus(current.config, input.transactionHash, input.senderAccountId);
   const proof = inspectRetainedWithdrawal(result, current.config, selected);
   const authority = await recoveryAuthority(current.config, access.userId);
-  const signer = authority.shared && !proof.succeeded ? authority.refundAccounts[0] : owner(access, current);
+  const signer = authority.shared && authority.refundAccounts.length ? authority.refundAccounts[0] : authority.shared && !proof.succeeded ? undefined : owner(access, current);
   if (!signer) throw new ApiError(409, "A verified platform recovery reporter must authorize this failed-transfer credit. Keep the withdrawal pending for operator review", "PLATFORM_RECOVERY_REQUIRED");
   const receipt = JSON.stringify({ transaction_hash: proof.transactionHash, receipt_id: proof.tokenReceiptId, succeeded: proof.succeeded });
   activity(access, "retained.recovery_prepared", selected.token_contract, { withdrawalId: selected.withdrawal.id });
