@@ -24,9 +24,26 @@ Company treasury ownership is separate from application login. Link the NEAR own
 
 Build the NEAR contracts with `bash contracts/build.sh`. The serialized build writes treasury, factory and clearing WASMs under `.tools/wasm/`, generates a build manifest and prints the three public code-hash pins for the corresponding `.env.example` fields. The factory embeds that exact treasury WASM. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
 
+Prepare an unsigned deployment plan with the account names you intend to create and fund:
+
+```sh
+npm run prepare:deployment -- --network mainnet --factory YOUR_FACTORY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near
+```
+
+Replace the uppercase placeholders with valid lowercase account names. The planner validates the local WASM manifest and embedded treasury, then prints exact NEAR CLI deployment commands with initialization in the same transaction. It does not create accounts, sign, send or overwrite configuration. Its output includes the code pins to configure after successful deployment. Testnet requires an explicit `--testnet-token` and cannot establish Intents settlement.
+
 See the [treasury interface](contracts/razor-treasury/README.md) for contract setup and trust boundaries. The owner or appointed reporter attests external destination settlement. Razor does not claim a cryptographic external-chain proof from a provider status response.
 
 Private inference requires configured NEAR AI Cloud credentials, approved deployment measurements and successful verification. Missing credentials never switch invoice contents to another provider. Manual invoice preparation remains available.
+
+## Operator setup checks
+
+```sh
+npm run check:setup
+npm run check:setup -- --remote
+```
+
+The first command checks local configuration. The second also reads deployed NEAR code and authority. Neither sends payments, emails or private inference requests. Missing or invalid setup remains blocked; a successful configuration check does not establish a live payment or provider recovery. Use the [operator runbook](docs/operator-setup.md) for setup and live evidence requirements.
 
 ## Build and review
 
