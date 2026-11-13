@@ -15,9 +15,12 @@ interface RecoveryState {treasuryAccount:string;network:string;chain:ChainAccess
 interface Review {id:string;termsHash:string;expiresAt:string;status?:string;terms:{kind:"owner_transfer"|"executor_revoke"|"invalidate_approvals";ownerAccount:string;newOwnerAccount?:string;executorAccount?:string;treasuryAccount:string;roles:{approvers:string[];executors:string[];settlementReporter:string|null}}}
 
 export function TreasuryRecoveryPanel() {
-  const {base,revision,refresh}=useWorkspace(),endpoint=`${base}/access-recovery`,{data:status,error:loadError}=useResource<RecoveryState>(`${endpoint}/status`,revision),{data:account}=useResource<AccountStatus>("/account/status",revision),{busy,error,run}=useAction(),[target,setTarget]=useState(""),[review,setReview]=useState<Review|null>(null),[checked,setChecked]=useState(false),[chainResult,setChainResult]=useState<string|null>(null);
+  const {base,revision,refresh,organization}=useWorkspace(),endpoint=`${base}/access-recovery`;
+  const permitted=organization.permissions?.includes("company:manage") ?? organization.role==="Owner";
+  const {data:status,error:loadError}=useResource<RecoveryState>(permitted?`${endpoint}/status`:null,revision),{data:account}=useResource<AccountStatus>(permitted?"/account/status":null,revision),{busy,error,run}=useAction(),[target,setTarget]=useState(""),[review,setReview]=useState<Review|null>(null),[checked,setChecked]=useState(false),[chainResult,setChainResult]=useState<string|null>(null);
   const candidates=account?.wallets.filter(wallet=>wallet.family==="near"&&wallet.network===status?.network&&wallet.address!==status?.chain.owner_id) || [];
   function showReview(value:Review){setReview(value);setChecked(false);setChainResult(value.status==="confirmed"?"confirmed":null);}
+  if(!permitted)return null;
   return <Panel title="Treasury ownership and executor recovery" description="The company owner must freshly verify the NEAR signer before changing onchain access. Recover that signer in its wallet provider if access was lost.">
     <div className="space-y-5">{loadError?<p role="alert" className="text-sm text-destructive">{loadError}</p>:null}
     {status?<><div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-2 text-xs text-muted-foreground">Current NEAR treasury owner</p><Address value={status.chain.owner_id} network={status.network}/></div><div><p className="mb-2 text-xs text-muted-foreground">Treasury state</p><Status value={status.chain.paused?"paused":"active"}/><p className="mt-2 text-xs">Policy version {status.chain.policy_version}</p></div></div>
