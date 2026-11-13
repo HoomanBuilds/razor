@@ -1,6 +1,6 @@
 # Razor product overview
 
-Status: product specification. Updated 12 November 2026.
+Status: product specification. Updated 13 November 2026.
 
 ## Product
 
@@ -19,6 +19,12 @@ Its operating problems are fragmented treasury balances, repeated manual transfe
 One company can use Razor with its existing recipients. Participation in a business clearing network is optional.
 
 The adoption hypothesis is that one approved payment workflow with reliable receipts, private records and recipient preferences is worth replacing part of the customer's spreadsheets and wallet operations. This remains a hypothesis to test with actual company records and a pilot.
+
+## Commercial model
+
+Optional company software subscriptions fund payroll automation, recurring operations, private invoice review and reconciliation. Razor charges zero percentage markup on payment principal. Recipient access and basic manual company payments remain free of Razor platform charges; actual network and routing costs remain explicit company expenses.
+
+Pro at $29 and Business at $99 per company workspace per month are working pilot prices. Billing and paid-tier enforcement are not implemented. Core financial authority, required approvals, recovery and access to existing receipts remain available regardless of subscription state. See the [business model](business-model.md) for the pricing and implementation boundaries.
 
 ## Product principles
 

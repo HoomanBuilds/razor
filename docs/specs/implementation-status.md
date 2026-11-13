@@ -6,6 +6,8 @@ The catalog contains **90 requirements: 82 core and 8 optional**. Source coverag
 
 On 13 November the user clarified that payers may fund with any supported asset and recipients may choose any supported primary payout asset. Both see optional compatibility suggestions; backup always uses native USDC on a curated supported network. Company amounts are recorded in USDC. `AUTH-03` was clarified accordingly, and its historical correction remains in the checklist.
 
+The selected [business model](business-model.md) uses optional company subscriptions with zero Razor percentage markup on payment principal. Recipient access and basic manual payments stay free of Razor platform charges. Proposed $29/$99 workspace prices require pilot validation. Subscription billing, paid-tier enforcement and Razor revenue collection are not implemented; the existing Max cost field is an execution budget. This commercial decision does not change the financial verification counts below.
+
 ## Integrated product scope
 
 | Feature family | Integrated behavior |

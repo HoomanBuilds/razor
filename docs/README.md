@@ -10,6 +10,7 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | --- | --- |
 | [Build checklist](build-checklist.md) | Reusable verification checklist for onboarding, wallets, every feature ID, recovery scenarios and selected track evidence |
 | [Product overview](specs/product-overview.md) | Customer, product promise, roles, workflows, scope, NEAR services and product defaults |
+| [Business model](specs/business-model.md) | Selected subscription strategy, zero payment markup, proposed pilot prices and billing boundaries |
 | [Feature catalog](specs/features.md) | Required behavior and acceptance criteria for each product area |
 | [Payout preferences and USDC backup](specs/payouts-and-fallback.md) | Recipient choices, supported backup networks, consent, fallback decisions and recovery |
 | [Receiving metadata](specs/recipient-destinations.md) | Validated address families, XRP tags and unsupported destination metadata |
