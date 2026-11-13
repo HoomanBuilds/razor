@@ -16,7 +16,7 @@ import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
-import { recordedRecipientName } from "./recipient-names";
+import { assertSameRecipientOwner, recordedRecipientName } from "./recipient-names";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -199,6 +199,7 @@ export function revalidatePaymentRecipient(access: AccessContext, paymentId: str
     if (payment.status !== "draft" || payment.approved_at || listAttempts(access, paymentId).length) throw new ApiError(409, "Cancel the approved obligation and prepare a new one before changing its recipient terms", "FRESH_APPROVAL_REQUIRED");
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=? AND archived=0", payment.recipient_id, access.organizationId);
     if (!recipient) throw new ApiError(409, "Choose an active recipient", "RECIPIENT_UNAVAILABLE");
+    assertSameRecipientOwner(access.organizationId, payment);
     const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, primary_memo: recipient.primary_memo ?? null, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
     getDb().prepare("UPDATE payments SET recipient_version=?,recipient_snapshot=?,updated_at=? WHERE id=?").run(recipient.version, json(snapshot), now(), paymentId);
     return getPayment(access, paymentId);
@@ -234,6 +235,7 @@ function applyApprovalReservation(access: AccessContext, paymentId: string, exis
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
+    assertSameRecipientOwner(access.organizationId, payment);
     if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
     assertPaymentLiabilityApproved(access, payment);
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
@@ -287,6 +289,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
 function ensureRecipient(payment: Payment, access: AccessContext): RecipientSnapshot {
   const current = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=?", payment.recipient_id, access.organizationId);
   if (!current || current.version !== payment.recipient_version) throw new ApiError(409, "Recipient details changed after approval", "RECIPIENT_CHANGED");
+  assertSameRecipientOwner(access.organizationId, payment);
   if (current.archived || current.preference_status !== "confirmed" || !current.confirmed_at) throw new ApiError(409, "The recipient must confirm their payout preferences", "PREFERENCES_UNCONFIRMED");
   return JSON.parse(payment.recipient_snapshot) as RecipientSnapshot;
 }
@@ -674,7 +677,7 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
 
 export function listFunding(access: AccessContext): FundingLeg[] {
   requirePermission(access, "company:read");
-  return rows<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? ORDER BY created_at DESC LIMIT 250", access.organizationId);
+  return rows<FundingLeg>("SELECT f.*,CASE WHEN f.payment_id IS NOT NULL THEN 'obligation' WHEN EXISTS(SELECT 1 FROM funding_request_quotes q WHERE q.funding_id=f.id) THEN 'funding_request' ELSE 'company' END AS source_context FROM funding_legs f WHERE f.organization_id=? ORDER BY f.created_at DESC LIMIT 250", access.organizationId);
 }
 
 export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string) {

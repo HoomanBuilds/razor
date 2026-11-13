@@ -5,6 +5,7 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { createPayment, getPayment, type Payment } from "../payments";
 import { activity } from "./service";
 import { liabilityPayments } from "../partial-settlement/model";
+import { assertSameRecipientOwner } from "../payments/recipient-names";
 
 interface TermsBill { id: string; recipient_id: string; amount: string; setoff_amount: string; status: string; payment_id: string | null; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
 function bill(access: AccessContext, id: string): TermsBill {
@@ -75,6 +76,7 @@ export function addBillInstallment(access: AccessContext, id: string, input: { a
     const current = getBillTerms(access, id);
     if (current.status === "disputed" || current.installments.some((item) => !["paid", "cancelled", "partially_paid"].includes(item.status))) throw new ApiError(409, "Reconcile the earlier installment before preparing another", "PRIOR_INSTALLMENT_UNRESOLVED");
     if (current.installments.some(item => item.status === "partially_paid" && !row("SELECT original_payment_id FROM partial_remainders WHERE original_payment_id=?", item.id))) throw new ApiError(409, "Prepare this terminal partial payment's explicitly reviewed remainder before another installment", "PARTIAL_REMAINDER_REQUIRED");
+    for (const payment of current.installments) assertSameRecipientOwner(access.organizationId, payment);
     const amount = positive(input.amount), maxFee = positive(input.maxFee, true);
     if (BigInt(amount) > BigInt(current.uncommitted)) throw new ApiError(409, "The installment exceeds the remaining invoice amount", "INSTALLMENT_EXCEEDS_BALANCE");
     const installmentId = randomUUID();
