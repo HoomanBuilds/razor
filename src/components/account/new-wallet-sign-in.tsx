@@ -1,0 +1,10 @@
+"use client";
+
+import { useState } from "react";
+import { authenticateWallet, walletErrorMessage } from "@/components/auth/wallets";
+import type { WalletProvider } from "./types";
+
+export function NewWalletSignIn({providers,network,onComplete}:{providers:WalletProvider[];network:string;onComplete:()=>Promise<void>}) {
+  const [pending,setPending]=useState<string|null>(null),[error,setError]=useState<string|null>(null);
+  return <details className="rounded-lg border border-slate-200 p-4 text-sm"><summary className="cursor-pointer font-medium">No NEAR wallet yet? Create one first</summary><div className="mt-4 space-y-4"><p className="text-xs leading-5 text-slate-500">Create an owner-controlled account in a wallet provider on NEAR {network}. No existing seed import is required, and Razor never receives your recovery phrase or private key. Provider signup, recovery and any funding requirements are handled there.</p>{providers.map(provider=><section key={provider.id} className="space-y-2 border-t border-slate-100 pt-3"><h2 className="font-medium">{provider.name}</h2><p className="text-xs leading-5 text-slate-500">{provider.custody}</p><div className="flex flex-wrap gap-3"><a href={provider.creationUrl} target="_blank" rel="noreferrer" className="text-xs underline">Create wallet with provider</a><a href={provider.recoveryUrl} target="_blank" rel="noreferrer" className="text-xs underline">Review recovery</a></div><button type="button" disabled={pending!==null} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium disabled:opacity-50" onClick={async()=>{if(pending)return;setPending(provider.id);setError(null);try{await authenticateWallet("near",{walletId:provider.id});await onComplete();}catch(error){setError(walletErrorMessage(error));}finally{setPending(null);}}}>{pending===provider.id?"Confirm ownership in the wallet...":`I created my wallet, connect ${provider.name}`}</button></section>)}{error?<p role="alert" className="text-xs text-red-700">{error}</p>:null}</div></details>;
+}
