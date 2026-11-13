@@ -61,14 +61,16 @@ function amount(value: FormDataEntryValue | null) {
 export function OperationsPanel() {
   const { base, organization, revision, refresh, navigate, notify } =
     useWorkspace();
+  const canRead=!!organization.permissions?.includes("payments:read"),canPrepare=!!organization.permissions?.includes("payments:prepare");
   const resource = useResource<Overview>(
-    `${base}/operations/overview`,
+    canRead?`${base}/operations/overview`:null,
     revision,
   );
   const { busy, error, run } = useAction();
   const [kind, setKind] = useState<"bill" | "payroll">("bill");
   const [cadence, setCadence] = useState<"days" | "months">("months");
   const data = resource.data;
+  if(!canRead)return null;
   return (
     <div className="grid gap-6">
       <Panel
@@ -150,7 +152,7 @@ export function OperationsPanel() {
             title="Recurring payroll and bills"
             description="Repeat approved amounts and confirmed receiving preferences within a per-cycle ceiling. Changed terms hold the next cycle for review."
           >
-            {data.canManage && (
+            {data.canManage && canPrepare && (
               <form
                 className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5"
                 onSubmit={(event) => {
@@ -277,7 +279,7 @@ export function OperationsPanel() {
                     <td>
                       {data.canManage && rule.status !== "held" && (
                         <Action
-                          disabled={!!busy}
+                          disabled={!!busy||(!rule.enabled&&!canPrepare)}
                           busy={busy === rule.id}
                           onClick={() =>
                             void run(rule.id, async () => {

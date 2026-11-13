@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
@@ -9,6 +9,7 @@ import type { ExtractedInvoice } from "./extraction";
 interface StoredDraft {
   id: string;
   organization_id: string;
+  input_ciphertext: string;
   draft_ciphertext: string;
   evidence_ciphertext: string;
   created_at: string;
@@ -56,7 +57,7 @@ export async function analyzeInvoice(access: AccessContext, text: string) {
 export function listDrafts(access: AccessContext) {
   requirePermission(access, "documents:manage");
   purgeExpired();
-  return rows<StoredDraft>("SELECT id,organization_id,draft_ciphertext,evidence_ciphertext,created_at,expires_at FROM assistant_drafts WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", access.organizationId).map((item) => ({ id: item.id, draft: JSON.parse(decrypt(item.draft_ciphertext)) as ExtractedInvoice, verification: JSON.parse(decrypt(item.evidence_ciphertext)).verification, createdAt: item.created_at, expiresAt: item.expires_at, requiresReview: true }));
+  return rows<StoredDraft>("SELECT id,organization_id,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at FROM assistant_drafts WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", access.organizationId).map((item) => ({ id: item.id, documentHash:createHash("sha256").update(decrypt(item.input_ciphertext)).digest("hex"), draft: JSON.parse(decrypt(item.draft_ciphertext)) as ExtractedInvoice, verification: JSON.parse(decrypt(item.evidence_ciphertext)).verification, createdAt: item.created_at, expiresAt: item.expires_at, requiresReview: true }));
 }
 
 export function getDraftEvidence(access: AccessContext, draftId: string) {

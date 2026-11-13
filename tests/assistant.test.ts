@@ -4,7 +4,10 @@ import { verifyModelAttestation, type AttestationVerificationResult, type Verifi
 import { getAssistantConfig, supportedRuntime } from "../src/server/assistant/config";
 import { parseExtraction, reviewExtraction } from "../src/server/assistant/extraction";
 import { approveDeployment, assertFreshDeployment, requireModelReceipt, sha256 } from "../src/server/assistant/verification";
-import { analyzeInvoice } from "../src/server/assistant/service";
+import { ApiError } from "../src/server/context";
+import { getDb } from "../src/server/db";
+import { encrypt } from "../src/server/identity/crypto";
+import { analyzeInvoice, listDrafts } from "../src/server/assistant/service";
 
 test("invalid model nonce is rejected by the official verifier", async () => {
   await assert.rejects(verifyModelAttestation({
@@ -46,4 +49,19 @@ test("verified invoice output remains a review draft with exact totals and recip
   assert.ok(draft.warnings.some((warning) => warning.includes("untrusted observations")));
   assert.ok(draft.warnings.some((warning) => warning.includes("no currency conversion")));
   assert.throws(() => parseExtraction("```json\n{}\n```"));
+});
+
+
+test("retained invoice review preserves the original source hash and requires document access",()=>{
+  process.env.DATABASE_PATH=":memory:";
+  process.env.DATA_ENCRYPTION_KEY="72".repeat(32);
+  const db=getDb(),now=new Date().toISOString(),source="Invoice INV-42: consulting services, 50 USDC.",access={userId:"draft-reviewer",organizationId:"draft-company",permissions:["company:read","documents:manage"]};
+  db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(access.userId,"Reviewer",now);
+  db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(access.organizationId,"Draft company",access.userId,now,now);
+  db.prepare("INSERT INTO assistant_drafts(id,organization_id,created_by,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)").run("retained-invoice",access.organizationId,access.userId,encrypt(source),encrypt(JSON.stringify({reference:"INV-42",amount:"50",currency:"USDC"})),encrypt(JSON.stringify({verification:{provider:"fixture"}})),now,new Date(Date.now()+86400000).toISOString());
+  const [draft]=listDrafts(access);
+  assert.equal(draft.documentHash,sha256(source));
+  assert.equal(draft.draft.reference,"INV-42");
+  assert.throws(()=>listDrafts({...access,permissions:["company:read"]}),error=>error instanceof ApiError&&error.status===403);
+  assert.equal(listDrafts({...access,organizationId:"unrelated-company"}).length,0);
 });
