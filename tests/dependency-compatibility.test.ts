@@ -32,7 +32,7 @@ test("Solana's browser JSON-RPC client preserves request IDs and result/error ca
   await assert.rejects(connection.getBalance(account), /Rejected fixture account/);
 });
 
-test("WalletConnect URI parsing and query formatting work through each overridden module boundary", () => {
+test("WalletConnect URI APIs and the unused declared query module remain compatible", () => {
   const owners = Object.entries(packages).filter(([path, value]) => path.endsWith("/@walletconnect/utils") && value.dependencies?.["query-string"]);
   assert(owners.length > 0);
   for (const [path] of owners) {
