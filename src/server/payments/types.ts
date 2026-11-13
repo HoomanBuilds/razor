@@ -67,6 +67,7 @@ export interface PayoutAttempt {
 
 export interface FundingLeg {
   id: string;
+  source_context?: "company" | "obligation" | "funding_request";
   organization_id: string;
   payment_id: string | null;
   reference: string;

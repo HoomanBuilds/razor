@@ -674,7 +674,7 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
 
 export function listFunding(access: AccessContext): FundingLeg[] {
   requirePermission(access, "company:read");
-  return rows<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? ORDER BY created_at DESC LIMIT 250", access.organizationId);
+  return rows<FundingLeg>("SELECT f.*,CASE WHEN f.payment_id IS NOT NULL THEN 'obligation' WHEN EXISTS(SELECT 1 FROM funding_request_quotes q WHERE q.funding_id=f.id) THEN 'funding_request' ELSE 'company' END AS source_context FROM funding_legs f WHERE f.organization_id=? ORDER BY f.created_at DESC LIMIT 250", access.organizationId);
 }
 
 export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string) {
