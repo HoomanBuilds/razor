@@ -36,6 +36,7 @@ import { FundingRequestsPanel } from "./funding-requests";
 import { ClientReservesPanel } from "./client-reserves";
 import { NotificationInbox } from "../notifications/inbox";
 import { ProjectReportsPanel } from "./project-reports";
+import { TreasuryRecoveryPanel } from "./treasury-recovery";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
@@ -226,6 +227,7 @@ function Workspace() {
               NEAR Intents cross-chain settlement
             </span>
           </div>
+          <a href="/account" className="mb-3 block px-2 text-xs text-primary">Account and recovery</a>
           <button
             className="flex w-full items-center gap-2 px-2 text-xs text-muted-foreground"
             onClick={() =>
@@ -392,7 +394,7 @@ function CompanyWorkspace({
       ) : section === "activity" ? (
         <div className="grid gap-6"><ActivityLog /><ProjectReportsPanel /></div>
       ) : (
-        <div className="grid gap-6"><CompanySettings /><NotificationInbox /></div>
+        <div className="grid gap-6"><CompanySettings /><TreasuryRecoveryPanel /><NotificationInbox /></div>
       )}
     </WorkspaceContext.Provider>
   );

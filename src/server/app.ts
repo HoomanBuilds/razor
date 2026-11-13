@@ -20,6 +20,7 @@ import { financeRoutes } from "./assistant/finance";
 import { clientReserveRoutes } from "./client-reserves";
 import { notificationRoutes } from "./notifications";
 import { projectRoutes } from "./projects";
+import { accountRecoveryRoutes, treasuryRecoveryRoutes } from "./account-recovery";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use(
@@ -66,6 +67,7 @@ app.use("/assets/*", requireUser);
 app.route("/assets", assetRoutes);
 app.route("/recipient-workspace", recipientWorkspaceRoutes);
 app.route("/notifications", notificationRoutes);
+app.route("/account", accountRecoveryRoutes);
 app.route("/funding-requests", publicFundingRoutes);
 app.use(
   "/organizations/:orgId/*",
@@ -85,6 +87,7 @@ app.route("/organizations/:orgId/payment-management", paymentManagementRoutes);
 app.route("/organizations/:orgId/assistant/finance", financeRoutes);
 app.route("/organizations/:orgId/client-reserves", clientReserveRoutes);
 app.route("/organizations/:orgId/projects", projectRoutes);
+app.route("/organizations/:orgId/access-recovery", treasuryRecoveryRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );

@@ -7,6 +7,7 @@ import { view } from "../payments/near";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import { nearRpc, verifiedOwnerWallet } from "./near";
 import type { RecoveryWallet } from "./state";
+import { reviewedArtifactHash } from "../near-artifacts";
 
 interface ChainAccess {owner_id:string;token_contract:string;paused:boolean;policy_version:string;per_payment_limit:string;daily_limit:string;approvers:string[];executors:string[];settlement_reporter:string|null;approval_tiers?:Array<{up_to:string;required_approvals:number}>;retained_assets_enabled?:boolean}
 interface Terms {kind:"owner_transfer"|"executor_revoke"|"invalidate_approvals";treasuryAccount:string;network:"mainnet"|"testnet";tokenContract:string;codeHash:string;ownerAccount:string;newOwnerAccount?:string;executorAccount?:string;previousPolicyVersion?:string;chainFingerprint:string;roles:{approvers:string[];executors:string[];settlementReporter:string|null};walletActions:WalletTransaction[]}
@@ -24,6 +25,7 @@ async function chainState(access:AccessContext) {
   const config=row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?",access.organizationId);
   if(!config)throw new ApiError(409,"Connect the company treasury before managing its onchain access","TREASURY_SETUP_REQUIRED");
   const [chain,account]=await Promise.all([view<ChainAccess>(config,"get_config"),nearRpc<{code_hash:string}>(config.network,"query",{request_type:"view_account",finality:"final",account_id:config.near_account_id})]);
+  if(account.code_hash!==reviewedArtifactHash("NEAR_TREASURY_CODE_HASH","razor_treasury.wasm"))throw new ApiError(409,"Review the treasury deployment before preparing recovery actions. Its code does not match the approved Razor treasury.","TREASURY_CODE_MISMATCH");
   if(chain.token_contract!==config.token_contract)throw new ApiError(409,"The treasury settlement token no longer matches the company configuration","TREASURY_CONFIG_CHANGED");
   const fingerprint=hash({owner:chain.owner_id,token:chain.token_contract,paused:chain.paused,policyVersion:chain.policy_version,perPaymentLimit:chain.per_payment_limit,dailyLimit:chain.daily_limit,approvers:[...chain.approvers].sort(),executors:[...chain.executors].sort(),reporter:chain.settlement_reporter,tiers:chain.approval_tiers || [],code:account.code_hash});
   return {config,chain,codeHash:account.code_hash,fingerprint};
