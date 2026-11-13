@@ -238,8 +238,8 @@ recipientPortalRoutes.get("/:token/payments",async(c)=>{
   const userId=c.get("userId"),recipient=invitedRecipient(c.req.param("token"),userId);
   if(!row("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'payments'")) throw new ApiError(503,"Payment history is not configured yet. Your saved payout preferences remain available.","PAYMENT_HISTORY_SETUP_REQUIRED");
   if(recipient.user_id!==userId)return c.json({payments:[],amountAsset:"USDC",amountDecimals:6});
-  const {ownPayments}=await import("../recipient-workspace/service");
-  const payments=ownPayments(userId,recipient.id).slice(0,100).map(payment=>{
+  const {ownPaymentPage}=await import("../recipient-workspace/service");
+  const payments=ownPaymentPage(userId,1,100,recipient.id).payments.map(payment=>{
     const attempt=payment.attempts.at(-1),updatedAt=row<{updated_at:string}>("SELECT updated_at FROM payments WHERE id=? AND organization_id=?",payment.id,recipient.organization_id)?.updated_at;
     return {id:payment.id,kind:payment.kind,reference:payment.reference,amount:payment.amount,status:payment.status,scheduled_for:payment.scheduled_for,created_at:payment.created_at,updated_at:updatedAt,destination_asset:attempt?.destination_asset??null,destination_network:attempt?.destination_network??null,destination_address:attempt?.destination_address??null,destination_memo:attempt?.destination_memo??null,destination_tx_hash:attempt?.destination_tx_hash??null,route_status:attempt?.state??null};
   });

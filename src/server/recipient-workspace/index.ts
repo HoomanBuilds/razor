@@ -1,20 +1,38 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
 import { row, transaction } from "../db";
 import { requireOrganization, requireUser } from "../identity";
 import { getRecipient, PreferenceInput, saveVersion, validateProfile } from "../identity/recipients";
 import { audit } from "../identity/session";
 import { BACKUP_NETWORKS } from "../payments/policy";
-import { companyRequests, invoiceInput, ownPayments, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
+import { companyRequests, invoiceInput, ownPayment, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
 
 export const recipientWorkspaceRoutes=new Hono<AppEnv>();
 recipientWorkspaceRoutes.use("*",requireUser);
-recipientWorkspaceRoutes.get("/",c=>c.json({profiles:ownProfiles(c.get("userId")),payments:ownPayments(c.get("userId")),requests:ownRequests(c.get("userId"))}));
+const Page=z.object({page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(50)});
+recipientWorkspaceRoutes.get("/",c=>{
+  const userId=c.get("userId"),payments=ownPaymentPage(userId,1,50),requests=ownRequestPage(userId,1,50);
+  return c.json({profiles:ownProfiles(userId),payments:payments.payments,requests:requests.requests,paymentPage:{total:payments.total,page:payments.page,pageSize:payments.pageSize,hasMore:payments.hasMore},requestPage:{total:requests.total,page:requests.page,pageSize:requests.pageSize,hasMore:requests.hasMore}});
+});
+recipientWorkspaceRoutes.get("/payments",c=>{
+  const page=Page.parse(c.req.query());
+  return c.json(ownPaymentPage(c.get("userId"),page.page,page.pageSize,c.req.query("recipientId")));
+});
+recipientWorkspaceRoutes.get("/payments/:id",c=>c.json({payment:ownPayment(c.get("userId"),c.req.param("id"))}));
+recipientWorkspaceRoutes.get("/invoices",c=>{
+  const page=Page.parse(c.req.query());
+  return c.json(ownRequestPage(c.get("userId"),page.page,page.pageSize));
+});
+recipientWorkspaceRoutes.get("/profiles",c=>c.json({profiles:ownProfiles(c.get("userId"))}));
 recipientWorkspaceRoutes.get("/profiles/:id",c=>{
   const recipient=ownRecipient(c.get("userId"),c.req.param("id"));
   return c.json({recipient,organization:row("SELECT id,name FROM organizations WHERE id=?",recipient.organization_id),backupAsset:"USDC",backupNetworks:BACKUP_NETWORKS});
 });
-recipientWorkspaceRoutes.get("/profiles/:id/payments",c=>c.json({payments:ownPayments(c.get("userId"),c.req.param("id"))}));
+recipientWorkspaceRoutes.get("/profiles/:id/payments",c=>{
+  const page=Page.parse(c.req.query());
+  return c.json(ownPaymentPage(c.get("userId"),page.page,page.pageSize,c.req.param("id")));
+});
 recipientWorkspaceRoutes.post("/profiles/:id/confirm",async c=>{
   const userId=c.get("userId"),recipient=ownRecipient(userId,c.req.param("id"));
   if(recipient.archived)throw new ApiError(409,"Your payer archived this profile. Existing payment history remains available.","RECIPIENT_ARCHIVED");

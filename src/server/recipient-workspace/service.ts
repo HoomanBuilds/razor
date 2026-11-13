@@ -35,29 +35,63 @@ export function ownProfiles(userId:string) {
   return [...profiles.values()];
 }
 
-export function ownPayments(userId:string,recipientId?:string) {
+interface PersonalPayment {
+  id:string;organization_id:string;recipient_id:string;company_name:string;reference:string;kind:string;amount:string;delivered_amount:string;total_spent:string;status:string;scheduled_for:string|null;created_at:string;recipient_version:number;recipient_snapshot:string;metadata:string;bill_reference:string|null;bill_title:string|null;payroll_reference:string|null;period_start:string|null;period_end:string|null;
+}
+
+function authorizedPayments(userId:string,recipientId?:string,paymentId?:string) {
   if(recipientId&&!ownProfiles(userId).some(profile=>profile.recipient.id===recipientId))throw new ApiError(404,"This recipient history is not linked to your verified account","RECIPIENT_NOT_FOUND");
-  const payments=rows<{id:string;organization_id:string;recipient_id:string;company_name:string;reference:string;kind:string;amount:string;delivered_amount:string;status:string;scheduled_for:string|null;created_at:string;recipient_version:number;recipient_snapshot:string;metadata:string;bill_reference:string|null;bill_title:string|null;payroll_reference:string|null;period_start:string|null;period_end:string|null}>(
-    `SELECT p.id,p.organization_id,p.recipient_id,o.name AS company_name,p.reference,p.kind,p.amount,p.delivered_amount,p.status,p.scheduled_for,p.created_at,p.recipient_version,p.recipient_snapshot,p.metadata,b.reference AS bill_reference,b.title AS bill_title,pr.reference AS payroll_reference,pr.period_start,pr.period_end
-     FROM payments p JOIN recipients r ON r.id=p.recipient_id AND r.organization_id=p.organization_id JOIN organizations o ON o.id=p.organization_id
-     LEFT JOIN bill_installments bi ON bi.payment_id=p.id LEFT JOIN bills b ON b.id=bi.bill_id AND b.organization_id=p.organization_id AND b.recipient_id=r.id
-     LEFT JOIN payroll_items pi ON pi.payment_id=p.id AND pi.recipient_id=r.id LEFT JOIN payroll_runs pr ON pr.id=pi.run_id AND pr.organization_id=p.organization_id
-     WHERE (r.user_id = ? OR EXISTS (SELECT 1 FROM recipient_versions v WHERE v.recipient_id=r.id AND v.version=p.recipient_version AND v.changed_by=?)) ${recipientId?"AND r.id = ?":""} ORDER BY p.created_at DESC LIMIT 250`,...(recipientId?[userId,userId,recipientId]:[userId,userId]));
+  const payments=rows<PersonalPayment>(`SELECT p.id,p.organization_id,p.recipient_id,o.name AS company_name,p.reference,p.kind,p.amount,p.delivered_amount,p.total_spent,p.status,p.scheduled_for,p.created_at,p.recipient_version,p.recipient_snapshot,p.metadata,b.reference AS bill_reference,b.title AS bill_title,pr.reference AS payroll_reference,pr.period_start,pr.period_end
+    FROM payments p JOIN recipients r ON r.id=p.recipient_id AND r.organization_id=p.organization_id JOIN organizations o ON o.id=p.organization_id
+    LEFT JOIN bill_installments bi ON bi.payment_id=p.id LEFT JOIN bills b ON b.id=bi.bill_id AND b.organization_id=p.organization_id AND b.recipient_id=r.id
+    LEFT JOIN payroll_items pi ON pi.payment_id=p.id AND pi.recipient_id=r.id LEFT JOIN payroll_runs pr ON pr.id=pi.run_id AND pr.organization_id=p.organization_id
+    WHERE (r.user_id=? OR EXISTS (SELECT 1 FROM recipient_versions v WHERE v.recipient_id=r.id AND v.version=p.recipient_version AND v.changed_by=?)) ${recipientId?"AND r.id=?":""} ${paymentId?"AND p.id=?":""} ORDER BY p.created_at DESC,p.id DESC`,userId,userId,...(recipientId?[recipientId]:[]),...(paymentId?[paymentId]:[]));
+  const ownership=new Map<string,boolean>();
   return payments.filter(payment=>{
-    const profile=getRecipientVersion(payment.organization_id,payment.recipient_id,payment.recipient_version);
-    return profile?.user_id===userId&&profile.organization_id===payment.organization_id&&profile.id===payment.recipient_id&&profile.preference_status==="confirmed"&&!!profile.confirmed_at;
-  }).map(payment=>{
-    let metadata:Record<string,unknown>={},snapshot:Record<string,unknown>={};
-    try{metadata=JSON.parse(payment.metadata);snapshot=JSON.parse(payment.recipient_snapshot);}catch{}
-    const displayReference=payment.bill_reference || payment.payroll_reference || (typeof metadata.displayReference==="string"?metadata.displayReference:null) || (/^(bill|payroll):/.test(payment.reference)?payment.kind==="payroll"?"Payroll payment":"Invoice payment":payment.reference);
-    const attempts=rows<{id:string;route:string;state:string;destination_asset:string;destination_network:string;destination_address:string;destination_memo:string|null;expected_output:string;destination_tx_hash:string|null;source_tx_hash:string|null;reconciliation:string|null}>("SELECT id,route,state,destination_asset,destination_network,destination_address,destination_memo,expected_output,destination_tx_hash,source_tx_hash,reconciliation FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at",payment.id,payment.organization_id).map(({reconciliation,...attempt})=>{
-      let treasuryReceipt:string|null=null,reportedOutputAtomic:string|null=null;
-      try{const data=JSON.parse(reconciliation || "null");treasuryReceipt=data?.chain?.attempts?.find((value:{id:string})=>value.id===attempt.id)?.receipt || null;const reported=data?.provider?.swapDetails?.amountOut;if(typeof reported==="string"&&/^\d+$/.test(reported))reportedOutputAtomic=reported;}catch{}
-      return {...attempt,treasuryReceipt,reportedOutputAtomic};
-    });
-    const clearing = row<{round_id:string;amount:string;residual_payment_id:string|null;proof_block_hash:string;proof_block_height:string}>("SELECT round_id,amount,residual_payment_id,proof_block_hash,proof_block_height FROM clearing_setoffs WHERE original_payment_id=? AND organization_id=?",payment.id,payment.organization_id) ?? null;
-    return {clearing,id:payment.id,recipient_id:payment.recipient_id,company:{id:payment.organization_id,name:payment.company_name},reference:displayReference,title:payment.bill_title?decrypt(payment.bill_title):null,kind:payment.kind,amount:payment.amount,delivered_amount:payment.delivered_amount,amountAsset:"USDC",amountDecimals:6,status:payment.status,scheduled_for:payment.scheduled_for,created_at:payment.created_at,periodStart:payment.period_start || (typeof metadata.periodStart==="string"?metadata.periodStart:null),periodEnd:payment.period_end || (typeof metadata.periodEnd==="string"?metadata.periodEnd:null),preference:{primaryAsset:snapshot.primary_asset,primaryNetwork:snapshot.primary_network,primaryMemo:snapshot.primary_memo ?? null,backupNetwork:snapshot.backup_network,fallbackConsent:snapshot.fallback_consent===1},attempts};
+    const key=`${payment.organization_id}:${payment.recipient_id}:${payment.recipient_version}`;
+    if(!ownership.has(key)){
+      const profile=getRecipientVersion(payment.organization_id,payment.recipient_id,payment.recipient_version);
+      ownership.set(key,profile?.user_id===userId&&profile.organization_id===payment.organization_id&&profile.id===payment.recipient_id&&profile.preference_status==="confirmed"&&!!profile.confirmed_at);
+    }
+    return ownership.get(key);
   });
+}
+
+function personalPayment(payment:PersonalPayment) {
+  let metadata:Record<string,unknown>={},snapshot:Record<string,unknown>={};
+  try{metadata=JSON.parse(payment.metadata);snapshot=JSON.parse(payment.recipient_snapshot);}catch{}
+  const displayReference=payment.bill_reference || payment.payroll_reference || (typeof metadata.displayReference==="string"?metadata.displayReference:null) || (/^(bill|payroll):/.test(payment.reference)?payment.kind==="payroll"?"Payroll payment":"Invoice payment":payment.reference);
+  const attempts=rows<{id:string;route:string;state:string;quote:string;destination_asset:string;destination_network:string;destination_address:string;destination_memo:string|null;destination_symbol:string|null;destination_decimals:number|null;expected_output:string;destination_tx_hash:string|null;source_tx_hash:string|null;reconciliation:string|null}>("SELECT id,route,state,quote,destination_asset,destination_network,destination_address,destination_memo,destination_symbol,destination_decimals,expected_output,destination_tx_hash,source_tx_hash,reconciliation FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at,id",payment.id,payment.organization_id).map(({reconciliation,quote,...attempt})=>{
+    let treasuryReceipt:string|null=null,reportedOutputAtomic:string|null=null,confirmedOutputAtomic:string|null=null;
+    try{
+      const data=JSON.parse(reconciliation || "null"),chain=data?.chain?.attempts?.find((value:{id:string})=>value.id===attempt.id);
+      treasuryReceipt=typeof chain?.receipt==="string"?chain.receipt:null;
+      const reported=data?.provider?.swapDetails?.amountOut;
+      if(typeof reported==="string"&&/^\d+$/.test(reported))reportedOutputAtomic=reported;
+      if(attempt.state==="delivered"&&typeof chain?.actual_output==="string"&&/^[1-9]\d*$/.test(chain.actual_output))confirmedOutputAtomic=chain.actual_output;
+      if(attempt.state==="delivered"&&JSON.parse(quote).kind==="direct")confirmedOutputAtomic=attempt.expected_output;
+    }catch{}
+    if(attempt.state==="partially_delivered")confirmedOutputAtomic=row<{actual_output:string}>("SELECT actual_output FROM partial_settlements WHERE payment_id=? AND attempt_id=? AND organization_id=?",payment.id,attempt.id,payment.organization_id)?.actual_output ?? null;
+    return {...attempt,treasuryReceipt,reportedOutputAtomic,confirmedOutputAtomic};
+  });
+  const clearing=row<{round_id:string;amount:string;residual_payment_id:string|null;proof_block_hash:string;proof_block_height:string}>("SELECT round_id,amount,residual_payment_id,proof_block_hash,proof_block_height FROM clearing_setoffs WHERE original_payment_id=? AND organization_id=?",payment.id,payment.organization_id) ?? null;
+  return {clearing,id:payment.id,recipient_id:payment.recipient_id,company:{id:payment.organization_id,name:payment.company_name},reference:displayReference,title:payment.bill_title?decrypt(payment.bill_title):null,kind:payment.kind,amount:payment.amount,delivered_amount:payment.delivered_amount,remaining_amount:(BigInt(payment.amount)-BigInt(payment.delivered_amount)).toString(),total_spent:payment.total_spent,amountAsset:"USDC",amountDecimals:6,status:payment.status,scheduled_for:payment.scheduled_for,created_at:payment.created_at,periodStart:payment.period_start || (typeof metadata.periodStart==="string"?metadata.periodStart:null),periodEnd:payment.period_end || (typeof metadata.periodEnd==="string"?metadata.periodEnd:null),preference:{primaryAsset:snapshot.primary_asset,primaryNetwork:snapshot.primary_network,primaryMemo:snapshot.primary_memo ?? null,backupNetwork:snapshot.backup_network,fallbackConsent:snapshot.fallback_consent===1},attempts};
+}
+
+export function ownPayments(userId:string,recipientId?:string) {
+  return authorizedPayments(userId,recipientId).map(personalPayment);
+}
+
+export function ownPaymentPage(userId:string,page:number,pageSize:number,recipientId?:string) {
+  checkPage(page,pageSize);
+  const records=authorizedPayments(userId,recipientId),start=(page-1)*pageSize;
+  return {payments:records.slice(start,start+pageSize).map(personalPayment),total:records.length,page,pageSize,hasMore:start+pageSize<records.length};
+}
+
+export function ownPayment(userId:string,paymentId:string) {
+  const payment=authorizedPayments(userId,undefined,paymentId)[0];
+  if(!payment)throw new ApiError(404,"This payment is not linked to your verified account","PAYMENT_NOT_FOUND");
+  return personalPayment(payment);
 }
 
 function readableRequest(request:Intake) {
@@ -70,7 +104,18 @@ function readableRequest(request:Intake) {
 }
 
 export function ownRequests(userId:string) {
-  return rows<Intake>("SELECT i.* FROM recipient_invoice_requests i JOIN recipients r ON r.id=i.recipient_id AND r.organization_id=i.organization_id WHERE i.submitted_by=? ORDER BY i.created_at DESC LIMIT 250",userId).map(readableRequest);
+  return rows<Intake>("SELECT i.* FROM recipient_invoice_requests i JOIN recipients r ON r.id=i.recipient_id AND r.organization_id=i.organization_id WHERE i.submitted_by=? ORDER BY i.created_at DESC,i.id DESC",userId).map(readableRequest);
+}
+
+export function ownRequestPage(userId:string,page:number,pageSize:number) {
+  checkPage(page,pageSize);
+  const total=row<{total:number}>("SELECT COUNT(*) AS total FROM recipient_invoice_requests WHERE submitted_by=?",userId)!.total,start=(page-1)*pageSize;
+  const requests=rows<Intake>("SELECT * FROM recipient_invoice_requests WHERE submitted_by=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",userId,pageSize,start).map(readableRequest);
+  return {requests,total,page,pageSize,hasMore:start+pageSize<total};
+}
+
+function checkPage(page:number,pageSize:number) {
+  if(!Number.isSafeInteger(page)||page<1||page>100000||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>100)throw new ApiError(422,"Choose a valid history page and page size","INVALID_INPUT");
 }
 
 export function submitInvoice(userId:string,data:InvoiceInput) {
