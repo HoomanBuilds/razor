@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { base58 } from "@scure/base";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { NATIVE_USDC } from "../src/lib/native-usdc";
 import { privateAiConfig } from "../src/server/assistant/config";
 import { setupPreflight } from "../src/server/setup/preflight";
@@ -21,6 +22,47 @@ const env: NodeJS.ProcessEnv = {
 };
 const absentArtifacts = join(tmpdir(), "razor-absent-preflight-artifacts");
 const status = (report: Awaited<ReturnType<typeof setupPreflight>>, id: string) => report.checks.find(check => check.id === id)?.status;
+
+function billingEnvironment(): NodeJS.ProcessEnv {
+  const seed = new Uint8Array(32).fill(8), publicKey = ed25519.getPublicKey(seed);
+  return { ...env, RAZOR_BILLING_MODE: "enforced", RAZOR_BILLING_CONTRACT_ID: "billing.near", RAZOR_BILLING_CODE_HASH: base58.encode(new Uint8Array(32).fill(4)), RAZOR_BILLING_ISSUER_PRIVATE_KEY: `ed25519:${base58.encode(new Uint8Array([...seed, ...publicKey]))}` };
+}
+
+test("billing setup validates its isolated contract, actual issuer and local artifact without exposing secrets", async () => {
+  const configured = billingEnvironment(), directory = mkdtempSync(join(tmpdir(), "razor-billing-preflight-"));
+  try {
+    const valid = await setupPreflight({ env: configured, artifactDirectory: directory });
+    assert.equal(status(valid, "billing-checkout"), "pass");
+    assert(!JSON.stringify(valid).includes(configured.RAZOR_BILLING_ISSUER_PRIVATE_KEY!));
+    const reused = await setupPreflight({ env: { ...configured, RAZOR_BILLING_CONTRACT_ID: configured.NEAR_FACTORY_ID }, artifactDirectory: directory });
+    assert.equal(status(reused, "billing-checkout"), "blocked");
+    const invalid = await setupPreflight({ env: { ...configured, RAZOR_BILLING_ISSUER_PRIVATE_KEY: `ed25519:${base58.encode(new Uint8Array(64).fill(8))}` }, artifactDirectory: directory });
+    assert.equal(status(invalid, "billing-checkout"), "blocked");
+    writeFileSync(join(directory, "razor_billing.wasm"), new Uint8Array([1, 2, 3]));
+    assert.equal(status(await setupPreflight({ env: configured, artifactDirectory: directory }), "billing-checkout"), "blocked");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("remote billing setup binds code, token, issuer and storage to one final block without claiming collection", async () => {
+  const configured = billingEnvironment(), seed = new Uint8Array(32).fill(8), issuer = `ed25519:${base58.encode(ed25519.getPublicKey(seed))}`;
+  let paused = false, billingReads = 0;
+  const fallback = transport();
+  const remote: typeof fetch = async (url, init) => {
+    const request = JSON.parse(init!.body as string), params = request.params;
+    if (request.method === "block") return Response.json({ result: { header: { hash: "billing-final" } } });
+    if (params.account_id === configured.RAZOR_BILLING_CONTRACT_ID || params.account_id === NATIVE_USDC.near) {
+      assert.equal(params.block_id, "billing-final"); billingReads++;
+      if (params.request_type === "view_account") return Response.json({ result: { code_hash: configured.RAZOR_BILLING_CODE_HASH } });
+      const value = params.method_name === "storage_balance_of" ? { total: "1000" } : { version: 1, owner_id: "operator.near", network: "mainnet", token_contract: NATIVE_USDC.near, issuer_public_key: issuer, paused };
+      return Response.json({ result: { result: [...Buffer.from(JSON.stringify(value))] } });
+    }
+    return fallback(url, init);
+  };
+  const verified = await setupPreflight({ env: configured, artifactDirectory: absentArtifacts, remote: true, fetch: remote });
+  assert.equal(status(verified, "remote-billing"), "pass"); assert.equal(billingReads, 3); assert.equal(verified.liveWorkflowsVerified, false);
+  paused = true;
+  assert.equal(status(await setupPreflight({ env: configured, artifactDirectory: absentArtifacts, remote: true, fetch: remote }), "remote-billing"), "blocked");
+});
 
 function transport(options: { network?: string; factoryCode?: string; uninitialized?: boolean; permission?: unknown } = {}): typeof fetch {
   return async (_url, init) => {
