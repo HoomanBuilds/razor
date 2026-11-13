@@ -15,7 +15,7 @@ type RecoveryState=Awaited<ReturnType<typeof treasuryRecoveryStatus>>;
 interface Review {id:string;termsHash:string;expiresAt:string;status?:string;terms:{kind:"owner_transfer"|"executor_revoke"|"invalidate_approvals";ownerAccount:string;newOwnerAccount?:string;executorAccount?:string;treasuryAccount:string;roles:{approvers:string[];executors:string[];settlementReporter:string|null}}}
 
 export function TreasuryRecoveryPanel() {
-  const {base,revision,refresh,organization}=useWorkspace(),endpoint=`${base}/access-recovery`;
+  const {base,revision,refresh,organization,navigate}=useWorkspace(),endpoint=`${base}/access-recovery`;
   const permitted=organization.permissions?.includes("company:manage") === true;
   const {data:response,error:loadError}=useResource<RecoveryState>(permitted?`${endpoint}/status`:null,revision),{data:account}=useResource<AccountStatus>(permitted?"/account/status":null,revision),{busy,error,run}=useAction(),[target,setTarget]=useState(""),[review,setReview]=useState<Review|null>(null),[checked,setChecked]=useState(false),[chainResult,setChainResult]=useState<string|null>(null);
   const status=response?.configured?response:null;
@@ -24,7 +24,7 @@ export function TreasuryRecoveryPanel() {
   if(!permitted)return null;
   return <Panel title="Treasury ownership and executor recovery" description="The company owner must freshly verify the NEAR signer before changing onchain access. Recover that signer in its wallet provider if access was lost.">
     <div className="space-y-5">{loadError?<p role="alert" className="text-sm text-destructive">{loadError}</p>:null}
-    {response?.configured===false?<p className="text-sm text-muted-foreground">Create or connect the company treasury before managing its onchain access. <a href="/?section=treasury" className="underline">Open Treasury</a></p>:null}
+    {response?.configured===false?<p className="text-sm text-muted-foreground">Create or connect the company treasury before managing its onchain access. <button type="button" onClick={()=>navigate("treasury")} className="underline">Open Treasury</button></p>:null}
     {status?<><div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-2 text-xs text-muted-foreground">Current NEAR treasury owner</p><Address value={status.chain.owner_id} network={status.network}/></div><div><p className="mb-2 text-xs text-muted-foreground">Treasury state</p><Status value={status.chain.paused?"paused":"active"}/><p className="mt-2 text-xs">Policy version {status.chain.policy_version}</p></div></div>
       <div className="flex flex-wrap gap-3">{status.companyOwner && <Action disabled={!!busy} busy={busy==="verify"} onClick={()=>void run("verify",async()=>{await authenticateWallet("near",{reauth:true,accountId:status.chain.owner_id,chooseWallet:true});refresh();})}>Verify current owner wallet</Action>}<a href="/account" className="self-center text-sm text-primary underline">Restore wallet or manage linked credentials</a></div>
       {!status.companyOwner?<p className="text-sm text-muted-foreground">Only the company owner can prepare access changes. Viewing these public onchain permissions does not grant their authority.</p>:<>
