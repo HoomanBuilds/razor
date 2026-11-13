@@ -112,7 +112,7 @@ async function transport(config: TreasuryConfig, input: OperatorRecoveryInput): 
     gasPrice: async () => String((await provider.viewGasPrice()).gas_price),
     sign: async call => {
       const value = params(call), account = new Account(input.accountId, provider, signer);
-      const signed = await account.createSignedTransaction({receiverId: call.receiverId, actions:[actions.functionCall(value.methodName, value.args, BigInt(value.gas), 0n)]});
+      const signed = await account.createSignedTransaction({receiverId: call.receiverId, actions:[actions.functionCall(value.methodName, value.args as object, BigInt(value.gas), 0n)]});
       return { encoded: Buffer.from(signed.encode()).toString("base64"), hash: base58.encode(createHash("sha256").update(signed.transaction.encode()).digest()) };
     },
     validate: (encoded, expectedHash, call) => {
@@ -170,7 +170,9 @@ function lease(input: OperatorRecoveryInput) {
   return {assert,release:()=>getDb().prepare("DELETE FROM recovery_signer_locks WHERE network=? AND account_id=? AND lease_token=?").run(input.network,input.accountId,token)};
 }
 
-function publicResult(operation: Operation, submission?: Submission, extra: Record<string,unknown> = {}) {
+interface RecoveryResultDetails { held?: boolean; sameSignedTransactionOnly?: boolean; message?: string; alreadyReconciled?: boolean; broadcast?: boolean; final?: boolean }
+
+function publicResult(operation: Operation, submission?: Submission, extra: RecoveryResultDetails = {}) {
   const call=JSON.parse(operation.wallet_call_json) as Call;
   return { operationId:operation.id,status:operation.status,company:operation.organization_id,companyId:operation.company_id,operatorUser:operation.operator_user_id,signerAccount:operation.operator_account_id,network:operation.network,kind:operation.kind,transactionHash:submission?.tx_hash??null,signed:!!submission,reviewedCall:call,walletActions:operation.status==="prepared"?[call]:[],...extra };
 }
@@ -215,6 +217,7 @@ export async function runOperatorRecovery(raw: unknown, dependencies: OperatorRe
   }
   const lock=input.send?lease(input):undefined;
   try{
+    if (input.send && row("SELECT o.id FROM recovery_operations o JOIN recovery_submissions s ON s.operation_id=o.id WHERE o.network=? AND o.operator_account_id=? AND o.request_hash!=? AND s.status IN ('signed','uncertain') LIMIT 1", input.network, input.accountId, requestHash)) throw new ApiError(409, "This recovery signer has another unresolved transaction. Reconcile its saved signature before signing for another company or attempt", "RECOVERY_SIGNER_BUSY");
     if(!submission||['failed','refused'].includes(submission.status)){
       if(submission&&!input.retryFinal)throw new ApiError(409,"An explicit final-failure retry is required","RECOVERY_RETRY_REVIEW_REQUIRED");
       const plan=await(dependencies.prepare??prepare)(access,input),call=checkedRecoveryCall(config,input,plan),payloadHash=digest(call);

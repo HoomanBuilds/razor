@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { createHash, randomUUID } from "node:crypto";
 import { base58 } from "@scure/base";
 import { getDb, row } from "../src/server/db";
@@ -17,6 +17,7 @@ const originalHash=base58.encode(new Uint8Array(32).fill(4)),savedAt=new Date().
 getDb().prepare("INSERT INTO users(id,name,created_at) VALUES('operator','Operator',?),('customer','Customer',?),('stranger','Stranger',?)").run(savedAt,savedAt,savedAt);
 getDb().prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES('operator-wallet','operator','near','reporter.near','mainnet',?)").run(savedAt);
 const permission={FunctionCall:{receiver_id:"shared.near",method_names:["confirm_refund","recover_source_transfer","recover_retained_withdrawal"],allowance:"100000000000000000000000"}};
+afterEach(() => getDb().exec("DELETE FROM recovery_signer_locks; DELETE FROM recovery_submissions; DELETE FROM recovery_operations;"));
 function fixture(){
   const company=randomUUID(),payment=randomUUID(),attempt=randomUUID(),companyId=deriveSharedCompanyId(company,"owner.near");
   getDb().prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,'customer',?,?)").run(company,"Customer",savedAt,savedAt);
@@ -96,6 +97,18 @@ test("only final transaction plus scoped recovery state marks completion, and la
   assert.equal(first.status,"confirmed");assert.equal(first.final,true);
   const second=await runOperatorRecovery({...value.input,send:true},value.dependencies);
   assert.equal(second.alreadyReconciled,true);assert.equal(second.transactionHash,first.transactionHash);assert.deepEqual(value.counts(),{prepares:1,signs:1});
+});
+
+test("an unknown signature prevents another company from reusing the recovery signer nonce", async () => {
+  const first = fixture(), second = fixture();
+  await runOperatorRecovery({ ...first.input, send: true }, first.dependencies);
+  await assert.rejects(() => runOperatorRecovery({ ...second.input, send: true }, second.dependencies), (error: ApiError) => error.code === "RECOVERY_SIGNER_BUSY");
+  assert.deepEqual(second.counts(), { prepares: 0, signs: 0 });
+  first.setNetworkFailure(false);
+  await runOperatorRecovery({ ...first.input, send: true }, first.dependencies);
+  second.setNetworkFailure(false);
+  const completed = await runOperatorRecovery({ ...second.input, send: true }, second.dependencies);
+  assert.equal(completed.status, "confirmed");
 });
 
 test("a false callback needs explicit reviewed final retry and preserves the earlier signed submission",async()=>{
