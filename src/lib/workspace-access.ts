@@ -1,0 +1,28 @@
+import type { Section } from "../components/workspace/types";
+
+const requirements: Record<Section, readonly string[]> = {
+  overview: ["company:read"],
+  payments: ["company:read", "payments:read"],
+  payroll: ["company:read", "payments:read"],
+  bills: ["company:read", "payments:read"],
+  clearing: ["company:read", "payments:read"],
+  recipients: ["company:read", "recipients:read"],
+  treasury: ["company:read"],
+  assistant: ["company:read", "payments:read"],
+  activity: ["company:read", "reports:read"],
+  settings: ["company:read"],
+};
+
+export function hasPermissions(permissions: readonly string[] | undefined, required: readonly string[]) {
+  return required.every(permission => permissions?.includes(permission));
+}
+
+export function canOpenSection(section: Section, permissions: readonly string[] | undefined) {
+  return !!requirements[section] && hasPermissions(permissions, requirements[section]);
+}
+
+export function workspacePath(companyId: string, section: Section, paymentId?: string) {
+  const params = new URLSearchParams({ company: companyId, section });
+  if (section === "payments" && paymentId) params.set("payment", paymentId);
+  return `/?${params}`;
+}

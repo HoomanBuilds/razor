@@ -10,7 +10,7 @@ export interface WorkspaceContextValue {
   base: string;
   revision: number;
   refresh: () => void;
-  navigate: (section: Section) => void;
+  navigate: (section: Section, paymentId?: string) => void;
   notify: (message: string) => void;
   invoiceReview: InvoiceReview | null;
   analyzeInvoice: (review: InvoiceReview | null) => void;

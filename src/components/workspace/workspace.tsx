@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   Building2,
@@ -23,6 +23,7 @@ import {
 } from "@/components/auth/identity-provider";
 import { SignInPanel } from "@/components/auth/sign-in-panel";
 import { api, errorMessage } from "@/lib/api";
+import { canOpenSection, workspacePath } from "@/lib/workspace-access";
 import { WorkspaceContext, type InvoiceReview } from "./context";
 import { InvoiceInbox } from "./invoice-inbox";
 import { useAction, useResource } from "./hooks";
@@ -80,6 +81,9 @@ function Workspace() {
   const [sidebar, setSidebar] = useState(false);
   const [notice, setNotice] = useState("");
   const [creating, setCreating] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const switchingLock = useRef(false);
+  const activeScope = useRef("");
   const organization =
     session?.organizations.find((value) => value.id === organizationId) ??
     session?.organizations.find(
@@ -87,10 +91,31 @@ function Workspace() {
     ) ??
     session?.organizations[0];
   useEffect(() => {
-    const value = new URLSearchParams(window.location.search).get("section");
-    if (navigation.some((item) => item.id === value))
-      setSection(value as Section);
+    const readLocation = () => {
+      const params = new URLSearchParams(window.location.search), value = params.get("section");
+      setOrganizationId(params.get("company") ?? "");
+      setSection(navigation.some(item => item.id === value) ? value as Section : "overview");
+      setSidebar(false);
+      setNotice("");
+    };
+    readLocation();
+    window.addEventListener("popstate", readLocation);
+    return () => window.removeEventListener("popstate", readLocation);
   }, []);
+  const visibleSection = organization && canOpenSection(section, organization.permissions) ? section : "overview";
+  const scope = session && organization ? `${session.user.id}:${organization.id}:${organization.permissions.join(",")}` : "";
+  activeScope.current = scope;
+  useEffect(() => {
+    if (!organization) return;
+    const params = new URLSearchParams(window.location.search);
+    window.history.replaceState(null, "", workspacePath(organization.id, visibleSection, params.get("payment") ?? undefined));
+  }, [organization?.id, visibleSection]);
+  useEffect(() => {
+    if (!sidebar) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setSidebar(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [sidebar]);
   if (loading)
     return (
       <main className="grid min-h-screen place-items-center">
@@ -139,19 +164,23 @@ function Workspace() {
         onCreated={async (id) => {
           await refreshIdentity();
           setOrganizationId(id);
+          setSection("overview");
+          window.history.pushState(null, "", workspacePath(id, "overview"));
           setCreating(false);
         }}
       />
     );
-  const navigate = (next: Section) => {
+  const navigate = (next: Section, paymentId?: string) => {
+    if (activeScope.current !== scope || !canOpenSection(next, organization.permissions)) return;
     setSection(next);
     setSidebar(false);
-    window.history.replaceState(null, "", `/?section=${next}`);
+    window.history.pushState(null, "", workspacePath(organization.id, next, paymentId));
   };
   return (
     <div className="min-h-screen">
       <aside
-        className={`${sidebar ? "flex" : "hidden"} fixed inset-y-0 left-0 z-40 w-64 flex-col border-r bg-card p-5 lg:flex`}
+        id="company-navigation"
+        className={`${sidebar ? "flex" : "hidden"} fixed inset-y-0 left-0 z-40 w-64 flex-col overflow-y-auto border-r bg-card p-5 lg:flex`}
       >
         <div className="flex items-center justify-between">
           <a
@@ -180,14 +209,25 @@ function Workspace() {
             id="company"
             className={`${control} mt-2 font-medium`}
             value={organization.id}
+            disabled={switching}
             onChange={async (event) => {
+              if (switchingLock.current) return;
               const id = event.target.value;
-              setOrganizationId(id);
-              setSection("overview");
+              switchingLock.current = true;
+              setSwitching(true);
               try {
                 await api(`/organizations/${id}/select`, {});
+                setOrganizationId(id);
+                setSection("overview");
+                setNotice("");
+                setSidebar(false);
+                window.history.pushState(null, "", workspacePath(id, "overview"));
+                await refreshIdentity();
               } catch (cause) {
                 setNotice(errorMessage(cause));
+              } finally {
+                switchingLock.current = false;
+                setSwitching(false);
               }
             }}
           >
@@ -211,14 +251,15 @@ function Workspace() {
           </button>
         </div>
         <nav className="mt-7 grid gap-1">
-          {navigation.map((item) => (
+          {navigation.filter(item => canOpenSection(item.id, organization.permissions)).map((item) => (
             <button
               key={item.id}
               onClick={() => navigate(item.id)}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${section === item.id ? "bg-secondary font-semibold text-primary" : "text-muted-foreground hover:bg-muted"}`}
+              aria-current={visibleSection === item.id ? "page" : undefined}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${visibleSection === item.id ? "bg-secondary font-semibold text-primary" : "text-muted-foreground hover:bg-muted"}`}
             >
               <item.icon size={18} />
-              {item.title}
+              {item.id === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : item.title}
             </button>
           ))}
         </nav>
@@ -250,19 +291,21 @@ function Workspace() {
           onClick={() => setSidebar(false)}
         />
       )}
-      <div className="lg:ml-64">
+      <div className="min-w-0 lg:ml-64">
         <header className="flex h-20 items-center justify-between gap-4 border-b bg-card px-5 sm:px-8">
           <div className="flex items-center gap-4">
             <button
               className="lg:hidden"
               aria-label="Open navigation"
+              aria-expanded={sidebar}
+              aria-controls="company-navigation"
               onClick={() => setSidebar(true)}
             >
               <Menu size={22} />
             </button>
             <div>
               <h1 className="text-xl font-semibold tracking-tight">
-                {navigation.find((item) => item.id === section)?.title}
+                {visibleSection === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : navigation.find((item) => item.id === visibleSection)?.title}
               </h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {organization.name}
@@ -271,7 +314,7 @@ function Workspace() {
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={() => setRevision((value) => value + 1)}
+              onClick={() => void refreshIdentity().then(() => setRevision(value => value + 1)).catch(cause => setNotice(errorMessage(cause)))}
               aria-label="Refresh workspace"
               className="rounded-md p-2 text-muted-foreground hover:bg-muted"
             >
@@ -286,7 +329,7 @@ function Workspace() {
             <div className="grid size-9 place-items-center rounded-full bg-secondary text-sm font-semibold text-primary">
               {(session.user.name ||
                 session.user.email ||
-                "F")[0].toUpperCase()}
+                "R")[0].toUpperCase()}
             </div>
           </div>
         </header>
@@ -303,14 +346,14 @@ function Workspace() {
             </div>
           )}
           <CompanyWorkspace
-            key={organization.id}
+            key={scope}
             session={session}
             organization={organization}
-            section={section}
+            section={visibleSection}
             revision={revision}
-            refresh={() => setRevision((value) => value + 1)}
+            refresh={() => { if (activeScope.current === scope) setRevision(value => value + 1); }}
             navigate={navigate}
-            notify={setNotice}
+            notify={message => { if (activeScope.current === scope) setNotice(message); }}
           />
         </main>
         <footer className="px-8 pb-6 text-xs text-muted-foreground">
@@ -336,7 +379,7 @@ function CompanyWorkspace({
   section: Section;
   revision: number;
   refresh: () => void;
-  navigate: (next: Section) => void;
+  navigate: (next: Section, paymentId?: string) => void;
   notify: (message: string) => void;
 }) {
   const base = `/organizations/${organization.id}`;
@@ -344,7 +387,7 @@ function CompanyWorkspace({
     null,
   );
   const { data, error } = useResource<{ recipients: Recipient[] }>(
-    `${base}/recipients`,
+    organization.permissions?.includes("recipients:read") ? `${base}/recipients` : null,
     revision,
   );
   return (

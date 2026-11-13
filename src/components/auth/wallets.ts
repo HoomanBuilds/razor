@@ -3,6 +3,7 @@
 import type { NearConnector } from "@hot-labs/near-connect";
 import type { WalletProvider } from "@/components/account/types";
 import { createWalletClient, custom, type EIP1193Provider } from "viem";
+import { walletFailureMessage } from "@/lib/client-errors";
 
 export type WalletFamily = "near" | "evm" | "solana";
 export interface AuthConfig { socialEnabled:boolean; privyAppId:string|null; nearNetwork:"mainnet"|"testnet"; origin:string; walletFamilies:WalletFamily[];ownerWalletSetup?:{providers:WalletProvider[];preferredProvider:string|null;nativeEmbeddedNear:false} }
@@ -82,8 +83,5 @@ export async function authenticateWallet(family:WalletFamily,options:{link?:bool
 }
 
 export function walletErrorMessage(error:unknown):string {
-  const candidate=error as {code?:number;name?:string;message?:string;shortMessage?:string};
-  if(candidate.code===4001 || /reject|denied|cancel/i.test(candidate.message || "")) return "Request cancelled. Your account has not changed.";
-  if(candidate.name==="TypeError" && /fetch/i.test(candidate.message || "")) return "Razor could not reach the server. Check your connection and try again.";
-  return candidate.shortMessage || candidate.message || "The wallet request could not be completed. Please try again.";
+  return walletFailureMessage(error, "The wallet request could not be completed. Check its saved status before trying again.");
 }
