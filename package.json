@@ -15,6 +15,7 @@
     "check:setup": "node --max-old-space-size=384 --env-file-if-exists=.env.local --import tsx scripts/check-setup.ts",
     "prepare:deployment": "node --max-old-space-size=384 --import tsx scripts/prepare-deployment.ts",
     "worker": "node --max-old-space-size=512 --env-file-if-exists=.env.local --import tsx scripts/worker.ts",
+    "recovery:admin": "node --max-old-space-size=384 --env-file-if-exists=.env.local --import tsx scripts/recovery-admin.ts",
     "billing:admin": "node --max-old-space-size=384 --env-file-if-exists=.env.local --import tsx scripts/billing-admin.ts"
   },
   "dependencies": {
