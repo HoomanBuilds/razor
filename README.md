@@ -22,6 +22,8 @@ SQLite migrations run automatically into `.data/razor.sqlite`. Use persistent lo
 
 Company treasury ownership is separate from application login. Link the NEAR owner wallet, create or connect a Razor treasury, register its native USDC token storage and refresh the confirmed balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
 
+Build the NEAR contracts with `bash contracts/build.sh`. The serialized build writes treasury, factory and clearing WASMs under `.tools/wasm/`, generates a build manifest and prints the three public code-hash pins for the corresponding `.env.example` fields. The factory embeds that exact treasury WASM. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
+
 See the [treasury interface](contracts/razor-treasury/README.md) for contract setup and trust boundaries. The owner or appointed reporter attests external destination settlement. Razor does not claim a cryptographic external-chain proof from a provider status response.
 
 Private inference requires configured NEAR AI Cloud credentials, approved deployment measurements and successful verification. Missing credentials never switch invoice contents to another provider. Manual invoice preparation remains available.

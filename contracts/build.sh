@@ -15,4 +15,5 @@ cp "$treasury_wasm" "$artifact_dir/razor_treasury.wasm"
 cp "$build_target/wasm32-unknown-unknown/release/razor_factory.wasm" "$artifact_dir/razor_factory.wasm"
 CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-clearing/Cargo.toml" --target wasm32-unknown-unknown --release
 cp "$build_target/wasm32-unknown-unknown/release/razor_clearing.wasm" "$artifact_dir/razor_clearing.wasm"
+node "$project_root/scripts/contract-manifest.mjs"
 printf 'Built treasury, factory and clearing artifacts in %s\n' "$artifact_dir"
