@@ -56,7 +56,7 @@ Acceptance: a preparer can draft a run but cannot bypass a required approval. Re
 
 | ID | Feature | Required behavior |
 | --- | --- | --- |
-| TRE-01 | Supported-asset funding | Show available source assets and networks from validated support data and obtain executable quotes |
+| TRE-01 | Supported-asset funding | Allow any live catalog-supported source asset and network; suggest canonical native USDC options for compatibility and possible lower costs without hiding other assets; obtain an executable quote for actual costs |
 | TRE-02 | Multi-asset top-ups | Track several deposits into one company workspace, with separate amounts, quotes, statuses and receipts |
 | TRE-03 | USDC settlement balance | Default approved funding conversions to USDC and credit only confirmed net receipts |
 | TRE-04 | Financial availability | Separate confirmed holdings, client reserves, commitments, payment reservations, fees in reserve and available operating money |
@@ -67,6 +67,8 @@ Acceptance: a preparer can draft a run but cannot bypass a required approval. Re
 | TRE-09 | Pay from a connected wallet | Let a payer select an approved obligation and fund its required amount from a connected source wallet through Intents, then execute the NEAR-authorized payout after confirmed funding; link both legs to the same obligation and reconcile excess or refunds |
 
 Acceptance: a pending deposit cannot fund payroll. A company with several assets can complete separately quoted top-ups without treating them as one atomic transfer. Money reserved for one obligation cannot silently fund another. The pay-from-wallet flow handles funding success followed by payout failure without demanding another deposit or paying twice.
+
+Funding choice, primary payout preference and internal USDC accounting are separate. The payer may fund in any supported asset, while the recipient may independently receive any supported primary asset. Asset suggestions must match reviewed native USDC identities against the live catalog and must not guarantee the cheapest route. Backup payouts always remain native USDC on the curated enabled popular networks, with explicit recipient consent.
 
 ## 3. Recipients and payout preferences
 
