@@ -28,7 +28,7 @@ function audit(access: AccessContext, reserveId: string, action: string, request
 function view(position: ReservePosition) {
   const { reserve, payment } = position;
   return { id: reserve.id, amount: reserve.amount, purpose: decrypt(reserve.purpose_ciphertext), clientReference: reserve.client_reference_ciphertext ? decrypt(reserve.client_reference_ciphertext) : null,
-    fundingId: reserve.funding_id, paymentId: reserve.payment_id, paymentReference: payment?.reference ?? null, paymentStatus: payment?.status ?? null,
+    activePaymentId: position.activePaymentId, fundingId: reserve.funding_id, paymentId: reserve.payment_id, paymentReference: payment?.reference ?? null, paymentStatus: payment?.status ?? null,
     state: position.state, disposition: reserve.state, outstandingPrincipal: position.outstanding.toString(), clientReserved: position.clientReserved.toString(), paymentCovered: position.paymentCovered.toString(), principalInFlight: position.inFlight.toString(),
     releaseReason: reserve.release_reason_ciphertext ? decrypt(reserve.release_reason_ciphertext) : null, createdAt: reserve.created_at, allocatedAt: reserve.allocated_at, releasedAt: reserve.released_at };
 }
@@ -71,7 +71,7 @@ export function createClientReserve(access: AccessContext, input: { idempotencyK
     const treasury = getTreasury(access);
     if (!treasury.config || !treasury.lastSyncedAt || atomic(treasury.available, true) < atomic(amount)) throw new ApiError(409, "Sync and fund enough unreserved company cash before creating this earmark", "CLIENT_RESERVE_UNFUNDED");
     const payment = terms.paymentId ? getPayment(access, terms.paymentId) : null;
-    if (payment && (payment.amount !== amount || payment.status === "paid")) throw new ApiError(409, "Link one unpaid obligation with exactly the same principal", "CLIENT_PAYMENT_MISMATCH");
+    if (payment && (payment.amount !== amount || ["paid", "partially_paid"].includes(payment.status))) throw new ApiError(409, "Link one unpaid obligation with exactly the same principal", "CLIENT_PAYMENT_MISMATCH");
     if (payment && row("SELECT id FROM client_reserves WHERE payment_id=? AND state!='released'", payment.id)) throw new ApiError(409, "This principal already belongs to another active client earmark", "CLIENT_PAYMENT_ALREADY_LINKED");
     if (terms.fundingId) {
       const confirmed = fundingCredit(access, terms.fundingId);

@@ -31,7 +31,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE id=? AND organization_id=?", job.entity_id, job.organization_id);
   if (!attempt) return { status: "completed" as const, detail: { missing: true } };
   const payment = row<Payment>("SELECT * FROM payments WHERE id=? AND organization_id=?", attempt.payment_id, job.organization_id);
-  if (!payment || ["paid", "cancelled"].includes(payment.status)) return { status: "completed" as const, detail: { closed: true } };
+  if (!payment || ["paid", "cancelled", "partially_paid"].includes(payment.status)) return { status: "completed" as const, detail: { closed: true } };
   if (payment.scheduled_for && Date.parse(payment.scheduled_for) > Date.now()) return blocked("This payment is not due yet.");
   const recipient = row<{ version: number; archived: number; preference_status: string }>("SELECT version,archived,preference_status FROM recipients WHERE id=? AND organization_id=?", payment.recipient_id, job.organization_id);
   if (!recipient || recipient.version !== payment.recipient_version || recipient.archived || recipient.preference_status !== "confirmed") return blocked("Recipient preferences changed. Review a new payment before execution.");
@@ -39,7 +39,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   const [chain, chainConfig] = await Promise.all([view<RoutePayment | null>(config, "get_payment", { payment_id: payment.id }), view<ChainConfig>(config, "get_config")]);
   const recorded = chain?.attempts.find((item) => item.id === attempt.id);
   const exact = chain?.attempts.at(-1);
-  if (recorded && ["sending", "source_sent", "uncertain", "refund_pending", "refund_verifying", "delivered", "refunded", "transfer_failed", "discarded"].includes(recorded.status)) {
+  if (recorded && ["sending", "source_sent", "uncertain", "refund_pending", "refund_verifying", "delivered", "partially_delivered", "refunded", "transfer_failed", "discarded"].includes(recorded.status)) {
     await reconcilePayment(access, payment.id);
     getDb().prepare("UPDATE operation_submissions SET status='source_recorded',updated_at=? WHERE attempt_id=? AND organization_id=?").run(iso(), attempt.id, job.organization_id);
     return { status: "completed" as const, detail: { sourceRecorded: true, chainStatus: recorded.status } };
@@ -87,7 +87,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   if (isPaused(job.organization_id) || !currentMandate?.enabled || currentMandate.executor_account_id !== worker.accountId || Date.parse(currentMandate.expires_at) <= Date.now() || BigInt(attempt.amount_in) > BigInt(currentMandate.max_amount)) return blocked("The execution mandate was paused or changed before broadcast.");
   const currentPayment = row<{ status: string; recipient_version: number }>("SELECT status,recipient_version FROM payments WHERE id=? AND organization_id=?", payment.id, job.organization_id);
   const currentRecipient = row<{ version: number; archived: number; preference_status: string }>("SELECT version,archived,preference_status FROM recipients WHERE id=? AND organization_id=?", payment.recipient_id, job.organization_id);
-  if (!currentPayment || ["paid", "cancelled"].includes(currentPayment.status) || currentPayment.recipient_version !== payment.recipient_version || !currentRecipient || currentRecipient.version !== payment.recipient_version || currentRecipient.archived || currentRecipient.preference_status !== "confirmed") return blocked("Payment or recipient preferences changed before broadcast. Review the obligation in the owner wallet.");
+  if (!currentPayment || ["paid", "cancelled", "partially_paid"].includes(currentPayment.status) || currentPayment.recipient_version !== payment.recipient_version || !currentRecipient || currentRecipient.version !== payment.recipient_version || currentRecipient.archived || currentRecipient.preference_status !== "confirmed") return blocked("Payment or recipient preferences changed before broadcast. Review the obligation in the owner wallet.");
   const signed = SignedTransaction.decode(Buffer.from(decrypt(submission.signed_transaction_ciphertext), "base64"));
   if (signed.transaction.signerId !== worker.accountId || signed.transaction.receiverId !== config.near_account_id || signed.transaction.publicKey.toString() !== publicKey.toString()) return blocked("The recorded transaction does not match the restricted executor.");
   try {

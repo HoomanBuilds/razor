@@ -4,6 +4,7 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { approvePayment, createPayment, getPayment } from "../payments";
 import { decrypt, encrypt } from "../identity/crypto";
 import { accountingExport } from "../reconciliation/export";
+import { liabilityPayments } from "../partial-settlement/model";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
@@ -118,9 +119,13 @@ export function getPayrollRun(access: AccessContext, id: string) {
   const run = row<PayrollRun>("SELECT * FROM payroll_runs WHERE id = ? AND organization_id = ?", id, access.organizationId);
   if (!run) throw new ApiError(404, "Pay run not found", "NOT_FOUND");
   const items = rows<PayrollItem>("SELECT * FROM payroll_items WHERE run_id = ?", id)
-    .map((item) => ({ ...item, payment: item.payment_id ? getPayment(access, item.payment_id) : null }));
-  const paid = items.filter((item) => item.payment?.status === "paid").length;
-  const status = paid === items.length && paid > 0 ? "paid" : paid > 0 ? "partially_paid" : run.status;
+    .map((item) => {
+      const lineage = item.payment_id ? liabilityPayments(access.organizationId, item.payment_id) : [];
+      const delivered = lineage.reduce((sum, payment) => sum + BigInt(payment.delivered_amount), 0n);
+      return { ...item, payment: item.payment_id ? getPayment(access, item.payment_id) : null, deliveredAmount: delivered.toString(), remainingLiability: (BigInt(item.amount) - delivered).toString(), spent: lineage.reduce((sum, payment) => sum + BigInt(payment.total_spent), 0n).toString() };
+    });
+  const paid = items.filter((item) => item.remainingLiability === "0").length;
+  const status = paid === items.length && paid > 0 ? "paid" : items.some(item => BigInt(item.deliveredAmount) > 0n) ? "partially_paid" : run.status;
   return { ...run, status, items, total: items.reduce((sum, item) => sum + BigInt(item.amount), 0n).toString(), maxFees: items.reduce((sum, item) => sum + BigInt(item.max_fee), 0n).toString() };
 }
 

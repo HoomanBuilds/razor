@@ -31,6 +31,7 @@ export interface Payment {
   reserved_amount: string;
   total_spent: string;
   delivered_amount: string;
+  partial_delivery_observed?: number;
   hold_reason: string | null;
   created_at: string;
   updated_at: string;
@@ -50,6 +51,7 @@ export interface PayoutAttempt {
   destination_decimals?: number | null;
   destination_symbol?: string | null;
   expected_output: string;
+  observed_output?: string | null;
   amount_in: string;
   deposit_address: string;
   deposit_memo: string | null;
@@ -103,6 +105,8 @@ export interface ChainAttempt {
   route: { kind: string; source_receiver: string; input_amount: string; output_amount: string; quote_id: string; quote_hash: string; deadline_ms: string };
   refund_amount: string;
   receipt: string | null;
+  actual_output?: string;
+  credited_amount?: string;
 }
 
 export interface ChainPayment {

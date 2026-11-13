@@ -12,6 +12,7 @@ import type { ChainPayment, Payment, RecipientSnapshot, TreasuryConfig } from ".
 import { getSupportedTokens, type Token } from "../payments/intents";
 import { duplicateInvoiceWarnings } from "../business/duplicate-invoices";
 import { recipientRouteReadiness } from "./routing";
+import { liabilityPayments } from "../partial-settlement/model";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
 interface Replacement { old_payment_id: string; new_payment_id: string; liability_kind: string; liability_id: string; reason_ciphertext: string; created_at: string }
@@ -231,7 +232,7 @@ export async function replaceCancelledPayment(access: AccessContext, paymentId: 
       db.prepare("UPDATE payments SET scheduled_for=?,metadata=?,updated_at=? WHERE id=? AND status='draft' AND approved_at IS NULL").run(previous.scheduled_for, JSON.stringify({ ...JSON.parse(replacement.metadata), replacementOf: previous.id, displayReference: metadata.displayReference ?? bill.reference }), now(), replacement.id);
       replacement = getPayment(access, replacement.id);
     } else {
-      if (item && item.amount !== previous.amount) throw new ApiError(409, "The pay-period liability differs from its cancelled obligation", "PAYROLL_LIABILITY_MISMATCH");
+      if (item && BigInt(item.amount) - liabilityPayments(access.organizationId, previous.id).reduce((sum, entry) => sum + BigInt(entry.delivered_amount), 0n) !== BigInt(previous.amount)) throw new ApiError(409, "The unpaid pay-period liability differs from its cancelled obligation", "PAYROLL_LIABILITY_MISMATCH");
       replacement = createPayment(access, { recipientId: previous.recipient_id, reference: `replacement:${previous.id}`, amount: previous.amount, maxFee: remainingFee.toString(), kind: previous.kind, scheduledFor: previous.scheduled_for, metadata: { ...metadata, replacementOf: previous.id, displayReference: metadata.displayReference ?? previous.reference } });
       if (item) {
         db.prepare("UPDATE payroll_items SET payment_id=? WHERE id=? AND payment_id=?").run(replacement.id, item.id, previous.id);

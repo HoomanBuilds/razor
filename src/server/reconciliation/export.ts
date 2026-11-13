@@ -153,7 +153,7 @@ export function accountingExport(access: AccessContext): string {
   for (const payment of payments) {
     const netCost =
       BigInt(payment.total_spent) -
-      (payment.status === "paid" ? BigInt(payment.amount) : 0n);
+      BigInt(payment.delivered_amount);
     records.push({
       ...common(payment),
       record_type: "obligation",
@@ -162,6 +162,8 @@ export function accountingExport(access: AccessContext): string {
       status: payment.status,
       entitlement_usdc: usdc(payment.amount),
       entitlement_micro_usdc: payment.amount,
+      delivered_entitlement_usdc: usdc(payment.delivered_amount),
+      remaining_entitlement_usdc: usdc((BigInt(payment.amount)-BigInt(payment.delivered_amount)).toString()),
       max_cost_usdc: usdc(payment.max_fee),
       max_cost_micro_usdc: payment.max_fee,
       recorded_source_spent_usdc: usdc(payment.total_spent),
@@ -171,7 +173,7 @@ export function accountingExport(access: AccessContext): string {
       verification:
         payment.status === "paid"
           ? "closed_by_NEAR_treasury_state; see_attempt_provenance"
-          : "unresolved_obligation",
+          : payment.status === "partially_paid" ? "terminal_partial_NEAR_reporter_attestation; remainder_requires_new_approval" : "unresolved_obligation",
     });
   }
   for (const attempt of attempts) {
@@ -199,6 +201,7 @@ export function accountingExport(access: AccessContext): string {
         "refund_verifying",
         "refunded",
         "delivered",
+        "partially_delivered",
       ].includes(chainAttempt.status);
     const recovered =
       chainAttempt?.status === "refunded" ? chainAttempt.refund_amount : "";
@@ -229,6 +232,9 @@ export function accountingExport(access: AccessContext): string {
       source_debited_micro_usdc: sent ? attempt.amount_in : "",
       provider_consumed_source_usdc: usdc(provider?.amountIn),
       provider_reported_output_base_units: provider?.amountOut,
+      observed_output_base_units: attempt.observed_output,
+      attested_output_base_units: chainAttempt?.actual_output,
+      attested_entitlement_credit_usdc: usdc(chainAttempt?.credited_amount),
       provider_reported_refund_usdc: usdc(provider?.refundedAmount),
       verified_recovery_usdc: usdc(recovered),
       verified_recovery_micro_usdc: recovered,
@@ -240,7 +246,7 @@ export function accountingExport(access: AccessContext): string {
         ? attempt.state === "delivered"
           ? "NEAR_native_token_transfer_callback"
           : "NEAR_native_transfer_unresolved"
-        : attempt.state === "delivered"
+        : attempt.state === "partially_delivered" ? "terminal_partial_route_closed_by_NEAR_reporter; explicit_USDC_valuation" : attempt.state === "delivered"
           ? "owner_or_reporter_attested_external_delivery"
           : "provider_report_not_delivery_proof",
     });
@@ -382,6 +388,7 @@ export function accountingExport(access: AccessContext): string {
     });
   records.push(...clearingExportRows(access.organizationId));
   records.push(...fundingRefundExportRows(access).map(record => ({ record_type: "source_funding_refund", ...record })));
+  for (const value of rows<{payment_id:string;attempt_id:string;actual_output:string;credited_usdc:string;source_spent_usdc:string;receipt_commitment:string;confirmed_at:string;remainder_payment_id:string|null}>("SELECT s.*,r.remainder_payment_id FROM partial_settlements s LEFT JOIN partial_remainders r ON r.original_payment_id=s.payment_id WHERE s.organization_id=? ORDER BY s.confirmed_at",access.organizationId)) records.push({...common(paymentById.get(value.payment_id)),record_type:"terminal_partial_settlement",record_id:value.payment_id,created_at:value.confirmed_at,attested_output_base_units:value.actual_output,attested_entitlement_credit_usdc:usdc(value.credited_usdc),recorded_source_spent_usdc:usdc(value.source_spent_usdc),settlement_receipt:value.receipt_commitment,residual_payment_id:value.remainder_payment_id,verification:"terminal_NEAR_reporter_attestation; explicit_entitlement_credit; no_automatic_cross_asset_conversion"});
   const headers = [
     "record_type",
     "record_id",
@@ -454,6 +461,11 @@ export function accountingExport(access: AccessContext): string {
     "client_principal_outstanding_usdc",
     "client_release_reason",
     "verification",
+    "delivered_entitlement_usdc",
+    "remaining_entitlement_usdc",
+    "observed_output_base_units",
+    "attested_output_base_units",
+    "attested_entitlement_credit_usdc",
     "setoff_usdc",
     "setoff_micro_usdc",
     "clearing_round_id",

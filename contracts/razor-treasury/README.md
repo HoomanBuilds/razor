@@ -133,7 +133,8 @@ Reconciliation actions, zero deposit unless noted:
 
 | Method | Authority and arguments |
 | --- | --- |
-| `report_settlement` | Owner or reporter: `{payment_id,attempt_id,outcome,receipt}`; outcome is `delivered`, `uncertain` or `refund_pending` |
+| `report_settlement` | Owner or reporter: `{payment_id,attempt_id,outcome,receipt,actual_output}`; outcome is `delivered`, `uncertain` or `refund_pending`. Full delivery requires a decimal destination output at least equal to the exact route output. `actual_output` may be null for unresolved or zero-delivery refund reports |
+| `report_partial_settlement` | Owner or reporter: `{payment_id,attempt_id,expected_quote_hash,actual_output,credited_amount,route_closed,receipt}`; binds the exact quote, positive short destination output, explicitly agreed partial microUSDC credit and terminal route closure |
 | `confirm_refund` | Owner or reporter: `{payment_id,attempt_id,refund_amount,receipt}` after `refund_pending`; queries actual token balance |
 | `recover_source_transfer` | Owner, 1 yoctoNEAR: `{payment_id,attempt_id,succeeded,receipt}`; only a still-`sending` attempt with conclusive source receipt evidence |
 | `cancel_payment` | Approver, 1 yoctoNEAR: `{payment_id}`; only obligations without a potentially delivering attempt |
@@ -142,7 +143,11 @@ Reconciliation actions, zero deposit unless noted:
 
 `ft_on_transfer({sender_id,amount,msg})` accepts empty messages and only the configured token predecessor. Its async balance query observes cash instead of trusting additive credits. If a source callback is pending, it accepts the deposit and leaves cash recognition to a later `refresh_balance`. Direct FT transfers that do not invoke `ft_on_transfer` also require `refresh_balance`.
 
-Payment states are `proposed`, `awaiting_approvals`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `razor`, version `1.0.0`.
+Payment states are `proposed`, `awaiting_approvals`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`, `partially_paid`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`, `partially_delivered`. Attempts retain `actual_output` in destination units and `credited_amount` in microUSDC. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `razor`, version `1.0.0`.
+
+Partial closure requires `route_closed: true`, an actual output strictly between zero and the quoted output, and an agreed credit strictly between zero and the original entitlement. The reporter's receipt cannot be reused. A previous observed output cannot decrease, and positive delivery cannot become a full-refund retry. The contract does not infer USDC value from a different asset's token units. Native NEAR treasury USDC credit must equal the actual output. The owner or appointed reporter is trusted to verify external delivery, its agreed value and terminal closure; this method is not a cross-chain proof verifier.
+
+A terminal partial releases no new funds, preserves the original face entitlement and all source spending, and blocks cancellation, retry and backup of that original. The application may prepare a separately approved remainder with a new payment ID and current recipient terms. The new contract state fields require a fresh deployment; immutable keyless children from an older build cannot be upgraded by deploying this WASM elsewhere.
 
 NEAR's independent asynchronous receipts require explicit callback recovery, as described in the [official cross-contract documentation](https://docs.near.org/smart-contracts/anatomy/crosscontract).
 
