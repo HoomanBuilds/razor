@@ -11,7 +11,7 @@ import { NATIVE_USDC } from "../src/lib/native-usdc";
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "razor-deploy-'"));
   const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
-  const entries = [["razor_treasury.wasm", "NEAR_TREASURY_CODE_HASH"], ["razor_factory.wasm", "NEAR_FACTORY_CODE_HASH"], ["razor_clearing.wasm", "NEAR_CLEARING_CODE_HASH"]];
+  const entries = [["razor_treasury.wasm", "NEAR_TREASURY_CODE_HASH"], ["razor_factory.wasm", "NEAR_FACTORY_CODE_HASH"], ["razor_clearing.wasm", "NEAR_CLEARING_CODE_HASH"], ["razor_billing.wasm", "RAZOR_BILLING_CODE_HASH"]];
   const artifacts = entries.map(([file, environmentKey], index) => {
     const bytes = index === 1 ? Buffer.concat([wasm, Buffer.from("embedded"), wasm, Buffer.from([0])]) : Buffer.concat([wasm, Buffer.from([index])]);
     writeFileSync(join(directory, file), bytes);
@@ -81,5 +81,22 @@ test("deployment plans reject a factory embedding another treasury even when all
     Object.assign(manifest.artifacts[0], { bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest) });
     writeFileSync(manifestFile, JSON.stringify(manifest));
     assert.throws(() => prepareDeployment(input), /exact treasury/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("optional billing deployment binds its dedicated account, public issuer key and reviewed artifact", () => {
+  const { directory, input } = fixture();
+  try {
+    const issuerPublicKey = `ed25519:${base58.encode(new Uint8Array(32).fill(7))}`;
+    const plan = prepareDeployment({ ...input, billingAccount: "billing.near", billingIssuerPublicKey: issuerPublicKey });
+    assert.equal(plan.steps.length, 3);
+    assert.equal(plan.steps[2].args.issuer_public_key, issuerPublicKey);
+    assert.equal(plan.steps[2].args.network, "mainnet");
+    assert.equal(plan.steps[2].args.token_contract, NATIVE_USDC.near);
+    assert.equal(plan.environment.RAZOR_BILLING_CONTRACT_ID, "billing.near");
+    assert.equal(plan.environment.RAZOR_BILLING_CODE_HASH, plan.artifacts[3].codeHash);
+    assert.throws(() => prepareDeployment({ ...input, billingAccount: "billing.near" }), /both/);
+    assert.throws(() => prepareDeployment({ ...input, billingAccount: input.ownerAccount, billingIssuerPublicKey: issuerPublicKey }), /distinct/);
+    assert.throws(() => prepareDeployment({ ...input, billingAccount: "billing.near", billingIssuerPublicKey: `ed25519:${base58.encode(new Uint8Array(64).fill(7))}` }), /public key/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

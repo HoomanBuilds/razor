@@ -8,6 +8,7 @@ import { decodeDataEncryptionKey } from "../identity/crypto";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { validNearAccount } from "../payments/near";
 import { NATIVE_USDC } from "../../lib/native-usdc";
+import { billingIssuer, billingSettings } from "../billing/chain";
 
 type Status = "pass" | "blocked" | "warning" | "not_checked" | "disabled";
 interface Check { id: string; stage: "configuration" | "remote" | "workflow"; status: Status; message: string }
@@ -86,6 +87,20 @@ export async function setupPreflight(options: Options = {}) {
   if (!env.RESEND_API_KEY && !env.NOTIFICATION_FROM_EMAIL) add("email", "disabled", "Optional email transport is disabled; in-app notifications remain available.");
   else add("email", env.RESEND_API_KEY && env.NOTIFICATION_FROM_EMAIL ? "pass" : "blocked", "Optional email requires both RESEND_API_KEY and NOTIFICATION_FROM_EMAIL. Domain verification and actual delivery remain separate.");
 
+  const billingMode=env.RAZOR_BILLING_MODE || "pilot";
+  add("billing-mode",billingMode==="pilot"?"warning":billingMode==="enforced"?"pass":"blocked","Pilot mode grants bounded complimentary Pro access. Enforced mode requires a paid period for new commercial operations; neither mode charges wallets automatically.");
+  let billingExpected: (ReturnType<typeof billingSettings> & {issuerPublicKey:string}) | null=null;
+  if(billingMode==="enforced" || ["RAZOR_BILLING_CONTRACT_ID","RAZOR_BILLING_CODE_HASH","RAZOR_BILLING_ISSUER_PRIVATE_KEY","RAZOR_BILLING_TESTNET_TOKEN_CONTRACT"].some(key=>Boolean(env[key]))) {
+    try {
+      const settings=billingSettings(env,artifactDirectory),{publicKey}=billingIssuer(env);
+      if([env.NEAR_FACTORY_ID,env.NEAR_CLEARING_ID].includes(settings.billingContract))throw new Error();
+      const path=resolve(artifactDirectory,"razor_billing.wasm");
+      if(existsSync(path) && base58.encode(createHash("sha256").update(readFileSync(path)).digest())!==settings.codeHash)throw new Error();
+      billingExpected={...settings,issuerPublicKey:publicKey};
+      add("billing-checkout","pass","Billing contract, token, reviewed code and dedicated quote issuer are configured. The issuer key only signs subscription offers; it cannot debit customer wallets.");
+    }catch{add("billing-checkout","blocked","Configure the dedicated billing contract, reviewed code hash and matching ed25519 invoice issuer key; testnet also requires its explicit billing token. Existing money recovery remains available.");}
+  }else add("billing-checkout","disabled","Paid checkout is not configured. Complimentary pilot access is not paid revenue.");
+
   if (options.remote && !failed("near-network") && !failed("near-rpc")) {
     const transport = options.fetch ?? fetch;
     const rpc = async <T>(method: string, params: unknown): Promise<T> => {
@@ -105,6 +120,17 @@ export async function setupPreflight(options: Options = {}) {
       add("remote-network", networkMatches ? "pass" : "blocked", networkMatches ? "The RPC reports the selected NEAR network." : "The RPC reports another NEAR network. Contract checks were skipped.", "remote");
     } catch { add("remote-network", "blocked", "The NEAR RPC network could not be verified. No signing or transfers were attempted.", "remote"); }
     if (networkMatches) {
+      if(billingExpected) {
+        try {
+          const block=await rpc<{header:{hash:string}}>("block",{finality:"final"});
+          if(!block.header?.hash)throw new Error();
+          const query=<T>(account:string,method:string)=>rpc<{result:number[]}>("query",{request_type:"call_function",block_id:block.header.hash,account_id:account,method_name:method,args_base64:Buffer.from(JSON.stringify(method==="storage_balance_of"?{account_id:billingExpected!.billingContract}:{})).toString("base64")}).then(value=>JSON.parse(Buffer.from(value.result).toString()) as T);
+          const code=await rpc<{code_hash:string}>("query",{request_type:"view_account",block_id:block.header.hash,account_id:billingExpected.billingContract});
+          const config=await query<{version:number;owner_id:string;network:string;token_contract:string;issuer_public_key:string;paused:boolean}>(billingExpected.billingContract,"get_config"),storage=await query<{total:string}|null>(billingExpected.tokenContract,"storage_balance_of");
+          if(code.code_hash!==billingExpected.codeHash || config.version!==1 || config.network!==network || config.token_contract!==billingExpected.tokenContract || config.issuer_public_key!==billingExpected.issuerPublicKey || !validNearAccount(config.owner_id) || config.owner_id===billingExpected.billingContract || config.paused!==false || !storage || !/^[1-9]\d*$/.test(storage.total))throw new Error();
+          add("remote-billing","pass","At one final NEAR block, billing code, network, token, quote issuer and token-storage registration match. No checkout or subscription payment was sent.","remote");
+        }catch{add("remote-billing","blocked","The billing deployment, invoice issuer, pause state or token storage could not be verified. Do not enable paid checkout until these match.","remote");}
+      }else add("remote-billing","not_checked","Complete billing checkout configuration before reading its deployment.","remote");
       let factoryToken: string | undefined;
       if (!failed("factory-account") && pins.has("factory") && pins.has("treasury")) {
         try {
@@ -147,6 +173,7 @@ export async function setupPreflight(options: Options = {}) {
     ["executor-journey", "Demonstrate scheduled exact-route execution and interruption recovery under a real bounded mandate."],
     ["private-ai-journey", "Demonstrate required model/gateway verification, fictional document review and retention/deletion on a real configured request."],
     ["email-journey", "If email is enabled, verify delivery to an authorized recipient. Provider acceptance alone is insufficient."],
+    ["subscription-journey", "Demonstrate a real subscription checkout, duplicate return, renewal, cancellation, refund and preserved financial recovery with final billing receipts."],
   ]) add(id, "not_checked", message, "workflow");
   return { configurationReady: !checks.some(check => check.stage === "configuration" && check.status === "blocked"), remoteChecksRequested: Boolean(options.remote), liveWorkflowsVerified: false, checks };
 }

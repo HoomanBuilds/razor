@@ -8,6 +8,7 @@ const artifacts = [
   ["razor_treasury.wasm", "NEAR_TREASURY_CODE_HASH"],
   ["razor_factory.wasm", "NEAR_FACTORY_CODE_HASH"],
   ["razor_clearing.wasm", "NEAR_CLEARING_CODE_HASH"],
+  ["razor_billing.wasm", "RAZOR_BILLING_CODE_HASH"],
 ].map(([file, environmentKey]) => {
   const bytes = readFileSync(new URL(file, directory));
   const digest = createHash("sha256").update(bytes).digest();
