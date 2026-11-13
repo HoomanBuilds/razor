@@ -41,7 +41,7 @@ async function requirePausedAndClear(access:AccessContext,state:Awaited<ReturnTy
   if(!state.chain.paused)throw new ApiError(409,"Pause the treasury on NEAR and check its confirmed state before transferring ownership","TREASURY_PAUSE_REQUIRED");
   if(row("SELECT r.id FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id WHERE p.organization_id=? AND r.status IN ('prepared','registered','applying') LIMIT 1",access.organizationId))throw new ApiError(409,"Reconcile or revoke active business-clearing rounds before transferring the treasury owner","OWNER_TRANSFER_CLEARING_UNRESOLVED");
   const balance=await view<{in_flight:string}>(state.config,"get_balance");
-  const active=row<{count:number}>("SELECT count(*) AS count FROM payout_attempts WHERE organization_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')",access.organizationId)!.count;
+  const active=row<{count:number}>("SELECT count(*) AS count FROM payout_attempts WHERE organization_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered','reported_partial')",access.organizationId)!.count;
   if(BigInt(balance.in_flight)>0n||active)throw new ApiError(409,"Resolve every active payout attempt and in-flight transfer before changing the treasury owner","OWNER_TRANSFER_ROUTES_UNRESOLVED");
   if(state.chain.retained_assets_enabled) {
     const assets=await view<Array<{in_flight:string}>>(state.config,"get_retained_assets");
