@@ -12,6 +12,8 @@ import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type Direct
 import { clientReserveTotals } from "../client-reserves/accounting";
 import { DestinationError, normalizeDestination } from "../../lib/recipient-destination";
 import { checkedApprovalStatus } from "../treasury-policy/approvals";
+import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
+import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -63,9 +65,10 @@ export function getTreasury(access: AccessContext) {
   requirePermission(access, "company:read");
   const current = balance(access.organizationId);
   const clients = clientReserveTotals(access.organizationId);
-  const totalReserved = BigInt(current.effectiveReserved) + BigInt(clients.clientReserved);
+  const linked = linkedFundingTotals(access.organizationId);
+  const totalReserved = BigInt(current.effectiveReserved) + BigInt(clients.clientReserved) + BigInt(linked.linkedFundingReserved);
   const available = BigInt(current.balance) - totalReserved;
-  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.effectiveReserved, ...clients,
+  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.effectiveReserved, ...clients, ...linked,
     totalReserved: totalReserved.toString(), reserveDeficit: (available < 0n ? -available : 0n).toString(), available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
 }
 
@@ -182,9 +185,19 @@ export function revalidatePaymentRecipient(access: AccessContext, paymentId: str
 
 export function approvePayment(access: AccessContext, paymentId: string): Payment {
   requirePermission(access, "payments:approve");
+  return applyApprovalReservation(access, paymentId, false);
+}
+
+export function reserveApprovedPayment(access: AccessContext, paymentId: string): Payment {
+  if (!access.permissions.includes("payments:approve")) requirePermission(access, "payments:prepare");
+  return applyApprovalReservation(access, paymentId, true);
+}
+
+function applyApprovalReservation(access: AccessContext, paymentId: string, existingOnly: boolean): Payment {
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
+    if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
     const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string };
     if (metadata.billId) {
       const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, paymentId);
@@ -202,9 +215,16 @@ export function approvePayment(access: AccessContext, paymentId: string): Paymen
     const current = balance(access.organizationId);
     const required = atomic(payment.amount) + atomic(payment.max_fee, true) - atomic(payment.total_spent, true);
     if (required < atomic(payment.amount)) throw new ApiError(409, "The approved fee budget is exhausted", "COST_LIMIT_EXCEEDED");
-    const funded = BigInt(current.balance) - BigInt(current.effectiveReserved) - BigInt(clientReserveTotals(access.organizationId).clientReserved) >= required;
-    if (funded && payment.reserved_amount === "0") ledger(access.organizationId, `reserve:${paymentId}:${id()}`, "payment_reserved", required.toString(), current.balance, (BigInt(current.reserved) + required).toString(), { paymentId });
+    const positions = fundingPositions(access.organizationId), own = positions.find(position => position.payment.id === paymentId);
+    if (own && !own.termsMatch) throw new ApiError(409, "The obligation changed after funding was committed. Reconcile it before reserving cash", "FUNDING_TERMS_CHANGED");
+    const linkedReserved = positions.reduce((sum, position) => sum + position.held, 0n);
+    const available = BigInt(current.balance) - BigInt(current.effectiveReserved) - BigInt(clientReserveTotals(access.organizationId).clientReserved) - linkedReserved + BigInt(payment.reserved_amount) + (own?.held ?? 0n) + (existingOnly ? own?.clientCash ?? 0n : 0n);
+    const funded = available >= required;
+    const reservationDelta = (funded ? required : 0n) - BigInt(payment.reserved_amount);
+    if (BigInt(current.reserved) + reservationDelta < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");
+    if (reservationDelta !== 0n) ledger(access.organizationId, `reserve:${paymentId}:${id()}`, reservationDelta > 0n ? "payment_reserved" : "reservation_released", (reservationDelta < 0n ? -reservationDelta : reservationDelta).toString(), current.balance, (BigInt(current.reserved) + reservationDelta).toString(), { paymentId, clientPrincipalExchanged: existingOnly ? own?.clientCash.toString() ?? "0" : "0", linkedFundingExchanged: own?.held.toString() ?? "0", classification: existingOnly ? "existing_approved_budget_reservation" : "human_approval" });
     getDb().prepare("UPDATE payments SET status=?,approved_by=COALESCE(approved_by,?),approved_at=COALESCE(approved_at,?),reserved_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(funded ? "approved" : "approved_unfunded", access.userId, now(), funded ? required.toString() : "0", funded ? null : "Fund the payment entitlement and approved costs", now(), paymentId);
+    if (funded && existingOnly && own && own.clientCash > 0n) getDb().prepare("UPDATE client_reserves SET state='allocated',allocated_at=COALESCE(allocated_at,?),updated_at=? WHERE organization_id=? AND payment_id=? AND state!='released'").run(now(), now(), access.organizationId, paymentId);
     return getPayment(access, paymentId);
   });
 }
@@ -577,12 +597,14 @@ export async function prepareRefundConfirmation(access: AccessContext, attemptId
 export async function prepareFunding(access: AccessContext, input: { originAsset: string; amount: string; refundAddress: string; reference: string; paymentId?: string; exactOutput?: boolean; dry?: boolean }) {
   requirePermission(access, "payments:prepare");
   assertRunning(access);
+  if (input.paymentId) throw new ApiError(409, "Open this approved obligation's pay-from-wallet task to quote its remaining need", "PAYMENT_FUNDING_TASK_REQUIRED");
   const config = configFor(access, true);
   if (!input.reference.trim() || input.reference.length > 200) throw new ApiError(422, "A stable funding reference is required", "INVALID_REFERENCE");
   const existing = row<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND reference=?", access.organizationId, input.reference);
   if (existing) {
     const request = (JSON.parse(existing.quote) as QuoteResponse).quoteRequest;
     if (existing.origin_asset !== input.originAsset || existing.payment_id !== (input.paymentId ?? null) || request.amount !== input.amount || request.refundTo !== input.refundAddress || request.swapType !== (input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT")) throw new ApiError(409, "Funding reference already has different terms", "IDEMPOTENCY_CONFLICT");
+    if (["refunded_verified", "refunded_attested", "closed_unsent", "cancelled"].includes(existing.status)) throw new ApiError(409, "This funding reference is closed. Its history cannot be reused for another deposit", "FUNDING_CLOSED");
     if (existing.source_tx_hash || existing.status === "confirmed" || existing.provider_status && existing.provider_status !== "PENDING_DEPOSIT") throw new ApiError(409, "This funding leg has already started. Reconcile it before preparing another deposit", "FUNDING_ALREADY_STARTED");
     assertCanStartDeposit(JSON.parse(existing.quote));
     return existing;
@@ -591,7 +613,6 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   const sourceToken = tokens.find((token) => token.assetId === input.originAsset);
   if (!sourceToken) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
   const destination = nativeUsdc(tokens, "near");
-  if (input.paymentId) getPayment(access, input.paymentId);
   const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "razor:funding" });
   if (input.dry) return { dry: true, quote };
   const fundingId = id();
@@ -609,7 +630,7 @@ export async function reconcileFunding(access: AccessContext, fundingId: string,
   requirePermission(access, "payments:prepare");
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
   if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
-  if (funding.status === "confirmed") return { funding, treasury: await syncTreasury(access) };
+  if (["confirmed", "refunded_verified", "refunded_attested"].includes(funding.status)) return { funding, treasury: await syncTreasury(access) };
   if (sourceTxHash) {
     if (funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
     getDb().prepare("UPDATE funding_legs SET source_tx_hash=?,updated_at=? WHERE id=?").run(sourceTxHash, now(), fundingId);
@@ -623,11 +644,6 @@ export async function reconcileFunding(access: AccessContext, fundingId: string,
   assertSameQuote(JSON.parse(funding.quote), status.quoteResponse);
   const onchain = await syncTreasury(access);
   const deliveredHash = status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null;
-  const completed = status.status === "SUCCESS" && !!deliveredHash;
-  getDb().prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=?,updated_at=? WHERE id=?").run(completed ? "reported_delivered" : providerOutcome(status.status), status.status, deliveredHash, now(), fundingId);
-  if (completed && funding.payment_id) {
-    const payment = getPayment(access, funding.payment_id);
-    if (payment.status === "approved_unfunded" && access.permissions.includes("payments:approve")) approvePayment(access, payment.id);
-  }
+  getDb().prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=?,updated_at=? WHERE id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested')").run(fundingStateAfterProvider(funding, status.status), status.status, deliveredHash, now(), fundingId);
   return { funding: row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId), treasury: onchain };
 }
