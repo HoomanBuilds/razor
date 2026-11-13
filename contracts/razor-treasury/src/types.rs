@@ -130,6 +130,8 @@ pub struct Payment {
 
 #[near(serializers = [json])]
 pub struct ConfigView {
+    pub retained_assets_enabled: bool,
+    pub max_retained_assets: u32,
     pub owner_id: AccountId,
     pub token_contract: AccountId,
     pub paused: bool,

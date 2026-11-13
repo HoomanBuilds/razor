@@ -179,6 +179,7 @@ fn source_sent_is_not_paid_and_duplicate_execution_is_rejected() {
     assert_eq!(treasury.get_balance().balance, U128(898));
     assert!(!treasury.on_transfer_result("payment".into(), "attempt-1".into()));
     assert_eq!(treasury.get_balance().in_flight, U128(0));
+    assert_eq!(treasury.unsettled_payments, 1);
 }
 
 #[test]
@@ -214,6 +215,7 @@ fn refund_reservation_uses_actual_cash_and_cumulative_fee_budget() {
     assert_eq!(treasury.get_balance().available, U128(890));
     assert!(!treasury.on_refund_verified("payment".into(), "attempt-1".into(), epoch));
     assert_eq!(treasury.get_balance().reserved, U128(108));
+    assert_eq!(treasury.unsettled_payments, 0);
 }
 
 #[test]
@@ -233,6 +235,7 @@ fn failed_transfer_does_not_overreserve_reused_fee_headroom() {
     assert_eq!(treasury.get_balance().balance, U128(100));
     assert_eq!(treasury.get_balance().reserved, U128(0));
     assert_eq!(treasury.get_daily_spend(U64(NOW / DAY_MS)), U128(0));
+    assert_eq!(treasury.unsettled_payments, 0);
 }
 
 #[test]
@@ -265,6 +268,82 @@ fn direct_transfer_callback_confirms_delivery() {
         treasury.get_payment("payment".into()).unwrap().status,
         PaymentStatus::Paid
     );
+    assert_eq!(treasury.unsettled_payments, 0);
+}
+
+#[test]
+fn ownership_recovery_requires_pause_settled_transfers_and_reachable_quorum() {
+    let mut treasury = setup(false);
+    call("owner.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("new.testnet"))
+        ))
+        .is_err()
+    );
+    treasury.set_role(account("approver.testnet"), "approver".into(), true);
+    treasury.set_approval_policy(
+        vec![ApprovalTier {
+            up_to: U128(1_000),
+            required_approvals: 2,
+        }],
+        U64(treasury.policy_version),
+    );
+    treasury.set_paused(true);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("approver.testnet"))
+        ))
+        .is_err()
+    );
+    assert_eq!(treasury.get_config().owner_id, account("owner.testnet"));
+    treasury.transfer_ownership(account("new.testnet"));
+    assert_eq!(treasury.get_config().owner_id, account("new.testnet"));
+}
+
+#[test]
+fn ownership_recovery_waits_for_final_settlement_even_after_source_callback() {
+    let mut treasury = setup(false);
+    prepare(&mut treasury, "attempt-1", false, 102);
+    execute(&mut treasury, "attempt-1");
+    call("owner.testnet", 1);
+    treasury.set_paused(true);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("new.testnet"))
+        ))
+        .is_err()
+    );
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result("payment".into(), "attempt-1".into()));
+    call("owner.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("new.testnet"))
+        ))
+        .is_err()
+    );
+    treasury.report_settlement(
+        "payment".into(),
+        "attempt-1".into(),
+        SettlementOutcome::Uncertain,
+        "uncertain-final-receipt".into(),
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("new.testnet"))
+        ))
+        .is_err()
+    );
+    treasury.report_settlement(
+        "payment".into(),
+        "attempt-1".into(),
+        SettlementOutcome::Delivered,
+        "delivered-final-receipt".into(),
+    );
+    assert_eq!(treasury.unsettled_payments, 0);
+    treasury.transfer_ownership(account("new.testnet"));
+    assert_eq!(treasury.get_config().owner_id, account("new.testnet"));
 }
 
 #[test]
@@ -610,4 +689,297 @@ fn invalid_tier_shapes_and_changed_hash_are_rejected() {
             .payment_collected,
         1
     );
+}
+
+fn register_retained(treasury: &mut Treasury) {
+    call("owner.testnet", 1);
+    treasury.set_retained_asset(
+        account("wrapped.testnet"),
+        "nep141:wrapped.testnet".into(),
+        "WRAP".into(),
+        8,
+        true,
+    );
+}
+
+#[test]
+fn ownership_recovery_waits_for_retained_withdrawal_callbacks() {
+    let mut treasury = setup(false);
+    register_retained(&mut treasury);
+    drop(treasury.refresh_retained_balance(account("wrapped.testnet")));
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(500)).unwrap(),
+    ));
+    assert!(treasury.on_retained_balance_sync(account("wrapped.testnet"), epoch));
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    call("owner.testnet", 1);
+    drop(treasury.withdraw_retained_asset(
+        account("wrapped.testnet"),
+        account("owner.testnet"),
+        U128(100),
+        epoch,
+    ));
+    treasury.set_paused(true);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.transfer_ownership(account("new.testnet"))
+        ))
+        .is_err()
+    );
+    callback(PromiseResult::Failed);
+    assert!(treasury.on_retained_withdraw_result(account("wrapped.testnet"), U64(1)));
+    call("owner.testnet", 1);
+    treasury.transfer_ownership(account("new.testnet"));
+    assert_eq!(treasury.get_config().owner_id, account("new.testnet"));
+}
+
+#[test]
+fn retained_deposits_observe_actual_ft_quantity_without_crediting_payment_cash() {
+    let mut treasury = setup(false);
+    register_retained(&mut treasury);
+    call("wrapped.testnet", 0);
+    drop(treasury.ft_on_transfer(
+        account("depositor.testnet"),
+        U128(500),
+        "razor:retain".into(),
+    ));
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    assert_eq!(
+        treasury
+            .get_retained_asset(account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(0)
+    );
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(450)).unwrap(),
+    ));
+    assert_eq!(
+        treasury.on_retained_deposit_sync(account("wrapped.testnet"), epoch),
+        U128(0)
+    );
+    assert_eq!(
+        treasury
+            .get_retained_asset(account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(450)
+    );
+    assert_eq!(treasury.get_balance().balance, U128(1_000));
+    assert_eq!(treasury.get_balance().reserved, U128(110));
+    call("unknown.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.ft_on_transfer(
+            account("depositor.testnet"),
+            U128(1),
+            "razor:retain".into()
+        )))
+        .is_err()
+    );
+    call("usdc.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.ft_on_transfer(
+            account("depositor.testnet"),
+            U128(1),
+            "razor:retain".into()
+        )))
+        .is_err()
+    );
+}
+
+#[test]
+fn retained_probes_and_withdrawal_callbacks_are_versioned_and_idempotent() {
+    let mut treasury = setup(false);
+    register_retained(&mut treasury);
+    call("reader.testnet", 0);
+    drop(treasury.refresh_retained_balance(account("wrapped.testnet")));
+    let older = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    drop(treasury.refresh_retained_balance(account("wrapped.testnet")));
+    let current = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(500)).unwrap(),
+    ));
+    assert!(!treasury.on_retained_balance_sync(account("wrapped.testnet"), older));
+    assert!(treasury.on_retained_balance_sync(account("wrapped.testnet"), current));
+    assert!(!treasury.on_retained_balance_sync(account("wrapped.testnet"), current));
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    call("owner.testnet", 1);
+    drop(treasury.withdraw_retained_asset(
+        account("wrapped.testnet"),
+        account("owner.testnet"),
+        U128(100),
+        epoch,
+    ));
+    let first_id = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .withdrawal
+        .unwrap()
+        .id;
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.refresh_retained_balance(account("wrapped.testnet"))
+        ))
+        .is_err()
+    );
+    callback(PromiseResult::Failed);
+    assert!(treasury.on_retained_withdraw_result(account("wrapped.testnet"), first_id));
+    assert!(!treasury.on_retained_withdraw_result(account("wrapped.testnet"), first_id));
+    assert_eq!(
+        treasury
+            .get_retained_asset(account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(500)
+    );
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    call("owner.testnet", 1);
+    drop(treasury.withdraw_retained_asset(
+        account("wrapped.testnet"),
+        account("owner.testnet"),
+        U128(200),
+        epoch,
+    ));
+    let second_id = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .withdrawal
+        .unwrap()
+        .id;
+    callback(PromiseResult::Failed);
+    assert!(!treasury.on_retained_withdraw_result(account("wrapped.testnet"), first_id));
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_retained_withdraw_result(account("wrapped.testnet"), second_id));
+    assert!(!treasury.on_retained_withdraw_result(account("wrapped.testnet"), second_id));
+    assert_eq!(
+        treasury
+            .get_retained_asset(account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(300)
+    );
+    assert_eq!(treasury.get_balance().balance, U128(1_000));
+}
+
+#[test]
+fn retained_assets_require_owner_identity_and_pause_but_retirement_preserves_withdrawal() {
+    let mut treasury = setup(false);
+    call("agent.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_retained_asset(
+            account("wrapped.testnet"),
+            "nep141:wrapped.testnet".into(),
+            "WRAP".into(),
+            8,
+            true
+        )))
+        .is_err()
+    );
+    call("owner.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_retained_asset(
+            account("usdc.testnet"),
+            "nep141:usdc.testnet".into(),
+            "USDC".into(),
+            6,
+            true
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_retained_asset(
+            account("wrapped.testnet"),
+            "wrong-token".into(),
+            "WRAP".into(),
+            8,
+            true
+        )))
+        .is_err()
+    );
+    register_retained(&mut treasury);
+    register_retained(&mut treasury);
+    assert_eq!(treasury.get_retained_assets().len(), 1);
+    call("wrapped.testnet", 0);
+    drop(treasury.ft_on_transfer(
+        account("depositor.testnet"),
+        U128(500),
+        "razor:retain".into(),
+    ));
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(500)).unwrap(),
+    ));
+    treasury.on_retained_deposit_sync(account("wrapped.testnet"), epoch);
+    call("owner.testnet", 1);
+    treasury.set_retained_asset(
+        account("wrapped.testnet"),
+        "nep141:wrapped.testnet".into(),
+        "WRAP".into(),
+        8,
+        false,
+    );
+    treasury.set_paused(true);
+    let epoch = treasury
+        .get_retained_asset(account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.withdraw_retained_asset(
+            account("wrapped.testnet"),
+            account("owner.testnet"),
+            U128(1),
+            epoch
+        )))
+        .is_err()
+    );
+    treasury.set_paused(false);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_retained_asset(
+            account("wrapped.testnet"),
+            "nep141:wrapped.testnet".into(),
+            "WRAP".into(),
+            9,
+            true
+        )))
+        .is_err()
+    );
+    drop(treasury.withdraw_retained_asset(
+        account("wrapped.testnet"),
+        account("owner.testnet"),
+        U128(500),
+        epoch,
+    ));
+    assert_eq!(
+        treasury
+            .get_retained_asset(account("wrapped.testnet"))
+            .unwrap()
+            .in_flight,
+        U128(500)
+    );
+    assert_eq!(treasury.get_balance().reserved, U128(110));
 }
