@@ -7,7 +7,7 @@ This review covers the current Razor application and its NEAR authorization boun
 - SQLite database, WAL and shared-memory files use owner-only `0600` permissions. Newly created database directories use `0700`. Opening an existing database tightens its file permissions without discarding records or migrations.
 - API responses use `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`, including authentication and error responses.
 - Application documents disable referrer disclosure and indexing. Invitation and funding URLs still contain sensitive bearer tokens; access must remain scoped and expiry enforced.
-- Wallet dependencies receive compatible security patches and reviewed compatibility checks. Remaining upstream findings are tracked separately; a successful build does not clear a dependency advisory.
+- Wallet dependencies receive compatible security patches and reviewed compatibility checks. Remaining upstream findings are tracked in the [dependency review](specs/dependency-security.md); a successful build does not clear a dependency advisory.
 
 ## Reviewed boundaries
 
