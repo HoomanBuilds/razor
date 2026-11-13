@@ -358,7 +358,7 @@ async function buildWalletActions(access: AccessContext, config: TreasuryConfig,
   const recipientMatches = currentRecipient?.active && currentRecipient.backup_consent === !!recipient.fallback_consent && sameDestination(currentRecipient.primary, primary) && sameDestination(currentRecipient.backup, backupDestination);
   if (existing && (!recipientMatches || existing.recipient_version !== currentRecipient?.version)) throw new ApiError(409, "The onchain recipient changed after approval. Cancel and prepare a new obligation", "ONCHAIN_RECIPIENT_CHANGED");
   if (existing && !["proposed", "awaiting_approvals", "approved", "held", "retryable"].includes(existing.status)) throw new ApiError(409, "Reconcile the existing onchain delivery before resuming", "ONCHAIN_ATTEMPT_UNRESOLVED");
-  const paymentExpiry = existing?.expires_at_ms ?? String(Date.parse(payment.approved_at!) + 30 * 86_400_000);
+  const paymentExpiry = existing?.expires_at_ms ?? String(Math.max(Date.parse(payment.approved_at!) + 30 * 86_400_000, scheduledTime + 2 * 60 * 60_000));
   if (BigInt(paymentExpiry) < BigInt(expires)) throw new ApiError(409, "The obligation expires before this route. Cancel and review a new obligation", "APPROVAL_EXPIRED");
   const chainAttempt = existing?.attempts.find((attempt) => attempt.id === attemptId);
   if (existing?.attempts.some((attempt) => attempt.id !== attemptId && !["refunded", "transfer_failed", "discarded"].includes(attempt.status))) throw new ApiError(409, "An earlier onchain source may still deliver", "ONCHAIN_ATTEMPT_UNRESOLVED");

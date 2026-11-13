@@ -60,6 +60,16 @@ test("wallet plans separate preparation, distinct approval and execution, includ
     assert.equal(prepared.stage, "prepare");
     assert.deepEqual(prepared.walletActions.flatMap((tx) => tx.actions.map((item) => item.params.methodName)), ["propose_payment", "storage_deposit", "create_attempt"]);
     assert.equal(prepared.walletActions[1].actions[0].params.deposit, "1250000000000000000000");
+    const laterSchedule = new Date(Date.now() + 40 * 86_400_000).toISOString();
+    const laterQuote = { ...JSON.parse(quote), deadline: new Date(Date.parse(laterSchedule) + 3_600_000).toISOString() };
+    db.prepare("UPDATE payments SET scheduled_for=? WHERE id=?").run(laterSchedule, payment.id);
+    db.prepare("UPDATE payout_attempts SET quote=? WHERE id='attempt'").run(JSON.stringify(laterQuote));
+    const futurePlan = await resumeAttempt(access, "attempt");
+    const futureProposal = futurePlan.walletActions.flatMap(tx => tx.actions).find(item => item.params.methodName === "propose_payment")!.params.args as { expires_at_ms: string; not_before_ms: string };
+    assert(BigInt(futureProposal.expires_at_ms) > BigInt(Date.parse(laterQuote.deadline)));
+    assert.equal(futureProposal.not_before_ms, String(Date.parse(laterSchedule)));
+    db.prepare("UPDATE payments SET scheduled_for=NULL WHERE id=?").run(payment.id);
+    db.prepare("UPDATE payout_attempts SET quote=? WHERE id='attempt'").run(quote);
     registered = true;
     chain = { id: payment.id, recipient_id: "recipient", recipient_version: "1", reference: `razor:${payment.id}`, amount: payment.amount, max_fee: payment.max_fee, incurred_cost: "0", reservation: "1001000", expires_at_ms: String(Date.now() + 86_400_000), not_before_ms: "0", policy_version: "1", approvals: [], status: "proposed", attempts: [{ id: "attempt", authorized: false, approvals: [], approval_policy_version: "1", use_backup: false, status: "prepared", refund_amount: "0", receipt: null, route: { kind: "direct", source_receiver: "payee.near", input_amount: "1000000", output_amount: "1000000", quote_id: "direct", quote_hash: createHash("sha256").update(quote).digest("hex"), deadline_ms: deadline } }] };
     const approval = await prepareAttemptApproval({ ...access, permissions: access.permissions.filter((item) => item !== "payments:execute") }, "attempt");
