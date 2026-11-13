@@ -23,6 +23,7 @@ export interface AgentMandate {
 }
 export interface TemplatePayment {
   recipientId: string; amount: string; maxFee: string; recipientVersion: number;
+  baseAmount?: string; bonusAmount?: string; adjustmentAmount?: string; note?: string;
 }
 export interface TemplateSnapshot {
   fingerprint: string; total: string; payments: TemplatePayment[];

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { formatInTimeZone } from "date-fns-tz";
 import { companyTimeToIso } from "@/lib/company-time";
 import { api, RequestError } from "@/lib/api";
-import { dateLabel, microUsd, usd } from "@/lib/format";
+import { dateLabel, microUsd, usdcInput, usd } from "@/lib/format";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
 import type {
   AgentMandate,
@@ -26,6 +27,7 @@ import {
 interface Overview {
   paused: boolean;
   canManage: boolean;
+  canManageMandate: boolean;
   unread: number;
   worker: {
     configured: boolean;
@@ -50,6 +52,13 @@ interface Overview {
   };
 }
 
+interface PageInfo { page: number; pageSize: number; total: number; hasMore: boolean }
+
+function PageControls({ value, loading, label, change }: { value: PageInfo | null; loading: boolean; label: string; change: (page: number) => void }) {
+  if (!value) return null;
+  return <nav aria-label={label} className="mt-4 flex flex-wrap items-center gap-3 text-sm"><p className="mr-auto text-xs text-muted-foreground">{value.total ? (value.page - 1) * value.pageSize + 1 : 0}-{Math.min(value.page * value.pageSize, value.total)} of {value.total}</p><button type="button" className="text-primary disabled:opacity-50" disabled={loading || value.page <= 1} onClick={()=>change(value.page - 1)}>Previous</button><span>Page {value.page}</span><button type="button" className="text-primary disabled:opacity-50" disabled={loading || !value.hasMore} onClick={()=>change(value.page + 1)}>Next</button></nav>;
+}
+
 function amount(value: FormDataEntryValue | null) {
   try {
     return microUsd(String(value));
@@ -61,7 +70,7 @@ function amount(value: FormDataEntryValue | null) {
 export function OperationsPanel() {
   const { base, organization, revision, refresh, navigate, notify } =
     useWorkspace();
-  const canRead=!!organization.permissions?.includes("payments:read"),canPrepare=!!organization.permissions?.includes("payments:prepare");
+  const canRead=!!organization.permissions?.includes("payments:read"),canPrepare=!!organization.permissions?.includes("payments:prepare"),canPurge=!!organization.permissions?.includes("documents:manage");
   const resource = useResource<Overview>(
     canRead?`${base}/operations/overview`:null,
     revision,
@@ -69,7 +78,24 @@ export function OperationsPanel() {
   const { busy, error, run } = useAction();
   const [kind, setKind] = useState<"bill" | "payroll">("bill");
   const [cadence, setCadence] = useState<"days" | "months">("months");
+  const [jobsPage, setJobsPage] = useState(1), [rulesPage, setRulesPage] = useState(1), [noticesPage, setNoticesPage] = useState(1), [sourcesPage, setSourcesPage] = useState(1);
+  const [jobStatus, setJobStatus] = useState<"all" | "attention" | "pending" | "completed">("all");
+  const [ruleStatus, setRuleStatus] = useState<"all" | "active" | "paused" | "held">("all");
+  const [noticeStatus, setNoticeStatus] = useState<"all" | "unread">("all");
+  const jobs = useResource<PageInfo & {jobs: Overview["jobs"]}>(canRead ? `${base}/operations/jobs?page=${jobsPage}&pageSize=25&status=${jobStatus}` : null, revision);
+  const rules = useResource<PageInfo & {recurring: RecurringRuleView[]}>(canRead ? `${base}/operations/recurring?page=${rulesPage}&pageSize=25&status=${ruleStatus}` : null, revision);
+  const notices = useResource<PageInfo & {notices: Notice[]}>(canRead ? `${base}/operations/notices?page=${noticesPage}&pageSize=25&status=${noticeStatus}` : null, revision);
+  const sources = useResource<PageInfo & {templates: {id:string;reference:string}[]}>(canRead && canPrepare && resource.data?.canManage ? `${base}/operations/templates?kind=${kind}&page=${sourcesPage}&pageSize=25` : null, revision);
   const data = resource.data;
+  useEffect(() => {
+    const clamp = (value: PageInfo | null, current: number, update: (page: number) => void) => {
+      if (value && current > Math.max(1, Math.ceil(value.total / value.pageSize))) update(Math.max(1, Math.ceil(value.total / value.pageSize)));
+    };
+    clamp(jobs.data, jobsPage, setJobsPage);
+    clamp(rules.data, rulesPage, setRulesPage);
+    clamp(notices.data, noticesPage, setNoticesPage);
+    clamp(sources.data, sourcesPage, setSourcesPage);
+  }, [jobs.data, jobsPage, rules.data, rulesPage, notices.data, noticesPage, sources.data, sourcesPage]);
   if(!canRead)return null;
   return (
     <div className="grid gap-6">
@@ -186,7 +212,7 @@ export function OperationsPanel() {
                     className={control}
                     value={kind}
                     onChange={(event) =>
-                      setKind(event.target.value as "bill" | "payroll")
+                      { setKind(event.target.value as "bill" | "payroll"); setSourcesPage(1); }
                     }
                   >
                     <option value="bill">Approved bill</option>
@@ -194,17 +220,16 @@ export function OperationsPanel() {
                   </select>
                 </Field>
                 <Field label="Approved source">
-                  <select key={kind} className={control} name="source" required>
+                  <select key={`${kind}:${sourcesPage}`} className={control} name="source" required disabled={sources.loading}>
                     <option value="">Choose a source</option>
-                    {(kind === "bill"
-                      ? data.templates.bills
-                      : data.templates.payroll
-                    ).map((source) => (
+                    {sources.data?.templates.map((source) => (
                       <option key={source.id} value={source.id}>
                         {source.reference}
                       </option>
                     ))}
                   </select>
+                  {sources.error && <p role="alert" className="mt-2 text-xs text-destructive">{sources.error}</p>}
+                  <PageControls value={sources.data} loading={sources.loading} label="Approved template sources" change={setSourcesPage}/>
                 </Field>
                 <Field label="Repeat by">
                   <select className={control} value={cadence} onChange={event => setCadence(event.target.value as "days" | "months")}><option value="months">Calendar months</option><option value="days">Calendar days</option></select>
@@ -246,7 +271,9 @@ export function OperationsPanel() {
                 </div>
               </form>
             )}
-            {!data.recurring.length ? (
+            <div className="mb-4 max-w-xs"><Field label="Template status"><select className={control} value={ruleStatus} onChange={event=>{setRuleStatus(event.target.value as typeof ruleStatus);setRulesPage(1);}}><option value="all">All templates</option><option value="active">Active templates</option><option value="paused">Paused templates</option><option value="held">Needs review</option></select></Field></div>
+            {rules.error && <p role="alert" className="mb-3 text-sm text-destructive">{rules.error}</p>}
+            {rules.loading ? <Empty>Loading recurring templates...</Empty> : !rules.data?.recurring.length ? (
               <Empty>
                 Approve a bill or pay run, then use it as a recurring draft
                 template.
@@ -262,7 +289,7 @@ export function OperationsPanel() {
                   "Action",
                 ]}
               >
-                {data.recurring.map((rule) => (
+                {rules.data.recurring.map((rule) => (
                   <tr key={rule.id}>
                     <td className="capitalize">{rule.kind}</td>
                     <td>{rule.cadence === "months" ? `${rule.interval_months} months${rule.month_end ? ", month end" : ""}` : `${rule.interval_days} days`}</td>
@@ -300,16 +327,19 @@ export function OperationsPanel() {
                 ))}
               </DataTable>
             )}
+            <PageControls value={rules.data} loading={rules.loading} label="Recurring templates" change={setRulesPage}/>
           </Panel>
           <Panel
             title="Operations inbox"
             description="Notices are visible to the relevant company roles. Reading one does not dismiss it for another teammate."
           >
-            {!data.notices.length ? (
+            <div className="mb-4 max-w-xs"><Field label="Notice status"><select className={control} value={noticeStatus} onChange={event=>{setNoticeStatus(event.target.value as typeof noticeStatus);setNoticesPage(1);}}><option value="all">All notices</option><option value="unread">Unread notices</option></select></Field></div>
+            {notices.error && <p role="alert" className="mb-3 text-sm text-destructive">{notices.error}</p>}
+            {notices.loading ? <Empty>Loading operations notices...</Empty> : !notices.data?.notices.length ? (
               <Empty>Due payments and recurring drafts will appear here.</Empty>
             ) : (
               <div className="divide-y">
-                {data.notices.map((notice) => (
+                {notices.data.notices.map((notice) => (
                   <article
                     key={notice.id}
                     className="flex flex-wrap items-start justify-between gap-4 py-4 first:pt-0"
@@ -356,12 +386,15 @@ export function OperationsPanel() {
                 ))}
               </div>
             )}
+            <PageControls value={notices.data} loading={notices.loading} label="Operations notices" change={setNoticesPage}/>
           </Panel>
           <Panel
             title="Work queue"
             description="Queued work survives restarts. Awaiting-wallet and paused jobs stay visible until their conditions change."
           >
-            {!data.jobs.length ? (
+            <div className="mb-4 max-w-xs"><Field label="Work status"><select className={control} value={jobStatus} onChange={event=>{setJobStatus(event.target.value as typeof jobStatus);setJobsPage(1);}}><option value="all">All work</option><option value="attention">Needs attention</option><option value="pending">Queued or running</option><option value="completed">Completed work</option></select></Field></div>
+            {jobs.error && <p role="alert" className="mb-3 text-sm text-destructive">{jobs.error}</p>}
+            {jobs.loading ? <Empty>Loading durable work queue...</Empty> : !jobs.data?.jobs.length ? (
               <Empty>
                 Check due work to populate the queue. A background worker can
                 keep it current.
@@ -370,7 +403,7 @@ export function OperationsPanel() {
               <DataTable
                 columns={["Work", "State", "Next check", "Details", "Action"]}
               >
-                {data.jobs.map((job) => {
+                {jobs.data.jobs.map((job) => {
                   const detail = job.result
                     ? (JSON.parse(job.result) as {
                         reason?: string;
@@ -425,12 +458,13 @@ export function OperationsPanel() {
                 })}
               </DataTable>
             )}
+            <PageControls value={jobs.data} loading={jobs.loading} label="Work queue" change={setJobsPage}/>
           </Panel>
-          {data.canManage && (
             <Panel
               title="Execution controls"
               description="A worker can submit an exact route only after its onchain approval. It cannot approve a new quote or change the recipient."
             >
+              {data.mandate && <div className="mb-4 grid gap-2 text-sm"><p>Saved executor: {data.mandate.executor_account_id}. Source ceiling: {usd(data.mandate.max_amount)}.</p><p>Expires {dateLabel(data.mandate.expires_at, organization.timezone)}. Each exact route still requires its own NEAR approvals.</p><Status value={Date.parse(data.mandate.expires_at) <= Date.now() ? "expired" : data.mandate.enabled ? "enabled" : "paused"}/></div>}
               {data.worker.accountId ? (
                 <>
                   <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -441,11 +475,10 @@ export function OperationsPanel() {
                       value={data.worker.accountId}
                       network={data.worker.network ?? undefined}
                     />
-                    <Status
-                      value={data.mandate?.enabled ? "active" : "paused"}
-                    />
+                    <Status value={data.mandate && Date.parse(data.mandate.expires_at) <= Date.now() ? "expired" : data.mandate?.enabled ? "active" : "paused"} />
                   </div>
-                  <form
+                  {data.canManageMandate && <form
+                    key={data.mandate?.updated_at ?? "new-mandate"}
                     className="grid gap-4 sm:grid-cols-3"
                     onSubmit={(event) => {
                       event.preventDefault();
@@ -474,6 +507,7 @@ export function OperationsPanel() {
                       <input
                         name="cap"
                         className={control}
+                        defaultValue={data.mandate ? usdcInput(data.mandate.max_amount) : ""}
                         inputMode="decimal"
                         required
                       />
@@ -482,6 +516,7 @@ export function OperationsPanel() {
                       <input
                         name="expiry"
                         className={control}
+                        defaultValue={data.mandate ? formatInTimeZone(data.mandate.expires_at, organization.timezone, "yyyy-MM-dd'T'HH:mm") : ""}
                         type="datetime-local"
                         required
                       />
@@ -501,8 +536,8 @@ export function OperationsPanel() {
                         Save execution bounds
                       </Action>
                     </div>
-                  </form>
-                  <div className="mt-5 flex flex-wrap gap-3">
+                  </form>}
+                  {data.canManageMandate && <div className="mt-5 flex flex-wrap gap-3">
                     {data.mandate?.enabled === 1 && (
                       <Action
                         disabled={!!busy}
@@ -548,7 +583,7 @@ export function OperationsPanel() {
                             : "Revoke executor role in NEAR wallet"}
                       </Action>
                     ))}
-                  </div>
+                  </div>}
                   <p className="mt-4 text-xs text-muted-foreground">
                     The server accepts only a function-call key restricted to
                     this treasury and execute_payment. The account owner retains
@@ -563,7 +598,7 @@ export function OperationsPanel() {
                   approval requirements.
                 </p>
               )}
-              <div className="mt-6 border-t pt-4">
+              {canPurge && <div className="mt-6 border-t pt-4">
                 <Action
                   disabled={!!busy}
                   busy={busy === "purge"}
@@ -582,9 +617,8 @@ export function OperationsPanel() {
                 >
                   Purge expired private drafts
                 </Action>
-              </div>
+              </div>}
             </Panel>
-          )}
         </>
       )}
     </div>

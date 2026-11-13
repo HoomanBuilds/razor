@@ -325,6 +325,10 @@ function recurringJob(job: OperationJob): JobResult {
           recipientId: payment.recipientId,
           amount: payment.amount,
           maxFee: payment.maxFee,
+          baseAmount: payment.baseAmount,
+          bonusAmount: payment.bonusAmount,
+          adjustmentAmount: payment.adjustmentAmount,
+          note: payment.note,
         })),
       });
       entityId = created.id;
