@@ -1,8 +1,8 @@
 # Razor implementation status
 
-The planned development slices are integrated, including the missing funding, recovery, retained-asset and business-clearing workflows identified during the earlier review. Live-provider, deployment and production-readiness gates remain open.
+The planned development slices are integrated, including the missing funding, recovery, retained-asset and business-clearing workflows identified during the earlier review. The follow-up journey review also fixed role-specific controls, payee reassignment privacy, source submission tracking and incomplete invoice totals. Live-provider, deployment and production-readiness gates remain open.
 
-The catalog contains **90 requirements: 82 core and 8 optional**. Source coverage and verified behavior are different. The [build checklist](../build-checklist.md) currently verifies **13 of 127 checks: 12 core requirements and one additional scenario**. Its other boxes remain unchecked where complete acceptance evidence is missing. No mocked receipt establishes a live payment.
+The catalog contains **90 requirements: 82 core and 8 optional**. Source coverage and verified behavior are different. The [build checklist](../build-checklist.md) currently verifies **15 of 127 checks: 14 core requirements and one additional scenario**. Its other boxes remain unchecked where complete acceptance evidence is missing. No mocked receipt establishes a live payment.
 
 On 13 November the user clarified that payers may fund with any supported asset and recipients may choose any supported primary payout asset. Both see optional compatibility suggestions; backup always uses native USDC on a curated supported network. Company amounts are recorded in USDC. `AUTH-03` was clarified accordingly, and its historical correction remains in the checklist.
 
@@ -10,7 +10,7 @@ On 13 November the user clarified that payers may fund with any supported asset 
 
 | Feature family | Integrated behavior |
 | --- | --- |
-| `AUTH-01` through `AUTH-10` | Wallet and optional Privy sign-in, verified linking, self-serve company creation, invitations, company switching, resumable setup and fresh-authentication recovery |
+| `AUTH-01` through `AUTH-10` | Wallet and optional Privy sign-in, verified linking, self-serve company creation, email or verified-wallet invitations, archived roles, company switching, resumable setup and fresh-authentication recovery |
 | `WAL-01` through `WAL-08` | Separate app identity, source wallets and NEAR treasury authority; connected NEAR/EVM/Solana source flows; explicit deposit instructions for other supported sources; source gas and wallet error handling |
 | `ORG-01` through `ORG-05` | Company roles, exact policy/profile versions, total-cost quorum tiers, distinct obligation/route approvals, pause and bounded financial authority |
 | `TRE-01` through `TRE-09` | Live Intents catalog, independent funding legs, canonical final USDC credits, protected reserves, funding links, source refund closure, separate retained NEAR token holdings and resumable obligation funding |
@@ -25,25 +25,34 @@ On 13 November the user clarified that payers may fund with any supported asset 
 
 This table records integrated source, not 90 successful live demonstrations. Retained original assets currently mean approved NEAR NEP-141 holdings; they never increase spendable USDC. Fiat bank payouts, tax engines, receivable financing and full ERP synchronization remain outside the catalog.
 
-## Final local evidence
+## Local evidence
 
 | Evidence | Result and boundary |
 | --- | --- |
-| Application suite | All **104 checks passed** on `8af0e72`; later changes affect compiler orchestration and an already-recorded partial-review response in the interface |
-| TypeScript and production build | Passed on final candidate `c8b66d6`, including generated Next.js route validation. Both compiler commands share a 1.5 GB Node heap cap, one-at-a-time lock and available-memory monitor. Next.js uses one worker |
+| Application suite | All **135 checks passed** on journey review candidate `2176a88`; the earlier 104-check review remains recorded in the checklist |
+| TypeScript and production build | Passed on journey review candidate `2176a88`, including full TypeScript and generated Next.js route validation. Both compiler commands share a 1.5 GB Node heap cap, one-at-a-time lock and available-memory monitor. Next.js uses one worker |
 | Treasury contract | **23 VM checks passed**, including quorum, earliest execution, retained assets and partial settlement |
 | Clearing contract | **6 VM checks passed** for bounded conserved reductions, consent, expiry/revocation and authority callbacks |
 | Factory contract | **4 VM checks passed** against the newly compiled treasury artifact |
 | Contract artifacts | Treasury, factory and clearing WASMs compiled; `.tools/wasm/manifest.json` records public code hashes. The factory embeds that exact treasury. Artifacts remain ignored |
-| Built-app HTTP workflow | Fresh real EVM challenge signatures created an owner/company, retained the chosen time zone and USDC accounting, confirmed recipient consent, rejected unrelated access and stale approval, and approved only unfunded obligations |
+| Built-app HTTP workflow | Fresh real EVM challenge signatures created owners, recipients and role-bound team members. Company creation, confirmed recipient consent, wallet invitations, role enforcement, stale-review rejection and unfunded approvals passed. Cross-company payment, bill and approval-review IDs returned 404 even for the shared owner |
 | Built-app recovery routes | Account, retained holdings, clearing, source refunds, partial review and pay-from-wallet routes responded. A company without a treasury received an actionable setup stage. No balance was seeded |
-| Browser review | Overview, payroll review, payment-task setup, Treasury, refund/retained setup, clearing and personal recipient history rendered without runtime exceptions. At 390 px the document width remained 390 px |
+| Browser review | Owner, Viewer, Approver, Operator and company-only screens rendered without runtime exceptions or automatic 403s. Browser back, company switching, payment bookmarks, unsaved-form refresh, role changes, session expiry and clipboard fallback passed. At 390 px the document width remained 390 px and mobile navigation could scroll |
 
 The workflow reviewed 204 USDC of payroll with a 1 USDC ceiling and displayed the 205 USDC shortfall. A milestone invoice required acceptance before a 10 USDC installment could be approved against its 25 USDC face amount. A contractor's EUR request became a USDC draft only after explicit human agreement. Missing private-inference configuration returned unavailable and did not send the document to another provider.
 
-Evidence files are local and ignored: `.data/razor-final-tests.log`, `.data/razor-final-typecheck.log`, `.data/razor-final-build.log`, `.data/razor-final-workflow-result.json`, `.data/razor-final-browser-result.json` and associated screenshots. The older `26ced9d` workflow files remain historical evidence. The review server is stopped and no feature worktrees remain.
+The follow-up zero-cash workflow showed **242 USDC total debt**, including the entire 25 USDC invoice, **15 USDC awaiting future installments**, and **230 USDC current payment funding need** after its active installment and other obligations. The previous installment-only overview understated the full invoice debt.
+
+Current journey evidence is local and ignored: `.data/experience-review-tests.log`, `.data/experience-review-typecheck.log`, `.data/experience-review-build.log`, `.data/experience-review-workflow-result.json`, `.data/experience-review-browser-result.json` and its overview screenshot. The production build includes the final combined TypeScript check.
+
+Earlier evidence files are local and ignored: `.data/razor-final-tests.log`, `.data/razor-final-typecheck.log`, `.data/razor-final-build.log`, `.data/razor-final-workflow-result.json`, `.data/razor-final-browser-result.json` and associated screenshots. The older `26ced9d` workflow files remain historical evidence. The review server is stopped and no feature worktrees remain.
 
 ## Recovery and accounting fixes verified locally
+
+- Payee confirmation binds personal payments and notices to the exact confirmed historical owner. Reassigning a profile cannot expose old salaries or invoice requests, reclaim a claimed invitation, or redirect an existing liability through refresh, replacement or a new installment.
+- Payment queues paginate with exact historical payee names. Company totals cover all records, group partial/replacement lineages once and include full invoice debt separately from currently planned installment costs.
+- Generic, linked and public funding paths record a source claim before wallet submission and save broadcast hashes immediately. Provider `PENDING_DEPOSIT` cannot reset an uncertain submission into permission to resend. An expired never-started public quote can be deliberately closed after status checks; late source activity blocks a new active quote.
+- Wallet-bound team invitations verify actual linked ownership. Role dependencies, archival and restoration preserve access and audit history. Navigation and all payment screens expose permitted actions, and company links retain their context.
 
 - Short or missing destination output cannot become full payment from provider `SUCCESS`. A final partial attestation preserves actual source spending and the original face liability, retires the original route and permits one separately approved remainder.
 - Payroll and bill remainders retain their lineage through cancellation/replacement. A fresh individual approval cannot approve unrelated payroll drafts.
@@ -60,7 +69,7 @@ Evidence files are local and ignored: `.data/razor-final-tests.log`, `.data/razo
 3. Record real source funding, final canonical token credit, treasury balance refresh and a primary payout. Then demonstrate backup, timeout, refund and partial-delivery recovery without duplicate transfers. Automatic NEAR receipt lookup is best effort; advanced signer lookup remains available when the RPC needs it.
 4. Configure a restricted executor and demonstrate scheduled execution, interruption and rebroadcast recovery under real onchain approvals. Short-lived Intents quotes must still be prepared near the permitted execution window; a calendar date does not extend quote validity.
 5. Configure NEAR AI credentials and approved measurements, then demonstrate successful required verification with fictional documents, failure handling and retention/deletion behavior.
-6. Configure optional email transport and verify actual delivery. Provider acceptance is not proof of arrival. Exercise the remaining browser/role/privacy acceptance matrix before a public production claim.
+6. Configure optional email transport and verify actual delivery. Provider acceptance is not proof of arrival. The local role/company browser matrix passed; complete configured social-login, live wallet and private-inference privacy journeys before a public production claim.
 7. Complete production dependency remediation and security review. An earlier scan reported 40 wallet-graph advisories; no forced SDK downgrade was applied. The successful build still reports the optional Privy Farcaster module and unused viem Tempo dependency warnings.
 
 External payout settlement and unsupported-chain refund closures retain their explicit owner/funder/reporter trust boundaries. Private inference does not hide transfers on public payment chains. None of the local checks establishes a live track demonstration or organizer approval.

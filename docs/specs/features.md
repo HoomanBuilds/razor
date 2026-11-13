@@ -17,7 +17,7 @@ Use the [build checklist](../build-checklist.md) for recurring verification. Eve
 | AUTH-03 | Self-serve company creation | A signed-in user can create a company with minimal details, become its initial owner and review the USDC accounting unit and choose its time zone without manual operator setup; funding and primary payout assets remain selectable in their own workflows |
 | AUTH-04 | Prepare before funding | A new company can add payees, draft bills or payroll and preview required funds before connecting or funding a wallet; execution remains gated by actual authority and money |
 | AUTH-05 | Account and wallet linking | Link a social identity and one or more wallets through verified control, preserving one user's workspace access without email-only account merging |
-| AUTH-06 | Team invitations | Invite, accept, expire and revoke organization memberships with explicit roles and access enforced on server and financial actions |
+| AUTH-06 | Team invitations | Invite by verified email or wallet ownership, accept, expire and revoke organization memberships with explicit roles and access enforced on server and financial actions; archive unused roles while preserving their history |
 | AUTH-07 | Organization switching | A user with several companies can switch deliberately; private records, drafts, approvals and funding attribution remain scoped to the active company |
 | AUTH-08 | Sessions and return visits | Restore the correct account and company on return; handle logout and expired sessions without losing saved drafts or permitting unauthenticated interactive actions |
 | AUTH-09 | Access recovery | Provide a documented identity and signer recovery path, with appropriate fresh authentication for sensitive ownership or credential changes |
@@ -56,7 +56,7 @@ Acceptance: a preparer can draft a run but cannot bypass a required approval. Re
 
 | ID | Feature | Required behavior |
 | --- | --- | --- |
-| TRE-01 | Supported-asset funding | Allow any live catalog-supported source asset and network; suggest canonical native USDC options for compatibility and possible lower costs without hiding other assets; obtain an executable quote for actual costs |
+| TRE-01 | Supported-asset funding | Allow any live catalog-supported source asset and network; suggest canonical native USDC options for compatibility and possible lower costs without hiding other assets; obtain an executable quote for actual costs. Token and network logos accompany readable names and exact asset identities in selection and review |
 | TRE-02 | Multi-asset top-ups | Track several deposits into one company workspace, with separate amounts, quotes, statuses and receipts |
 | TRE-03 | USDC settlement balance | Default approved funding conversions to USDC and credit only confirmed net receipts |
 | TRE-04 | Financial availability | Separate confirmed holdings, client reserves, commitments, payment reservations, fees in reserve and available operating money |
