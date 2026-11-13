@@ -6,16 +6,26 @@ import { getDb, row } from "../src/server/db";
 import { ApiError } from "../src/server/context";
 import { hashToken } from "../src/server/identity/crypto";
 import { PERMISSIONS, getAccess } from "../src/server/identity/session";
+import type { FundingLeg } from "../src/server/payments/types";
+import type { QuoteResponse, StatusResponse } from "../src/server/payments/intents";
+import { requireUnstartedDeposit } from "../src/server/funding-requests/deposit";
+import { fundingStateAfterProvider } from "../src/server/payment-funding/lifecycle";
+import { prepareFunding } from "../src/server/payments/service";
 import { NATIVE_USDC } from "../src/server/payments/policy";
-import { createFundingRequest, getFundingRequest, getPublicFundingRequest, preparePublicQuote, publicFundingRoutes, reconcilePublicFunding, resumePublicQuote, revokeFundingRequest, rotateFundingLink } from "../src/server/funding-requests";
+import { claimPublicFunding, closePublicUnsentFunding, createFundingRequest, getFundingRequest, getPublicFundingRequest, preparePublicQuote, publicFundingRoutes, reconcilePublicFunding, resumePublicQuote, revokeFundingRequest, rotateFundingLink } from "../src/server/funding-requests";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "ab".repeat(32);
 process.env.APP_URL = "http://localhost:3000";
+process.env.NEAR_TREASURY_CODE_HASH = "11111111111111111111111111111111";
+let observedCodeHash = process.env.NEAR_TREASURY_CODE_HASH;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (_url, init) => {
+  if (String(_url).endsWith("/v0/tokens")) return Response.json([{assetId:"nep141:eth.omft.near",symbol:"ETH",blockchain:"eth",decimals:18,contractAddress:null},{assetId:`nep141:${NATIVE_USDC.near}`,symbol:"USDC",blockchain:"near",decimals:6,contractAddress:NATIVE_USDC.near}]);
+  if (String(_url).endsWith("/v0/quote")) return Response.json({signature:"unsigned-fixture"});
   const rpc = JSON.parse(String(init?.body));
   assert.equal(rpc.method, "query", "Only mocked read-only NEAR queries are allowed");
+  if (rpc.params.request_type === "view_account") return Response.json({ result: { code_hash: observedCodeHash } });
   const config = row<{ organization_id: string }>("SELECT organization_id FROM treasury_config WHERE near_account_id=?", rpc.params.account_id);
   const owner = config ? row<{ address: string }>("SELECT w.address FROM linked_wallets w JOIN memberships m ON m.user_id=w.user_id WHERE m.organization_id=? AND w.family='near'", config.organization_id)!.address : null;
   const value = rpc.params.method_name === "get_config" ? { owner_id: owner, token_contract: NATIVE_USDC.near, paused: false } : { total: "1250000000000000000000" };
@@ -97,4 +107,76 @@ test("expired and revoked requests reject new quotes while retaining existing tr
   revokeFundingRequest(access, another.request.id);
   await assert.rejects(() => preparePublicQuote(another.link.token, { originAsset: active.originAsset, refundAddress: active.refund, idempotencyKey: randomUUID() }), /revoked/);
   assert.equal(getPublicFundingRequest(another.link.token).status, "revoked");
+});
+
+function savedLeg(id: string) { return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", id)!; }
+function pendingObservation(id: string): StatusResponse { return { status: "PENDING_DEPOSIT", quoteResponse: JSON.parse(savedLeg(id).quote) as QuoteResponse }; }
+function expireLeg(id: string) {
+  const quote = JSON.parse(savedLeg(id).quote) as QuoteResponse;
+  quote.quote.timeWhenInactive = new Date(Date.now() - 1000).toISOString();
+  getDb().prepare("UPDATE funding_legs SET quote=? WHERE id=?").run(JSON.stringify(quote), id);
+}
+
+test("public source claims persist before signing and never reopen on a pending provider report", async () => {
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  await assert.rejects(() => claimPublicFunding(created.link.token, { fundingId: active.fundingId, idempotencyKey: randomUUID() }), (error: ApiError) => error.code === "FUNDING_QUOTE_PROOF_REQUIRED");
+  await claimPublicFunding(created.link.token, { fundingId: active.fundingId, idempotencyKey: active.key }, async () => pendingObservation(active.fundingId));
+  assert.equal(savedLeg(active.fundingId).status, "source_unknown");
+  assert.equal((await resumePublicQuote(created.link.token, active.key)).depositAllowed, false);
+  assert.equal(fundingStateAfterProvider(savedLeg(active.fundingId), "PENDING_DEPOSIT"), "source_unknown");
+  await assert.rejects(() => claimPublicFunding(created.link.token, { fundingId: active.fundingId, idempotencyKey: active.key }, async () => pendingObservation(active.fundingId)), /already started or uncertain/);
+  await assert.rejects(() => closePublicUnsentFunding(created.link.token, { fundingId: active.fundingId, idempotencyKey: active.key, noTransferConfirmed: true }, async () => pendingObservation(active.fundingId)), /uncertain/);
+  assert.equal(savedLeg(active.fundingId).credited_amount, "0");
+});
+
+test("expired never-sent quotes can close while late activity blocks replacement funding", async () => {
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  const close = { fundingId: active.fundingId, idempotencyKey: active.key, noTransferConfirmed: true };
+  await assert.rejects(() => closePublicUnsentFunding(created.link.token, close, async () => pendingObservation(active.fundingId)), /still accept/);
+  expireLeg(active.fundingId);
+  assert.equal((await resumePublicQuote(created.link.token, active.key)).depositAllowed, false);
+  await assert.rejects(() => closePublicUnsentFunding(created.link.token, { ...close, noTransferConfirmed: false }), /never submitted/);
+  await assert.rejects(() => closePublicUnsentFunding(created.link.token, close, async () => ({ ...pendingObservation(active.fundingId), status: "PROCESSING" })), /observed source activity/);
+  const closed = await closePublicUnsentFunding(created.link.token, close, async () => pendingObservation(active.fundingId));
+  assert.equal(closed.request.status, "open");
+  assert.equal(savedLeg(active.fundingId).status, "closed_unsent");
+  const newer = seedActive(created.request.id, access.organizationId, input.amount);
+  getDb().prepare("UPDATE funding_legs SET status='processing',source_tx_hash='late-wallet-transfer' WHERE id=?").run(active.fundingId);
+  assert.equal(getPublicFundingRequest(created.link.token).activeFunding?.id, active.fundingId);
+  assert.equal((await resumePublicQuote(created.link.token, newer.key)).depositAllowed, false);
+  await assert.rejects(() => claimPublicFunding(created.link.token, { fundingId: newer.fundingId, idempotencyKey: newer.key }), /earlier funding transfer/);
+  assert.equal(savedLeg(newer.fundingId).status, "pending_deposit");
+});
+
+test("new deposits reject changed code and observed source activity without consuming the claim", async () => {
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  observedCodeHash = "reviewed-code-was-replaced";
+  try {
+    const resumed = await resumePublicQuote(created.link.token, active.key);
+    assert.equal(resumed.depositAllowed, false);
+    assert.match(resumed.depositBlockedReason ?? "", /code changed/);
+    await assert.rejects(() => claimPublicFunding(created.link.token, { fundingId: active.fundingId, idempotencyKey: active.key }), (error: ApiError) => error.code === "TREASURY_CODE_MISMATCH");
+  } finally { observedCodeHash = process.env.NEAR_TREASURY_CODE_HASH!; }
+  assert.equal(savedLeg(active.fundingId).status, "pending_deposit");
+  assert.throws(() => requireUnstartedDeposit(savedLeg(active.fundingId), { ...pendingObservation(active.fundingId), status: "KNOWN_DEPOSIT_TX" }), /already observed/);
+  expireLeg(active.fundingId);
+  assert.throws(() => requireUnstartedDeposit(savedLeg(active.fundingId), pendingObservation(active.fundingId)), /Refresh the quote/);
+});
+
+test("expired quote preparation leases no longer strand the public funding page", async () => {
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), savedAt = new Date(Date.now() - 120_000).toISOString();
+  getDb().prepare("INSERT INTO funding_request_quotes(id,request_id,key_hash,actor_id,origin_asset,refund_address,requested_output,state,reservation_owner,lease_expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'quoting',?,?,?,?)").run(randomUUID(), created.request.id, hashToken(randomUUID()), "public-fixture", "source", "refund", input.amount, "crashed-request", savedAt, savedAt, savedAt);
+  assert.equal(getPublicFundingRequest(created.link.token).status, "open");
+  assert.equal(getPublicFundingRequest(created.link.token).activeFunding, null);
+});
+
+test("general manual funding revalidates treasury authority and source recovery addresses before quoting", async () => {
+  const { access } = fixture();
+  const input = { originAsset: "nep141:eth.omft.near", amount: "1000000000000000", refundAddress: "invalid-refund", reference: randomUUID() };
+  await assert.rejects(() => prepareFunding(access, input), (error: ApiError) => error.code === "REFUND_ADDRESS_INVALID");
+  await assert.rejects(() => prepareFunding(access, { ...input, refundAddress: `0x${"12".repeat(20)}` }), (error: ApiError) => error.code === "QUOTE_SIGNATURE_INVALID");
+  observedCodeHash = "unreviewed-replacement-code";
+  try { await assert.rejects(() => prepareFunding(access, input), (error: ApiError) => error.code === "TREASURY_CODE_MISMATCH"); }
+  finally { observedCodeHash = process.env.NEAR_TREASURY_CODE_HASH!; }
+  assert.equal(row<{n:number}>("SELECT COUNT(*) AS n FROM funding_legs WHERE organization_id=?", access.organizationId)!.n, 0);
 });

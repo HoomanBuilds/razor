@@ -8,7 +8,7 @@ import { PERMISSIONS } from "../src/server/identity/session";
 import { approvePayment, createPayment, getTreasury, reconcileFunding, reserveApprovedPayment } from "../src/server/payments/service";
 import { paymentTermsHash } from "../src/server/client-reserves/accounting";
 import { createClientReserve } from "../src/server/client-reserves/service";
-import { claimTaskDeposit, closeUnsentFunding, paymentFundingTask, quotePaymentFunding, reserveTaskFunding } from "../src/server/payment-funding";
+import { claimTaskDeposit, closeUnsentFunding, paymentFundingTask, quotePaymentFunding, reserveTaskFunding, reconcileTaskFunding } from "../src/server/payment-funding";
 import { fundingStateAfterProvider } from "../src/server/payment-funding/lifecycle";
 import { NATIVE_USDC } from "../src/server/payments/policy";
 import type { FundingLeg } from "../src/server/payments/types";
@@ -28,8 +28,9 @@ globalThis.fetch = async (url, input) => {
   assert.equal(rpc.method, "query", "Only read-only NEAR calls are permitted");
   if (rpc.params.request_type === "view_account") return Response.json({ result: { code_hash: process.env.NEAR_TREASURY_CODE_HASH } });
   const config = row<{ organization_id: string }>("SELECT organization_id FROM treasury_config WHERE near_account_id=?", rpc.params.account_id)!;
+  if (rpc.params.method_name === "storage_balance_of") return Response.json({result:{result:[...Buffer.from(JSON.stringify({total:"1"}))]}});
   const balance = row<{ balance: string }>("SELECT balance FROM treasury_balances WHERE organization_id=?", config.organization_id)!;
-  const value = { balance: balance.balance, reserved: "0", available: balance.balance, in_flight: "0", confirmed_at_ms: String(Date.now()) };
+  const value = rpc.params.method_name === "get_config" ? {owner_id: config.organization_id + ".near", token_contract: NATIVE_USDC.near, paused:false} : rpc.params.method_name === "storage_balance_of" ? {total:"1"} : { balance: balance.balance, reserved: "0", available: balance.balance, in_flight: "0", confirmed_at_ms: String(Date.now()) };
   return Response.json({ result: { result: [...Buffer.from(JSON.stringify(value))] } });
 };
 after(() => { globalThis.fetch = originalFetch; });
@@ -37,10 +38,14 @@ after(() => { globalThis.fetch = originalFetch; });
 function fixture(cash = "0", fee = "1000000") {
   const id = randomUUID(), recipientId = randomUUID(), savedAt = new Date().toISOString(), db = getDb();
   db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(id, "Owner", savedAt);
+  db.prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES(?,?,'near',?,'mainnet',?)").run(randomUUID(), id, id+".near", savedAt);
   db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(id, "Company", id, savedAt, savedAt);
   db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_asset,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,?,'vendor','USDC','near',?,'confirmed',?,?,?)").run(recipientId, id, "Supplier", `supplier-${id.slice(0, 8)}.near`, savedAt, savedAt, savedAt);
   db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,'mainnet',?,?)").run(id, `treasury-${id.slice(0, 8)}.near`, NATIVE_USDC.near, savedAt);
   db.prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,onchain_reserved,updated_at) VALUES(?,?,'0','0',?)").run(id, cash, savedAt);
+  const roleId = randomUUID();
+  db.prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,?, ?,1,?)").run(roleId, id, "Owner", JSON.stringify(PERMISSIONS), savedAt);
+  db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)").run(id, id, roleId, savedAt);
   const access: AccessContext = { userId: id, organizationId: id, permissions: [...PERMISSIONS] };
   const preparer = { ...access, permissions: ["company:read", "payments:read", "payments:prepare"] };
   const payment = createPayment(access, { recipientId, reference: randomUUID(), amount: "100000000", maxFee: fee });
@@ -107,10 +112,10 @@ test("a final funding receipt with stale contract balance blocks another deposit
 test("persisted source claims and unknown outcomes prevent resend across sessions", async () => {
   const { access, preparer, payment } = fixture(); approvePayment(access, payment.id); const funding = leg(access, payment.id);
   assert.equal(paymentFundingTask(preparer, payment.id).depositAllowed, true);
-  claimTaskDeposit(preparer, payment.id, funding.id);
+  await claimTaskDeposit(preparer, payment.id, funding.id, async()=>({status:"PENDING_DEPOSIT",quoteResponse:JSON.parse(funding.quote)}));
   const resumed = paymentFundingTask({ ...preparer }, payment.id);
   assert.equal(resumed.depositAllowed, false); assert.equal(resumed.canQuote, false); assert.equal(resumed.stage, "reconcile_funding");
-  assert.throws(() => claimTaskDeposit(preparer, payment.id, funding.id), /already claimed/);
+  await assert.rejects(() => claimTaskDeposit(preparer, payment.id, funding.id), /already claimed/);
   await assert.rejects(() => quotePaymentFunding(preparer, payment.id, { idempotencyKey: randomUUID(), reviewToken: resumed.reviewToken, originAsset: source.assetId, refundAddress: `0x${"12".repeat(20)}` }), /existing source transfer/);
   getDb().prepare("UPDATE funding_legs SET source_tx_hash='known-source' WHERE id=?").run(funding.id);
   await assert.rejects(() => closeUnsentFunding(preparer, payment.id, funding.id, true), /known or uncertain source/);
@@ -140,7 +145,7 @@ test("client principal and linked funding remain conserved during a preparer's e
   assert.equal(getTreasury(access).paymentReserved, "101000000"); assert.equal(getTreasury(access).available, "0");
 });
 
-test("changed approved terms and unverified reported completion cannot authorize new deposits", () => {
+test("changed approved terms and unverified reported completion cannot authorize new deposits", async () => {
   const { access, preparer, payment, recipientId } = fixture(); approvePayment(access, payment.id); taskCommit(access, payment.id, "0");
   const funding = leg(access, payment.id);
   getDb().prepare("UPDATE funding_legs SET status='confirmed',credited_amount='101000000',provider_status='SUCCESS' WHERE id=?").run(funding.id);
@@ -149,7 +154,7 @@ test("changed approved terms and unverified reported completion cannot authorize
   getDb().prepare("UPDATE recipients SET version=version+1 WHERE id=?").run(recipientId);
   task = paymentFundingTask(preparer, payment.id);
   assert.equal(task.stage, "terms_changed"); assert.equal(task.depositAllowed, false);
-  assert.throws(() => claimTaskDeposit(preparer, payment.id, funding.id), /preferences changed/);
+  await assert.rejects(() => claimTaskDeposit(preparer, payment.id, funding.id), /preferences changed/);
 });
 
 test("actual payout source funds are counted once; refunds and excess stay tied to the same budget", () => {
@@ -197,4 +202,25 @@ test("closed source history changes the review token for a fresh funding quote",
   const db = getDb(), timestamp = new Date().toISOString();
   db.prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,?,?,'closed-history','asset','1','1','{}','deposit.near','treasury.near','closed_unsent',?,?)").run(randomUUID(), access.organizationId, payment.id, timestamp, timestamp);
   assert.notEqual(paymentFundingTask(access, payment.id).reviewToken, before);
+});
+
+test("read-only payout checks do not require source-funding permission", async () => {
+  const { access, payment } = fixture(); approvePayment(access, payment.id);
+  getDb().prepare("UPDATE treasury_balances SET balance='101000000' WHERE organization_id=?").run(access.organizationId);
+  const approver = { ...access, permissions: ["company:read", "payments:read", "payments:approve"] };
+  assert.equal((await reconcileTaskFunding(approver, payment.id, {})).stage, "ready_for_payout");
+  await assert.rejects(() => reconcileTaskFunding(approver, payment.id, { fundingId: "source-leg" }), (error: ApiError) => error.status === 403);
+  await assert.rejects(() => reconcileTaskFunding(access, payment.id, { sourceTxHash: "source-hash" }), (error: ApiError) => error.code === "FUNDING_ID_REQUIRED");
+  const reader = { ...access, permissions: ["company:read", "payments:read"] };
+  assert.equal((await reconcileTaskFunding(reader, payment.id, {})).canReserve, false);
+});
+
+test("testnet shortfalls explain unavailable cross-chain funding without blocking funded obligations", () => {
+  const { access, preparer, payment } = fixture(); approvePayment(access, payment.id);
+  getDb().prepare("UPDATE treasury_config SET network='testnet' WHERE organization_id=?").run(access.organizationId);
+  assert.equal(paymentFundingTask(preparer, payment.id).stage, "testnet_funding");
+  assert.equal(paymentFundingTask(preparer, payment.id).canQuote, false);
+  getDb().prepare("UPDATE treasury_balances SET balance='101000000' WHERE organization_id=?").run(access.organizationId);
+  assert.equal(paymentFundingTask(preparer, payment.id).stage, "reserve_funds");
+  assert.equal(paymentFundingTask(preparer, payment.id).canReserve, true);
 });

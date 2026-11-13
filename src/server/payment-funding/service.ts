@@ -2,12 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { paymentTermsHash } from "../client-reserves/accounting";
-import { getPayment, getTreasury, listAttempts, reconcileFunding, reconcilePayment, reserveApprovedPayment, syncTreasury } from "../payments/service";
+import { assertPaymentLiabilityApproved, getPayment, getTreasury, listAttempts, reconcileFunding, reconcilePayment, reserveApprovedPayment, syncTreasury } from "../payments/service";
 import { getSupportedTokens, nativeUsdc, requestQuote, assertCanStartDeposit, quoteDepositWindow, assertSameQuote, checkStatus, type QuoteResponse } from "../payments/intents";
 import { normalizeDestination, DestinationError } from "../../lib/recipient-destination";
 import type { FundingLeg, WalletTransaction } from "../payments/types";
 import { verifyFundingCredit } from "../reconciliation/funding";
 import { fundingPositions, verifiedLinkedCredit, type FundingTask } from "./accounting";
+import { verifyCompanyFundingTarget } from "../funding-requests/service";
+import { recordDepositClaim, requireUnstartedDeposit } from "../funding-requests/deposit";
 import { paymentBudget } from "../../lib/payment-budget";
 
 interface Claim { id: string; payment_id: string; organization_id: string; request_key: string; input_hash: string; terms_hash: string; origin_token_json: string | null; state: string; funding_id: string | null; lease_owner: string | null; lease_until: string | null }
@@ -28,9 +30,7 @@ function approved(access: AccessContext, paymentId: string) {
   if (!payment.approved_at || !payment.approved_by) throw new ApiError(409, "Review and approve the exact obligation before funding it", "APPROVAL_REQUIRED");
   if (["paid", "cancelled", "partially_paid"].includes(payment.status)) throw new ApiError(409, "This obligation is already closed. Its source history remains available", "PAYMENT_CLOSED");
   if (!currentProfile(access, paymentId)) throw new ApiError(409, "Receiving preferences changed. Review cancellation and replacement before sending more funds", "RECIPIENT_CHANGED");
-  const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string };
-  if (metadata.billId && !row("SELECT id FROM bills WHERE id=? AND organization_id=? AND payment_id=? AND status='approved'", metadata.billId, access.organizationId, paymentId)) throw new ApiError(409, "The underlying invoice is no longer approved", "SOURCE_APPROVAL_CHANGED");
-  if (metadata.runId && !row("SELECT r.id FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=? AND r.status='approved'", metadata.runId, access.organizationId, paymentId, payment.recipient_id)) throw new ApiError(409, "The underlying pay run is no longer approved", "SOURCE_APPROVAL_CHANGED");
+  assertPaymentLiabilityApproved(access, payment);
   return payment;
 }
 
@@ -43,7 +43,7 @@ export function paymentFundingTask(access: AccessContext, paymentId: string) {
     const sourceTokens = new Map(rows<{ funding_id: string; origin_token_json: string }>("SELECT funding_id,origin_token_json FROM payment_funding_quotes WHERE payment_id=? AND origin_token_json IS NOT NULL AND funding_id IS NOT NULL", paymentId).map(value => [value.funding_id, JSON.parse(value.origin_token_json)]));
     const activeFunding = position.legs.filter(leg => !finalFunding.includes(leg.status) || (leg.status === "confirmed" && verifiedLinkedCredit(access.organizationId, leg) === 0n) || (["closed_unsent", "cancelled"].includes(leg.status) && !!leg.source_tx_hash));
     const preparingQuote = row<Claim>("SELECT * FROM payment_funding_quotes WHERE payment_id=? AND state='quoting' AND lease_until>?", paymentId, now());
-    const activeAttempt = attempts.find(attempt => ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered"].includes(attempt.state));
+    const activeAttempt = attempts.find(attempt => ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered", "reported_partial"].includes(attempt.state));
     const ownedCash = position.held + position.clientCash;
     const available = BigInt(treasury.available);
     const required = budget.remaining > BigInt(payment.reserved_amount) ? budget.remaining - BigInt(payment.reserved_amount) : 0n;
@@ -68,6 +68,7 @@ export function paymentFundingTask(access: AccessContext, paymentId: string) {
     else if (activeFunding.length) { stage = activeFunding.some(leg => leg.status !== "pending_deposit" || leg.source_tx_hash) ? "reconcile_funding" : "deposit"; message = stage === "deposit" ? "Resume the existing exact source quote. A second payable quote is blocked." : "Track the existing source transfer and verify its final NEAR receipt. Unknown outcomes do not authorize another deposit."; }
     else if (BigInt(payment.reserved_amount) >= budget.remaining && budget.remaining > 0n) { stage = "ready_for_payout"; message = "The approved budget is reserved. Prepare the existing obligation's receiving route and collect its NEAR approvals."; }
     else if (creditNeedsRefresh) { stage = "refresh_treasury"; message = "Source credit or committed cash is not reflected in the treasury balance. Refresh its confirmed balance and reconcile any deficit before sending more money."; }
+    else if (shortfall > 0n && treasury.config.network !== "mainnet") { stage = "testnet_funding"; message = "This company treasury is on NEAR testnet. Cross-chain funding uses mainnet; use test tokens for contract testing or configure a separate mainnet company treasury for live funding."; }
     else if (shortfall === 0n) { stage = "reserve_funds"; message = "Confirmed cash can cover the approved obligation. Reserve it without changing its approved terms."; }
     const paused = !!row<{ paused: number }>("SELECT paused FROM organizations WHERE id=?", access.organizationId)?.paused;
     const depositAllowed = !paused && stage === "deposit" && access.permissions.includes("payments:prepare") && activeFunding.length === 1;
@@ -103,7 +104,7 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
   if (snapshot.reviewToken !== input.reviewToken) throw new ApiError(409, "Cash, receiving preferences or approved terms changed. Refresh this task before quoting", "FUNDING_REVIEW_STALE");
   if (!snapshot.canQuote) throw new ApiError(409, snapshot.message, "FUNDING_STEP_BLOCKED");
   await syncTreasury(access);
-  const tokens = await getSupportedTokens(), token = tokens.find(value => value.assetId === input.originAsset), config = getTreasury(access).config;
+  const tokens = await getSupportedTokens(), token = tokens.find(value => value.assetId === input.originAsset), config = await verifyCompanyFundingTarget(access);
   if (!config || config.network !== "mainnet") throw new ApiError(409, "Configure the company's NEAR mainnet treasury before funding through Intents", "MAINNET_TREASURY_REQUIRED");
   if (!token) throw new ApiError(422, "Choose a currently supported source asset", "ASSET_UNSUPPORTED");
   const destination = nativeUsdc(tokens, "near");
@@ -111,7 +112,6 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
   let refundAddress: string;
   try { refundAddress = normalizeDestination(token.blockchain, input.refundAddress).address; }
   catch (error) { throw new ApiError(422, error instanceof DestinationError ? error.message : "Check the source-chain recovery address", "REFUND_ADDRESS_INVALID"); }
-  if (refundAddress !== input.refundAddress) throw new ApiError(422, "Use the complete normalized source recovery address", "REFUND_ADDRESS_INVALID");
   if (input.walletId && !row("SELECT id FROM linked_wallets WHERE id=? AND user_id=? AND address=? AND (family!='near' OR network='mainnet')", input.walletId, access.userId, refundAddress)) throw new ApiError(403, "Choose a source wallet verified by your account", "FUNDING_WALLET_UNVERIFIED");
   const lease = randomUUID(), quoteId = existing?.id ?? randomUUID();
   const amount = transaction(db => {
@@ -128,6 +128,7 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
   });
   try {
     const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: token.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 3600_000).toISOString(), customRecipientMsg: `razor:payment-funding:${paymentId}` });
+    await verifyCompanyFundingTarget(access);
     const funding = transaction(db => {
       running(access); approved(access, paymentId);
       const claim = row<Claim>("SELECT * FROM payment_funding_quotes WHERE id=? AND state='quoting' AND lease_owner=? AND lease_until>?", quoteId, lease, now());
@@ -163,7 +164,9 @@ export async function prepareTaskBalanceRefresh(access: AccessContext, paymentId
 }
 
 export async function reconcileTaskFunding(access: AccessContext, paymentId: string, input: { fundingId?: string; sourceTxHash?: string; senderAccountId?: string; transactionHash?: string }) {
-  requirePermission(access, "payments:prepare");
+  requirePermission(access, "payments:read");
+  if (input.fundingId || input.sourceTxHash || input.senderAccountId || input.transactionHash) requirePermission(access, "payments:prepare");
+  if (!input.fundingId && (input.sourceTxHash || input.senderAccountId || input.transactionHash)) throw new ApiError(422, "Choose the saved source funding leg for this transaction", "FUNDING_ID_REQUIRED");
   getPayment(access, paymentId);
   if (input.fundingId) {
     const leg = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=? AND payment_id=?", input.fundingId, access.organizationId, paymentId);
@@ -190,6 +193,7 @@ export async function closeUnsentFunding(access: AccessContext, paymentId: strin
   if (quoteDepositWindow(quote).startBefore > Date.now()) throw new ApiError(409, "The original quote can still accept a deposit. Resume it rather than create another", "FUNDING_QUOTE_ACTIVE");
   const status = await checkStatus(leg.deposit_address, leg.deposit_memo);
   assertSameQuote(quote, status.quoteResponse);
+  if (quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider still accepts this quote. Continue tracking it before preparing another", "FUNDING_QUOTE_ACTIVE");
   if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has observed source activity. Keep reconciling the original transfer", "FUNDING_TRANSFER_UNRESOLVED");
   transaction(db => {
     const current = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", leg.id, access.organizationId)!;
@@ -200,14 +204,16 @@ export async function closeUnsentFunding(access: AccessContext, paymentId: strin
   return paymentFundingTask(access, paymentId);
 }
 
-export function claimTaskDeposit(access: AccessContext, paymentId: string, fundingId: string) {
+export async function claimTaskDeposit(access: AccessContext, paymentId: string, fundingId: string, observe = checkStatus) {
   requirePermission(access, "payments:prepare");
-  return transaction(db => {
-    running(access); approved(access, paymentId); ensureTask(access, paymentId);
-    const task = paymentFundingTask(access, paymentId), leg = task.funding.find(value => value.id === fundingId);
-    if (!task.depositAllowed || !leg || leg.source_tx_hash || leg.status !== "pending_deposit") throw new ApiError(409, "This source deposit is already claimed or its obligation changed. Reconcile the saved transfer before sending again", "FUNDING_TRANSFER_UNRESOLVED");
-    assertCanStartDeposit(JSON.parse(leg.quote) as QuoteResponse);
-    db.prepare("UPDATE funding_legs SET status='source_unknown',updated_at=? WHERE id=? AND status='pending_deposit'").run(now(), fundingId);
-    return { fundingId, submissionClaimed: true };
+  running(access); approved(access, paymentId); ensureTask(access, paymentId);
+  await verifyCompanyFundingTarget(access);
+  const initial = paymentFundingTask(access, paymentId), leg = initial.funding.find(value => value.id === fundingId);
+  if (!initial.depositAllowed || !leg || leg.source_tx_hash || leg.status !== "pending_deposit") throw new ApiError(409, "This source deposit is already claimed or its obligation changed. Reconcile the saved transfer before sending again", "FUNDING_TRANSFER_UNRESOLVED");
+  requireUnstartedDeposit(leg, await observe(leg.deposit_address, leg.deposit_memo));
+  return transaction(() => {
+    running(access); approved(access, paymentId);
+    if (!paymentFundingTask(access, paymentId).depositAllowed) throw new ApiError(409, "The funding need changed while opening your wallet. Review the saved obligation", "FUNDING_REVIEW_STALE");
+    return recordDepositClaim(leg);
   });
 }

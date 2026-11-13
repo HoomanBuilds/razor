@@ -14,6 +14,7 @@ import { clientReserveTotals } from "../client-reserves/accounting";
 import { DestinationError, normalizeDestination } from "../../lib/recipient-destination";
 import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
+import { verifyCompanyFundingTarget } from "../funding-requests/service";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
 import { assertSameRecipientOwner, recordedRecipientName } from "./recipient-names";
@@ -652,7 +653,7 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   requirePermission(access, "payments:prepare");
   assertRunning(access);
   if (input.paymentId) throw new ApiError(409, "Open this approved obligation's pay-from-wallet task to quote its remaining need", "PAYMENT_FUNDING_TASK_REQUIRED");
-  const config = configFor(access, true);
+  const config = await verifyCompanyFundingTarget(access);
   if (!input.reference.trim() || input.reference.length > 200) throw new ApiError(422, "A stable funding reference is required", "INVALID_REFERENCE");
   const existing = row<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND reference=?", access.organizationId, input.reference);
   if (existing) {
@@ -666,9 +667,14 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   const tokens = await getSupportedTokens();
   const sourceToken = tokens.find((token) => token.assetId === input.originAsset);
   if (!sourceToken) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
+  try { normalizeDestination(sourceToken.blockchain, input.refundAddress); }
+  catch (error) { throw new ApiError(422, error instanceof DestinationError ? error.message : "Check the source-chain recovery address", "REFUND_ADDRESS_INVALID"); }
   const destination = nativeUsdc(tokens, "near");
+  if (destination.contractAddress !== config.token_contract) throw new ApiError(409, "The funding settlement asset differs from the verified treasury token", "FUNDING_TARGET_CHANGED");
   const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "razor:funding" });
   if (input.dry) return { dry: true, quote };
+  const currentConfig = await verifyCompanyFundingTarget(access);
+  if (currentConfig.near_account_id !== config.near_account_id || currentConfig.token_contract !== config.token_contract || currentConfig.network !== config.network) throw new ApiError(409, "The company funding destination changed while requesting this quote", "FUNDING_TARGET_CHANGED");
   const fundingId = id();
   getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(fundingId, access.organizationId, input.paymentId ?? null, input.reference, input.originAsset, quote.quote.amountIn, quote.quote.amountOut, json(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, "pending_deposit", now(), now());
   getDb().prepare("UPDATE funding_legs SET origin_network=?,origin_decimals=?,origin_symbol=? WHERE id=?").run(sourceToken.blockchain, sourceToken.decimals, sourceToken.symbol, fundingId);
@@ -682,6 +688,7 @@ export function listFunding(access: AccessContext): FundingLeg[] {
 
 export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string) {
   requirePermission(access, "payments:prepare");
+  if (sourceTxHash && !/^[A-Za-z0-9:_-]{8,160}$/.test(sourceTxHash)) throw new ApiError(422, "Enter the exact source transaction hash from your wallet or exchange", "FUNDING_HASH_INVALID");
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
   if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
   if (["confirmed", "refunded_verified", "refunded_attested"].includes(funding.status)) return { funding, treasury: await syncTreasury(access) };

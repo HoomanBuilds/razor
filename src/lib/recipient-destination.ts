@@ -4,9 +4,10 @@ import { getAddress, isAddress } from "viem";
 
 // XRP serialization is adapted from ripple-address-codec; see recipient-destination.NOTICE.
 
-const EVM = new Set(["eth", "base", "arb", "pol", "op", "avax", "bsc", "gnosis", "aurora", "bera", "plasma", "monad", "xlayer", "scroll", "adi", "hood", "hlevm", "hypercore"]);
+const EVM = new Set(["eth", "base", "arb", "pol", "op", "avax", "bsc", "gnosis", "aurora", "bera", "plasma", "monad", "xlayer", "scroll", "adi", "hood", "hlevm", "hypercore", "linea", "mantle", "blast", "celo", "zksync", "abs"]);
 const ALIASES: Record<string, string> = { ethereum: "eth", arbitrum: "arb", polygon: "pol", solana: "sol", optimism: "op", avalanche: "avax", berachain: "bera", bitcoin: "btc", litecoin: "ltc", dogecoin: "doge", bitcoincash: "bch", xlm: "stellar", trx: "tron", bnb: "bsc" };
 const checked58 = base58check(sha256);
+export const usesEvmAddress = (network: string) => EVM.has(canonicalNetwork(network));
 export const canonicalNetwork = (network: string) => ALIASES[network.toLowerCase()] ?? network.toLowerCase();
 
 export class DestinationError extends Error {

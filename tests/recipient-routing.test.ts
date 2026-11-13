@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Hono } from "hono";
-import { DestinationError, normalizeDestination } from "../src/lib/recipient-destination";
+import { DestinationError, normalizeDestination, usesEvmAddress } from "../src/lib/recipient-destination";
 import { recipientWorkspaceRoutes } from "../src/server/recipient-workspace";
 import { ApiError, type AccessContext, type AppEnv } from "../src/server/context";
 import { getDb, row } from "../src/server/db";
@@ -33,7 +33,7 @@ test("XRP tags use canonical mainnet X-addresses including zero and the uint32 b
 });
 
 test("destination validation checks network families and rejects unsupported receiving metadata", () => {
-  for (const network of ["base", "xlayer", "scroll", "hood", "hlevm", "hypercore"]) assert.equal(normalizeDestination(network, "0x1111111111111111111111111111111111111111").memo, null);
+  for (const network of ["base", "xlayer", "scroll", "hood", "hlevm", "hypercore", "linea", "mantle", "blast", "celo", "zksync", "abs"]) assert.equal(normalizeDestination(network, "0x1111111111111111111111111111111111111111").memo, null);
   assert.equal(normalizeDestination("btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").memo, null);
   assert.equal(normalizeDestination("bch", "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a").memo, null);
   assert.equal(normalizeDestination("stellar", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF").memo, null);
@@ -74,4 +74,12 @@ test("confirmation versions and immutable payment snapshots preserve encoded rou
   assert.equal(importRecipientCsv(access, csv, null).results[0].status, "existing");
   assert.equal(row<{ count: number }>("SELECT count(*) AS count FROM recipient_versions WHERE recipient_id=?", imported.id)!.count, 3);
   assert.ok(row<{ profile_ciphertext: string }>("SELECT profile_ciphertext FROM recipient_versions WHERE recipient_id=? AND version=3", imported.id)!.profile_ciphertext.startsWith("enc1:"));
+});
+
+
+test("source wallet compatibility distinguishes EVM funding from manual-only networks", () => {
+  assert.equal(usesEvmAddress("ethereum"), true);
+  assert.equal(usesEvmAddress("linea"), true);
+  assert.equal(usesEvmAddress("btc"), false);
+  assert.equal(usesEvmAddress("ton"), false);
 });

@@ -14,7 +14,7 @@ paymentFundingRoutes.post("/:paymentId/quote", async c => c.json(await service.q
 paymentFundingRoutes.post("/:paymentId/reserve", async c => c.json(await service.reserveTaskFunding(c.get("access"), c.req.param("paymentId"))));
 paymentFundingRoutes.post("/:paymentId/balance-refresh", async c => c.json(await service.prepareTaskBalanceRefresh(c.get("access"), c.req.param("paymentId"))));
 paymentFundingRoutes.post("/:paymentId/reconcile", async c => c.json(await service.reconcileTaskFunding(c.get("access"), c.req.param("paymentId"), reconcileInput.parse(await c.req.json()))));
-paymentFundingRoutes.post("/:paymentId/deposit-claim", async c => c.json(service.claimTaskDeposit(c.get("access"), c.req.param("paymentId"), z.object({ fundingId: text }).strict().parse(await c.req.json()).fundingId)));
+paymentFundingRoutes.post("/:paymentId/deposit-claim", async c => c.json(await service.claimTaskDeposit(c.get("access"), c.req.param("paymentId"), z.object({ fundingId: text }).strict().parse(await c.req.json()).fundingId)));
 paymentFundingRoutes.post("/:paymentId/close-unsent", async c => {
   const input = z.object({ fundingId: text, noTransferConfirmed: z.boolean() }).strict().parse(await c.req.json());
   return c.json(await service.closeUnsentFunding(c.get("access"), c.req.param("paymentId"), input.fundingId, input.noTransferConfirmed));

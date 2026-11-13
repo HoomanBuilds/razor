@@ -6,6 +6,8 @@ import * as service from "./service";
 
 export * from "./service";
 export const fundingRequestRoutes = new Hono<AppEnv>();
+export const sourceFundingRoutes = new Hono<AppEnv>();
+sourceFundingRoutes.post("/:id/deposit-claim", async c => c.json(await service.claimCompanyFunding(c.get("access"), c.req.param("id"))));
 export const publicFundingRoutes = new Hono<AppEnv>();
 const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const key = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
@@ -35,3 +37,6 @@ publicFundingRoutes.post("/reconcile", async (c) => {
   const input = z.object({ token, fundingId: z.string().min(1).max(128), idempotencyKey: key.optional(), sourceTxHash: z.string().min(8).max(160).optional() }).strict().parse(await c.req.json());
   return c.json(await service.reconcilePublicFunding(input.token, input));
 });
+
+publicFundingRoutes.post("/deposit-claim", async c => { const input = z.object({ token, fundingId: z.string().min(1).max(128), idempotencyKey: key }).strict().parse(await c.req.json()); return c.json(await service.claimPublicFunding(input.token, input)); });
+publicFundingRoutes.post("/close-unsent", async c => { const input = z.object({ token, fundingId: z.string().min(1).max(128), idempotencyKey: key, noTransferConfirmed: z.boolean() }).strict().parse(await c.req.json()); return c.json(await service.closePublicUnsentFunding(input.token, input)); });
