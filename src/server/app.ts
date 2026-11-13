@@ -18,6 +18,7 @@ import { fundingRequestRoutes, publicFundingRoutes } from "./funding-requests";
 import { paymentManagementRoutes } from "./payment-management";
 import { financeRoutes } from "./assistant/finance";
 import { clientReserveRoutes } from "./client-reserves";
+import { notificationRoutes } from "./notifications";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use(
@@ -63,6 +64,7 @@ app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
 app.route("/assets", assetRoutes);
 app.route("/recipient-workspace", recipientWorkspaceRoutes);
+app.route("/notifications", notificationRoutes);
 app.route("/funding-requests", publicFundingRoutes);
 app.use(
   "/organizations/:orgId/*",

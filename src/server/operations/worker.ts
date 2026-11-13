@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { dispatchNotifications } from "../notifications/service";
 import {
   addCompanyDays,
   companyCalendarShift,
@@ -499,5 +500,6 @@ export async function tickOperations(
       });
     }
   }
-  return { processed: results.length, jobs: results };
+  const notifications = await dispatchNotifications(input.organizationId, 1);
+  return { processed: results.length, jobs: results, notifications };
 }

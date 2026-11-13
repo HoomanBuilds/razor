@@ -34,6 +34,7 @@ import { Payments } from "./payments";
 import { Treasury } from "./treasury";
 import { FundingRequestsPanel } from "./funding-requests";
 import { ClientReservesPanel } from "./client-reserves";
+import { NotificationInbox } from "../notifications/inbox";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
@@ -390,7 +391,7 @@ function CompanyWorkspace({
       ) : section === "activity" ? (
         <ActivityLog />
       ) : (
-        <CompanySettings />
+        <div className="grid gap-6"><CompanySettings /><NotificationInbox /></div>
       )}
     </WorkspaceContext.Provider>
   );
