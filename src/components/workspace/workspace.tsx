@@ -35,6 +35,7 @@ import { Treasury } from "./treasury";
 import { FundingRequestsPanel } from "./funding-requests";
 import { ClientReservesPanel } from "./client-reserves";
 import { NotificationInbox } from "../notifications/inbox";
+import { ProjectReportsPanel } from "./project-reports";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
@@ -389,7 +390,7 @@ function CompanyWorkspace({
       ) : section === "assistant" ? (
         <Assistant />
       ) : section === "activity" ? (
-        <ActivityLog />
+        <div className="grid gap-6"><ActivityLog /><ProjectReportsPanel /></div>
       ) : (
         <div className="grid gap-6"><CompanySettings /><NotificationInbox /></div>
       )}
