@@ -10,7 +10,7 @@
     "dev": "node scripts/next-with-memory-guard.mjs dev --hostname 0.0.0.0",
     "build": "node scripts/next-with-memory-guard.mjs build",
     "start": "next start --hostname 0.0.0.0",
-    "typecheck": "NODE_OPTIONS=--max-old-space-size=1024 tsc --noEmit",
+    "typecheck": "node scripts/next-with-memory-guard.mjs typecheck",
     "test": "node --max-old-space-size=1024 --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "worker": "node --max-old-space-size=512 --env-file-if-exists=.env.local --import tsx scripts/worker.ts"
   },

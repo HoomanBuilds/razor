@@ -36,6 +36,6 @@ npm test
 npm run build
 ```
 
-Builds use a capped Node heap and one Next.js worker. A shared worktree lock prevents concurrent Razor development servers and production builds. Compilation requires 4 GB of available memory to start and stops if available memory stays below 3 GB. Run Rust builds with one job and serialize them with application builds. Stop the development server before a production build.
+Builds and type checks use a 1.5 GB Node heap cap, and Next.js uses one worker. A shared worktree lock serializes compilers and prevents compilation alongside a Razor development server. Compilation requires 4 GB of available memory to start and stops if available memory stays below 3 GB. Run Rust builds with one job and serialize them with application builds. Stop the development server before a production build.
 
 The [product specifications](docs/README.md), [build checklist](docs/build-checklist.md) and [source notices](THIRD_PARTY_NOTICES.md) describe intended behavior, verified progress and reused source. An implemented screen is not evidence of a live payment. Public deployment, provider credentials, onchain setup and real settlement verification must be completed before advertising those integrations as live.

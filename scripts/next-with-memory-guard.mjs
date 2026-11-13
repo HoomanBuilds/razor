@@ -10,7 +10,7 @@ if (major < 24 || major === 24 && (minor < 22 || minor === 22 && patch < 1)) {
 }
 
 const [mode, ...args] = process.argv.slice(2);
-if (!["build", "dev"].includes(mode)) throw new Error("Choose build or dev.");
+if (!["build", "dev", "typecheck"].includes(mode)) throw new Error("Choose build, dev or typecheck.");
 
 function availableMb() {
   if (process.platform === "linux") {
@@ -41,13 +41,16 @@ for (let attempt = 0; attempt < 2; attempt++) {
     const pid = Number(readFileSync(lockPath, "utf8"));
     let active = true;
     try { process.kill(pid, 0); } catch (cause) { if (cause.code === "ESRCH") active = false; }
-    if (active || attempt) { console.error("Another Razor development server or production build is active. Stop it before compiling."); process.exit(1); }
+    if (active || attempt) { console.error("Another Razor compiler or development server is active. Stop it before compiling."); process.exit(1); }
     unlinkSync(lockPath);
   }
 }
 
 const heapOptions = (process.env.NODE_OPTIONS ?? "").replace(/--max-old-space-size(?:=|\s+)\d+/g, "");
-const child = spawn(process.execPath, [resolve("node_modules/next/dist/bin/next"), mode, "--webpack", ...args], {
+const command = mode === "typecheck"
+  ? [resolve("node_modules/typescript/bin/tsc"), "--noEmit", ...args]
+  : [resolve("node_modules/next/dist/bin/next"), mode, "--webpack", ...args];
+const child = spawn(process.execPath, command, {
   stdio: "inherit",
   detached: process.platform !== "win32",
   env: { ...process.env, NODE_OPTIONS: `${heapOptions} --max-old-space-size=1536`.trim() },
