@@ -205,12 +205,12 @@ export function Bills() {
                     (recipient) => recipient.id === bill.recipient_id,
                   )?.name ?? "Payee"}
                 </td>
-                <td className="tabular-nums">{usd(bill.amount)}</td>
+                <td className="tabular-nums">{usd(bill.amount)}{BigInt(bill.setoffAmount) > 0n && <p className="mt-1 text-xs text-muted-foreground">{usd(bill.setoffAmount)} debt discharged<br/>{usd(bill.remainingLiability)} remains</p>}</td>
                 <td>{dateLabel(bill.due_date, organization.timezone)}</td>
                 <td>
                   <Status
                     value={
-                      ["paid", "partially_paid"].includes(bill.status)
+                      ["paid", "partially_paid", "settled", "cleared", "partially_settled"].includes(bill.status)
                         ? bill.status
                         : (bill.payment?.status ?? bill.status)
                     }

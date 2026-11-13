@@ -174,6 +174,7 @@ export function approveBillBatch(access: AccessContext, billIds: string[], revie
 }
 
 function assertReplaceable(access: AccessContext, payment: Payment) {
+  if (row("SELECT id FROM clearing_setoffs WHERE original_payment_id=?", payment.id)) throw new ApiError(409, "This obligation was retired by clearing. Use its residual invoice draft", "CLEARED_LIABILITY");
   if (payment.status !== "cancelled" || BigInt(payment.delivered_amount) > 0n || payment.reserved_amount !== "0" || listAttempts(access, payment.id).some((attempt) => !["closed_unfunded", "refunded_verified"].includes(attempt.state))) throw new ApiError(409, "A replacement needs a fully cancelled, unpaid obligation with all delivery attempts closed", "REPLACEMENT_UNSAFE");
 }
 
@@ -226,7 +227,7 @@ export async function replaceCancelledPayment(access: AccessContext, paymentId: 
     let replacement: Payment;
     if (bill) {
       const terms = addBillInstallment(access, bill.id, { amount: previous.amount, maxFee: remainingFee.toString() });
-      replacement = getPayment(access, terms.payment_id);
+      replacement = getPayment(access, terms.payment_id!);
       db.prepare("UPDATE payments SET scheduled_for=?,metadata=?,updated_at=? WHERE id=? AND status='draft' AND approved_at IS NULL").run(previous.scheduled_for, JSON.stringify({ ...JSON.parse(replacement.metadata), replacementOf: previous.id, displayReference: metadata.displayReference ?? bill.reference }), now(), replacement.id);
       replacement = getPayment(access, replacement.id);
     } else {
@@ -259,5 +260,5 @@ export function managedPaymentReview(access: AccessContext, paymentId: string) {
   const liabilityId = link?.liability_id ?? item?.id ?? paymentId;
   const old = history(access, kind, liabilityId, payment);
   const attempts = listAttempts(access, paymentId);
-  return { ...paymentReview(access, payment), attempts, history: old.payments, replacements: old.replacements.map((entry) => ({ ...entry, reason: decrypt(entry.reason_ciphertext), reason_ciphertext: undefined })), payrollRunId: item?.run_id ?? null, billId: bill?.id ?? null, canReplace: payment.status === "cancelled" && payment.delivered_amount === "0" && attempts.every((attempt) => ["closed_unfunded", "refunded_verified"].includes(attempt.state)), treasuryNetwork: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId)?.network ?? null };
+  return { ...paymentReview(access, payment), attempts, history: old.payments, replacements: old.replacements.map((entry) => ({ ...entry, reason: decrypt(entry.reason_ciphertext), reason_ciphertext: undefined })), payrollRunId: item?.run_id ?? null, billId: bill?.id ?? null, canReplace: payment.status === "cancelled" && payment.delivered_amount === "0" && !row("SELECT id FROM clearing_setoffs WHERE original_payment_id=?", payment.id) && attempts.every((attempt) => ["closed_unfunded", "refunded_verified"].includes(attempt.state)), treasuryNetwork: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId)?.network ?? null };
 }

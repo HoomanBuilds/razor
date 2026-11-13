@@ -7,7 +7,7 @@ import { accountingExport } from "../reconciliation/export";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
-  amount: string; max_fee: string; due_date: string | null; status: string;
+  amount: string; setoff_amount: string; max_fee: string; due_date: string | null; status: string;
   line_items: string; evidence: string | null; document_hash: string | null;
   payment_id: string | null; accepted_at: string | null; created_at: string; updated_at: string;
   requires_acceptance: number; milestone_accepted_at: string | null;
@@ -47,10 +47,10 @@ export function listBills(access: AccessContext) {
   requirePermission(access, "payments:read");
   return rows<Bill>("SELECT * FROM bills WHERE organization_id = ? ORDER BY created_at DESC", access.organizationId)
     .map(readableBill).map((bill) => {
-      const installments = rows<{ amount: string; status: string }>("SELECT p.amount,p.status FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=?", bill.id);
-      const delivered = installments.filter((item) => item.status === "paid").reduce((sum, item) => sum + BigInt(item.amount), 0n);
-      const status = bill.status === "disputed" ? "disputed" : delivered === BigInt(bill.amount) ? "paid" : delivered > 0n ? "partially_paid" : bill.status;
-      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), remainingLiability: (BigInt(bill.amount) - delivered).toString() };
+      const installments = rows<{ amount: string; status: string; delivered_amount: string }>("SELECT p.amount,p.status,p.delivered_amount FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=?", bill.id);
+      const delivered = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(bill.setoff_amount), remaining = BigInt(bill.amount) - delivered - setoff;
+      const status = bill.status === "disputed" ? "disputed" : remaining === 0n ? setoff > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : setoff > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : bill.status;
+      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), setoffAmount: setoff.toString(), remainingLiability: remaining.toString() };
     });
 }
 
