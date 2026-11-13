@@ -67,6 +67,7 @@ export function OperationsPanel() {
   );
   const { busy, error, run } = useAction();
   const [kind, setKind] = useState<"bill" | "payroll">("bill");
+  const [cadence, setCadence] = useState<"days" | "months">("months");
   const data = resource.data;
   return (
     <div className="grid gap-6">
@@ -160,7 +161,10 @@ export function OperationsPanel() {
                     await api(`${base}/operations/recurring`, {
                       kind,
                       entityId: values.get("source"),
-                      intervalDays: Number(values.get("interval")),
+                      intervalDays: cadence === "days" ? Number(values.get("interval")) : 1,
+                      cadence,
+                      intervalMonths: cadence === "months" ? Number(values.get("interval")) : 1,
+                      monthEnd: cadence === "months" && values.get("monthEnd") === "on",
                       nextRunAt: companyTimeToIso(
                         String(values.get("due")),
                         organization.timezone,
@@ -200,17 +204,22 @@ export function OperationsPanel() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Every (days)">
+                <Field label="Repeat by">
+                  <select className={control} value={cadence} onChange={event => setCadence(event.target.value as "days" | "months")}><option value="months">Calendar months</option><option value="days">Calendar days</option></select>
+                </Field>
+                <Field label={`Every (${cadence})`} hint={cadence === "months" ? "Short months use their last available day, then return to the original day." : undefined}>
                   <input
+                    key={cadence}
                     className={control}
                     name="interval"
                     type="number"
-                    defaultValue="30"
+                    defaultValue={cadence === "months" ? "1" : "30"}
                     min={1}
-                    max={365}
+                    max={cadence === "months" ? 12 : 365}
                     required
                   />
                 </Field>
+                {cadence === "months" && <label className="flex items-center gap-2 self-center text-sm"><input type="checkbox" name="monthEnd" />Repeat on the last calendar day</label>}
                 <Field label="First due date" hint={organization.timezone}>
                   <input
                     className={control}
@@ -254,8 +263,8 @@ export function OperationsPanel() {
                 {data.recurring.map((rule) => (
                   <tr key={rule.id}>
                     <td className="capitalize">{rule.kind}</td>
-                    <td>{rule.interval_days} days</td>
-                    <td>{dateLabel(rule.next_run_at)}</td>
+                    <td>{rule.cadence === "months" ? `${rule.interval_months} months${rule.month_end ? ", month end" : ""}` : `${rule.interval_days} days`}</td>
+                    <td>{dateLabel(rule.next_run_at, organization.timezone)}</td>
                     <td>{usd(rule.max_amount ?? "0")}</td>
                     <td>
                       <Status value={rule.status} />

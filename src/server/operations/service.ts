@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { companyDate } from "../../lib/company-time";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
@@ -338,6 +339,9 @@ export function createRecurring(
     intervalDays: number;
     nextRunAt: string;
     maxAmount: string;
+    cadence?: "days" | "months";
+    intervalMonths?: number;
+    monthEnd?: boolean;
   },
 ) {
   manager(access);
@@ -359,6 +363,10 @@ export function createRecurring(
       "Choose a valid first occurrence",
       "DUE_DATE_INVALID",
     );
+  const cadence = input.cadence ?? "days", intervalMonths = input.intervalMonths ?? 1;
+  if (!Number.isInteger(intervalMonths) || intervalMonths < 1 || intervalMonths > 12) throw new ApiError(422, "Choose an interval from 1 to 12 months", "INTERVAL_INVALID");
+  const timeZone = row<{ timezone: string }>("SELECT timezone FROM organizations WHERE id=?", access.organizationId)?.timezone ?? "UTC";
+  const anchorDay = Number(companyDate(next.toISOString(), timeZone).slice(8));
   const cap = money(input.maxAmount),
     snapshot = captureTemplate(
       access.organizationId,
@@ -381,6 +389,7 @@ export function createRecurring(
     if (existing) {
       if (
         existing.interval_days !== input.intervalDays ||
+        existing.cadence !== cadence || existing.interval_months !== intervalMonths || !!existing.month_end !== !!input.monthEnd ||
         existing.max_amount !== cap ||
         !existing.snapshot_ciphertext ||
         JSON.parse(decrypt(existing.snapshot_ciphertext)).fingerprint !==
@@ -397,7 +406,7 @@ export function createRecurring(
       now = iso();
     getDb()
       .prepare(
-        "INSERT INTO recurring_rules(id,organization_id,kind,entity_id,interval_days,next_run_at,created_by,max_amount,snapshot_ciphertext,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)",
+        "INSERT INTO recurring_rules(id,organization_id,kind,entity_id,interval_days,next_run_at,created_by,max_amount,snapshot_ciphertext,status,created_at,updated_at,cadence,interval_months,anchor_day,month_end) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -411,6 +420,10 @@ export function createRecurring(
         encrypt(JSON.stringify(snapshot)),
         now,
         now,
+        cadence,
+        intervalMonths,
+        anchorDay,
+        Number(!!input.monthEnd),
       );
     return publicRule(
       row<RecurringRule>("SELECT * FROM recurring_rules WHERE id=?", id)!,

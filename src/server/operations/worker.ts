@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { dispatchNotifications } from "../notifications/service";
 import {
   addCompanyDays,
+  addCompanyMonths,
+  companyMonthShift,
+  shiftPeriodDate,
   companyCalendarShift,
   InvalidCompanyTime,
 } from "../../lib/company-time";
@@ -216,7 +219,7 @@ function recurringJob(job: OperationJob): JobResult {
         rule.organization_id,
       )?.timezone ?? "UTC";
     try {
-      next = addCompanyDays(dueAt, rule.interval_days, timeZone);
+      next = rule.cadence === "months" ? addCompanyMonths(dueAt, rule.interval_months, timeZone, rule.anchor_day, !!rule.month_end) : addCompanyDays(dueAt, rule.interval_days, timeZone);
       const creator = getAccess(rule.created_by, rule.organization_id);
       if (
         !["company:manage", "payments:read", "payments:prepare"].every(
@@ -307,8 +310,9 @@ function recurringJob(job: OperationJob): JobResult {
           original.scheduledFor ?? original.periodEnd,
           timeZone,
         ) * 86_400_000;
-      const shiftDate = (date: string) =>
-        new Date(Date.parse(`${date}T00:00:00.000Z`) + shift)
+      const shiftDate = (date: string) => rule.cadence === "months"
+        ? shiftPeriodDate(date, companyMonthShift(dueAt, original.scheduledFor ?? original.periodEnd, timeZone))
+        : new Date(Date.parse(`${date}T00:00:00.000Z`) + shift)
           .toISOString()
           .slice(0, 10);
       const created = createPayrollRun(access, {

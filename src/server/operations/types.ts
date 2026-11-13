@@ -7,6 +7,7 @@ export interface OperationJob {
 export interface RecurringRule {
   id: string; organization_id: string; kind: "bill" | "payroll"; entity_id: string;
   interval_days: number; next_run_at: string; enabled: number; created_by: string;
+  cadence: "days" | "months"; interval_months: number; anchor_day: number | null; month_end: number;
   max_amount: string | null; status: string; last_result: string | null; last_run_at: string | null;
   snapshot_ciphertext: string | null; created_at: string; updated_at: string | null;
 }

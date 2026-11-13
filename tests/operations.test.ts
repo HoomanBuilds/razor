@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getDb, row, rows } from "../src/server/db";
 import { PERMISSIONS, getAccess } from "../src/server/identity/session";
-import { approveBill, createBill } from "../src/server/business/service";
+import { approveBill, createBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
 import { createRecurring, listNotices, readNotice } from "../src/server/operations/service";
 import { tickOperations } from "../src/server/operations/worker";
 
@@ -75,4 +75,18 @@ test("changed destination versions hold recurring work and partial source invoic
   assert.equal(rows("SELECT * FROM recurring_occurrences WHERE rule_id=? AND status='held'", rule.id).length, 1);
   getDb().prepare("UPDATE payments SET amount='5000000' WHERE id=?").run(invoice.payment_id);
   assert.throws(() => createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: due, maxAmount: "10000000" }), /partial installments/);
+});
+
+test("monthly payroll creates the next calendar entitlement and advances one durable cycle", async () => {
+  const { access, recipientId } = fixture();
+  const original = createPayrollRun(access, { reference: "monthly-source", periodStart: "2025-12-01", periodEnd: "2025-12-31", scheduledFor: "2026-01-01T09:00:00Z", items: [{ recipientId, amount: "1000000" }] });
+  approvePayrollRun(access, original.id);
+  const rule = createRecurring(access, { kind: "payroll", entityId: original.id, intervalDays: 1, cadence: "months", intervalMonths: 1, nextRunAt: "2026-02-01T09:00:00Z", maxAmount: "1000000" });
+  await tickOperations({ organizationId: access.organizationId, maxJobs: 20 });
+  const generated = row<{ period_start: string; period_end: string; status: string }>("SELECT period_start,period_end,status FROM payroll_runs WHERE organization_id=? AND id!=?", access.organizationId, original.id)!;
+  assert.equal(generated.period_start, "2026-01-01");
+  assert.equal(generated.period_end, "2026-01-31");
+  assert.equal(generated.status, "draft");
+  assert.equal(row<{ next_run_at: string }>("SELECT next_run_at FROM recurring_rules WHERE id=?", rule.id)?.next_run_at, "2026-03-01T09:00:00.000Z");
+  assert.equal(row<{ n: number }>("SELECT COUNT(*) AS n FROM recurring_occurrences WHERE rule_id=?", rule.id)?.n, 1);
 });
