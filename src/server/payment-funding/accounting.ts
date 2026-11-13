@@ -24,7 +24,7 @@ export function fundingPositions(organizationId: string) {
     const clientCash = clientPositions.filter(position => position.payment?.id === payment.id && !["released", "terms_changed"].includes(position.state)).reduce((sum, position) => sum + position.clientReserved, 0n);
     const committed = BigInt(task?.cash_committed ?? "0");
     const outstanding = budget.remaining > BigInt(payment.reserved_amount) + clientCash ? budget.remaining - BigInt(payment.reserved_amount) - clientCash : 0n;
-    const closed = ["paid", "cancelled"].includes(payment.status);
+    const closed = ["paid", "cancelled", "partially_paid"].includes(payment.status);
     const held = !closed && payment.approved_at && !sourceIsUnresolved(payment) ? min(outstanding, credit + committed) : 0n;
     return { payment, task, legs, credit, committed, clientCash, held, termsMatch: !task || task.terms_hash === paymentTermsHash(payment), sourceInFlight: sourceIsUnresolved(payment) };
   });

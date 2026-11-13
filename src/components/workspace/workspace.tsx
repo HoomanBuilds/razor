@@ -456,7 +456,7 @@ function CreateCompany({
             />
           </Field>
           <div className="rounded-lg bg-muted p-3 text-sm">
-            Default settlement and accounting: <strong>USDC</strong>
+            Company amounts are recorded in <strong>USDC</strong>. Fund with any supported asset and choose supported payout assets for each payee.
           </div>
           <Action busy={busy === "company"}>Create workspace</Action>
           {onCancel && (

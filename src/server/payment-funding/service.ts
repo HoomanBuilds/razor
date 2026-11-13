@@ -26,7 +26,7 @@ function currentProfile(access: AccessContext, paymentId: string) {
 function approved(access: AccessContext, paymentId: string) {
   const payment = getPayment(access, paymentId);
   if (!payment.approved_at || !payment.approved_by) throw new ApiError(409, "Review and approve the exact obligation before funding it", "APPROVAL_REQUIRED");
-  if (["paid", "cancelled"].includes(payment.status)) throw new ApiError(409, "This obligation is already closed. Its source history remains available", "PAYMENT_CLOSED");
+  if (["paid", "cancelled", "partially_paid"].includes(payment.status)) throw new ApiError(409, "This obligation is already closed. Its source history remains available", "PAYMENT_CLOSED");
   if (!currentProfile(access, paymentId)) throw new ApiError(409, "Receiving preferences changed. Review cancellation and replacement before sending more funds", "RECIPIENT_CHANGED");
   const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string };
   if (metadata.billId && !row("SELECT id FROM bills WHERE id=? AND organization_id=? AND payment_id=? AND status='approved'", metadata.billId, access.organizationId, paymentId)) throw new ApiError(409, "The underlying invoice is no longer approved", "SOURCE_APPROVAL_CHANGED");
@@ -51,12 +51,12 @@ export function paymentFundingTask(access: AccessContext, paymentId: string) {
     const profileCurrent = currentProfile(access, paymentId);
     let sourceApproved = true;
     try { approved(access, paymentId); } catch { sourceApproved = false; }
-    const closed = ["paid", "cancelled"].includes(payment.status);
+    const closed = ["paid", "cancelled", "partially_paid"].includes(payment.status);
     const exhausted = budget.remaining < BigInt(payment.amount) && !closed && BigInt(payment.reserved_amount) === 0n;
     const usableCash = BigInt(treasury.balance) - BigInt(treasury.totalReserved) + ownedCash;
     const creditNeedsRefresh = (position.credit > 0n || position.committed > 0n) && usableCash < required && BigInt(treasury.reserveDeficit) > 0n;
     let stage = "needs_funding", message = "Review the approved amount and quote only its remaining funding need.";
-    if (closed) { stage = payment.status; message = payment.status === "paid" ? "Recipient delivery is reconciled. Any source excess remains linked in this history." : "The obligation is cancelled. Continue tracking any existing source transfer; do not send another deposit."; }
+    if (closed) { stage = payment.status; message = payment.status === "partially_paid" ? "This original route is closed with partial delivery. Review its separately approved remainder in Payments; do not fund or resend the full original amount." : payment.status === "paid" ? "Recipient delivery is reconciled. Any source excess remains linked in this history." : "The obligation is cancelled. Continue tracking any existing source transfer; do not send another deposit."; }
     else if (!payment.approved_at) { stage = "needs_approval"; message = "Approve the underlying bill or pay run before starting source funding."; }
     else if (!profileCurrent || !position.termsMatch || !sourceApproved) { stage = "terms_changed"; message = "Approved terms or receiving preferences changed. Reconcile and review a replacement before sending more money."; }
     else if (activeAttempt && activeAttempt.state !== "prepared") { stage = "reconcile_payout"; message = "A payout may already deliver. Reconcile it before creating another funding or payout attempt."; }
