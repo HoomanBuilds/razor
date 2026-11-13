@@ -14,7 +14,7 @@ Use the [build checklist](../build-checklist.md) for recurring verification. Eve
 | --- | --- | --- |
 | AUTH-01 | Familiar sign-in | A new payer can sign up and return through Google or a simple email option using a supported provider; no company invitation or existing crypto wallet is required to start |
 | AUTH-02 | Wallet-first sign-in | Existing wallet users can authenticate through a supported signed challenge, with domain, nonce, expiry and identity binding; merely connecting an address does not authenticate its owner |
-| AUTH-03 | Self-serve company creation | A signed-in user can create a company with minimal details, become its initial owner and choose settlement and time-zone defaults without manual operator setup |
+| AUTH-03 | Self-serve company creation | A signed-in user can create a company with minimal details, become its initial owner and review the USDC accounting unit and choose its time zone without manual operator setup; funding and primary payout assets remain selectable in their own workflows |
 | AUTH-04 | Prepare before funding | A new company can add payees, draft bills or payroll and preview required funds before connecting or funding a wallet; execution remains gated by actual authority and money |
 | AUTH-05 | Account and wallet linking | Link a social identity and one or more wallets through verified control, preserving one user's workspace access without email-only account merging |
 | AUTH-06 | Team invitations | Invite, accept, expire and revoke organization memberships with explicit roles and access enforced on server and financial actions |

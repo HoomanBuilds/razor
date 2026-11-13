@@ -28,7 +28,7 @@ The evidence review on 13 November 2026 verifies **12 of 127 checks: 11 of 82 co
 
 - [ ] `AUTH-01` A fresh user can sign up and return with Google or a simple email option without a company invitation, operator setup or pre-existing wallet.
 - [x] `AUTH-02` A supported wallet-first user authenticates through a verified, fresh, domain-bound challenge; a connected address alone cannot impersonate its owner.
-- [ ] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews editable USDC and time-zone defaults without manual database setup.
+- [ ] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews the USDC accounting unit and chooses its time zone without manual database setup; funding and primary receiving assets remain selectable.
 - [x] `AUTH-04` A new company can add payees and prepare and preview payroll or bills before funding; execution clearly identifies missing authority or money.
 - [ ] `AUTH-05` Social login and wallet linking require verified control and return the user to the same authorized workspaces without email-only account merging.
 - [ ] `AUTH-06` Invitations can be accepted, expired and revoked; assigned roles are enforced beyond the interface.
@@ -227,5 +227,7 @@ Append a row for each meaningful review. Use the same IDs as the checkboxes. Evi
 | 2026-11-13 | `26ced9d`, checklist correction | `AUTH-03` | Cleared prior checkbox | Company creation, ownership and editable time zones work. The settlement denomination is fixed at USDC; the literal requirement also includes an editable asset default, so this requirement is not fully satisfied. No requirement was narrowed to preserve the earlier count. |
 
 | 2026-11-13 | `8fc1f9b`, local focused review | `BILL-03`; partial `DATA-07`, `NET-06`, `TRE-09` | Duplicate safeguards verified locally; integrations remain open | Invoice intake rejects changed reused references and source-document copies; similar requests appear in the exact approval review and a new warning invalidates an older review token. Thirteen focused invoice/reconciliation checks passed. Cleared-debt reports have nine passing project/clearing checks; six clearing contract VM checks passed. Pay-from-wallet has twelve passing focused checks and its mounted integration passes TypeScript. These are local checks, not live funding, refund, clearing or payout evidence. |
+
+| 2026-11-13 | Product clarification from the user | `AUTH-03`, `TRE-01`, `REC-03`, `REC-04` | Acceptance wording clarified; no new verification checkbox | The user clarified that payers may use any supported funding asset and recipients may choose any supported primary payout asset. Both receive optional fee/compatibility suggestions; backups always use native USDC on curated popular networks. Company accounting stays in USDC. The earlier ambiguous editable company-settlement selector is replaced by reviewing that accounting unit; asset choice belongs to funding and receiving. The historical correction remains above. |
 
 Record in-progress, blocked or failed work in the log while leaving its checkbox unchecked. When a failure is corrected, add a new verification entry rather than rewriting history.

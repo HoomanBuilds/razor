@@ -66,7 +66,7 @@ A small company may assign several roles to the same person. The owner's policy 
 
 ### Arrive, sign in and create a company
 
-The public entry point offers Google or email sign-in and a supported wallet-first path. A new payer needs no invitation or manual operator approval to create a workspace. Ask only for the company details needed to start, apply editable USDC and time-zone defaults, and show a resumable setup guide.
+The public entry point offers Google or email sign-in and a supported wallet-first path. A new payer needs no invitation or manual operator approval to create a workspace. Ask only for the company details needed to start, explain the USDC accounting unit, allow the company time zone to be edited, and show a resumable setup guide.
 
 The payer can add recipients, invite finance staff and draft an obligation before funding. Connect a wallet or establish the social user's NEAR-capable signer when a financial action requires it. The interface distinguishes a ready draft from an authorized, funded payment.
 
