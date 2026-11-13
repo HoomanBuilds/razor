@@ -7,7 +7,7 @@ let transactionDepth = 0;
 
 export function getDb(): DatabaseSync {
   if (database) return database;
-  const file = process.env.DATABASE_PATH ?? resolve(".data/float.sqlite");
+  const file = process.env.DATABASE_PATH ?? resolve(".data/razor.sqlite");
   if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
   const connection = new DatabaseSync(file);
   connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
@@ -34,7 +34,7 @@ export function getDb(): DatabaseSync {
 export function transaction<T>(action: (db: DatabaseSync) => T): T {
   const db = getDb();
   const depth = transactionDepth++;
-  const savepoint = `float_transaction_${depth}`;
+  const savepoint = `razor_transaction_${depth}`;
   db.exec(depth ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
   try {
     const result = action(db);

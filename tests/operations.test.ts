@@ -9,7 +9,7 @@ import { tickOperations } from "../src/server/operations/worker";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "ac".repeat(32);
-delete process.env.FLOAT_EXECUTOR_PRIVATE_KEY;
+delete process.env.RAZOR_EXECUTOR_PRIVATE_KEY;
 
 function fixture() {
   const db = getDb(), organizationId = randomUUID(), userId = randomUUID(), roleId = randomUUID(), recipientId = randomUUID(), now = new Date().toISOString();

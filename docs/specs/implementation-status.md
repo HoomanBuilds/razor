@@ -1,4 +1,4 @@
-# FLOAT implementation status
+# Razor implementation status
 
 This review records implementation and local build evidence through 13 November 2026. The [build checklist](../build-checklist.md) remains the completion authority: 82 core requirements, 8 optional requirements and 37 additional scenarios, journeys, usability, integration and track gates. No requirement was removed or narrowed for this review.
 
@@ -14,7 +14,7 @@ This review records implementation and local build evidence through 13 November 
 | Combined application suite | 50 tests passed on candidate `26ced9d`; TypeScript passed | Provider and chain fixtures establish local behavior, not live settlement |
 | Subsequent focused checks | Identity, imports, recipient workspace, business terms, private inference rejection, reconciliation, funding instructions, funding links, onboarding, operations and payment-management checks were reported passing | Several provider and chain responses use fixtures; they cannot establish live integration completion |
 | NEAR contract checks | Treasury: 9 VM tests; factory: 4 VM tests; WASM artifacts built | No deployed factory or treasury, live owner signature, worker transfer or final receiving-chain receipt |
-| Build checks | Production build and TypeScript passed with one Next worker and the shared memory guard | Optional Privy Farcaster module and viem Tempo dependency warnings remain; their paths are not offered by FLOAT |
+| Build checks | Production build and TypeScript passed with one Next worker and the shared memory guard | Optional Privy Farcaster module and viem Tempo dependency warnings remain; their paths are not offered by Razor |
 
 The earlier workflow evidence is stored in `.data/workflow-check-result.json` and `.data/workflow-browser-result.json`. The current candidate records its source commit in `.data/final-workflow-result.json` and `.data/final-browser-result.json`, with overview and payroll screenshots beside them. These local review artifacts, credentials and databases are excluded from version control.
 
@@ -73,4 +73,4 @@ These findings were corrected and locally checked. No deep security audit or rea
 4. Record backup, refund, timeout and partial-delivery cases without introducing a second payable attempt. Export the final linked obligation, costs, evidence and remaining liability.
 5. With NEAR AI credentials and approved deployment pins, run fictional invoices through successful required verification and failure paths; inspect retention/deletion and confirm no analysis can approve or execute money movement.
 
-Provider credentials can be supplied later. Their absence keeps the corresponding readiness and evidence gates open while product implementation continues. Until these passes succeed, describe FLOAT as an implemented development build with verified local workflows and guards, rather than a completed live payments or private-inference deployment.
+Provider credentials can be supplied later. Their absence keeps the corresponding readiness and evidence gates open while product implementation continues. Until these passes succeed, describe Razor as an implemented development build with verified local workflows and guards, rather than a completed live payments or private-inference deployment.

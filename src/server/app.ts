@@ -57,7 +57,7 @@ app.onError((error, c) => {
     500,
   );
 });
-app.get("/health", (c) => c.json({ service: "float", status: "ok" }));
+app.get("/health", (c) => c.json({ service: "razor", status: "ok" }));
 app.route("/", identityRoutes);
 app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);

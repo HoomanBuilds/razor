@@ -927,7 +927,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "float-factory"
+name = "razor-factory"
 version = "0.1.0"
 dependencies = [
  "near-sdk",

@@ -52,7 +52,7 @@ test("recipient confirmation refuses a full asset ID with a backup on the same p
   const original=globalThis.fetch,other:Token={...token,assetId:"nep141:other-token.near",symbol:"OTHER",contractAddress:"other-token.near"};
   globalThis.fetch=async()=>Response.json([token,other]);
   try {
-    const request=(assetId:string)=>app.request(`http://localhost:3000/${invitationToken}/confirm`,{method:"POST",headers:{Origin:"http://localhost:3000",Cookie:`float_session=${sessionToken}`,"Content-Type":"application/json"},body:JSON.stringify({expectedVersion:1,primaryAsset:assetId,primaryNetwork:"near",primaryAddress:"payee.near",backupNetwork:"near",backupAddress:"backup.near",fallbackConsent:true})});
+    const request=(assetId:string)=>app.request(`http://localhost:3000/${invitationToken}/confirm`,{method:"POST",headers:{Origin:"http://localhost:3000",Cookie:`razor_session=${sessionToken}`,"Content-Type":"application/json"},body:JSON.stringify({expectedVersion:1,primaryAsset:assetId,primaryNetwork:"near",primaryAddress:"payee.near",backupNetwork:"near",backupAddress:"backup.near",fallbackConsent:true})});
     const response=await request(token.assetId);
     assert.equal(response.status,400);assert.equal((await response.json()).code,"BACKUP_SAME_NETWORK");
     assert.equal((await request(other.assetId)).status,200);

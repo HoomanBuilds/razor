@@ -42,10 +42,10 @@ export function isPaused(organizationId: string) {
   )?.paused;
 }
 export function workerConfiguration(organizationId?: string) {
-  const accountId = process.env.FLOAT_EXECUTOR_ACCOUNT_ID || null;
+  const accountId = process.env.RAZOR_EXECUTOR_ACCOUNT_ID || null;
   const treasuryAccountId =
-    process.env.FLOAT_EXECUTOR_TREASURY_ACCOUNT_ID || null;
-  const network = process.env.FLOAT_EXECUTOR_NETWORK || null;
+    process.env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID || null;
+  const network = process.env.RAZOR_EXECUTOR_NETWORK || null;
   const company = organizationId
     ? row<TreasuryConfig>(
         "SELECT * FROM treasury_config WHERE organization_id=?",
@@ -63,7 +63,7 @@ export function workerConfiguration(organizationId?: string) {
       accountId &&
       treasuryAccountId &&
       ["mainnet", "testnet"].includes(network ?? "") &&
-      process.env.FLOAT_EXECUTOR_PRIVATE_KEY
+      process.env.RAZOR_EXECUTOR_PRIVATE_KEY
     ),
     accountId: matches ? accountId : null,
     treasuryAccountId: matches ? treasuryAccountId : null,

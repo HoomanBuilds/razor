@@ -110,7 +110,7 @@ authRoutes.post("/challenge", async (c) => {
   if ((recent?.count || 0) >= 8) throw new ApiError(429, "Please wait before requesting another sign-in challenge", "RATE_LIMITED");
   const id = randomUUID(), nonce = randomBytes(32).toString("hex"), recipient = new URL(appOrigin()).host;
   const expiresAt = new Date(Date.now() + 300000).toISOString();
-  const message = `Sign in to FLOAT\nDomain: ${recipient}\nWallet: ${address}\nNetwork: ${network}\nPurpose: ${input.purpose}\nNonce: ${nonce}\nExpires: ${expiresAt}`;
+  const message = `Sign in to Razor\nDomain: ${recipient}\nWallet: ${address}\nNetwork: ${network}\nPurpose: ${input.purpose}\nNonce: ${nonce}\nExpires: ${expiresAt}`;
   getDb().prepare("INSERT INTO auth_challenges (id,family,address,network,message,nonce,recipient,user_id,purpose,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
     .run(id,input.family,address,network,message,nonce,recipient,input.purpose === "link" ? session!.user_id : null,input.purpose,expiresAt,new Date().toISOString());
   return c.json({ id, challengeId: id, message, nonce, recipient, expiresAt, family: input.family, address, network });

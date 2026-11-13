@@ -967,7 +967,7 @@ impl Treasury {
         ext_ft::ext(self.token_contract.clone())
             .with_attached_deposit(NearToken::from_yoctonear(1))
             .with_static_gas(GAS_TRANSFER)
-            .ft_transfer(receiver_id, amount, Some("FLOAT owner withdrawal".into()))
+            .ft_transfer(receiver_id, amount, Some("Razor owner withdrawal".into()))
             .then(
                 ext_self::ext(env::current_account_id())
                     .with_static_gas(GAS_CALLBACK)
@@ -1096,7 +1096,7 @@ fn read_balance() -> Option<u128> {
 fn emit(event: &str, data: near_sdk::serde_json::Value) {
     env::log_str(&format!(
         "EVENT_JSON:{}",
-        json!({"standard":"float","version":"1.0.0","event":event,"data":[data]})
+        json!({"standard":"razor","version":"1.0.0","event":event,"data":[data]})
     ));
 }
 

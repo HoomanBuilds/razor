@@ -1,10 +1,10 @@
-# FLOAT product overview
+# Razor product overview
 
 Status: product specification. Updated 12 November 2026.
 
 ## Product
 
-FLOAT helps a company manage what it owes, approve how it is paid and know what actually settled.
+Razor helps a company manage what it owes, approve how it is paid and know what actually settled.
 
 A company can fund its workspace with one or several supported assets, maintain employee and contractor payment obligations, pay suppliers, and reconcile the results. Recipients choose a preferred payout asset and network, plus an authorized USDC backup destination. Company financial records remain restricted to the people entitled to see them.
 
@@ -16,7 +16,7 @@ The initial customer is a crypto-paid business, agency or international team tha
 
 Its operating problems are fragmented treasury balances, repeated manual transfers, recipient preferences across networks, uncertain payment status, duplicate-payment risk and reconciliation across invoices, salaries and receipts.
 
-One company can use FLOAT with its existing recipients. Participation in a business clearing network is optional.
+One company can use Razor with its existing recipients. Participation in a business clearing network is optional.
 
 The adoption hypothesis is that one approved payment workflow with reliable receipts, private records and recipient preferences is worth replacing part of the customer's spreadsheets and wallet operations. This remains a hypothesis to test with actual company records and a pilot.
 
@@ -82,13 +82,13 @@ Wallet rejection, a wrong network or a disconnect leaves a recoverable draft and
 
 ### Fund the company
 
-The owner selects an amount and supported source asset. FLOAT displays the conversion, fees, expiry and refund destination. A multi-asset top-up contains separately tracked funding legs. Only confirmed destination credits increase the funded settlement balance.
+The owner selects an amount and supported source asset. Razor displays the conversion, fees, expiry and refund destination. A multi-asset top-up contains separately tracked funding legs. Only confirmed destination credits increase the funded settlement balance.
 
 The default top-up converts to USDC under terms the owner approves. Original-asset holdings can be offered separately, with their indicative value distinguished from USDC reserved for payment obligations.
 
 ### Pay from a connected wallet
 
-The payer chooses an approved bill or pay run and selects a source wallet and asset. FLOAT quotes funding for that obligation, obtains the required source-wallet authorization, confirms the resulting company funds and executes the approved payout through the NEAR payment workflow.
+The payer chooses an approved bill or pay run and selects a source wallet and asset. Razor quotes funding for that obligation, obtains the required source-wallet authorization, confirms the resulting company funds and executes the approved payout through the NEAR payment workflow.
 
 The interface presents one guided task with separately tracked funding and payout legs. A completed top-up followed by an unavailable payout leaves funds attributed to the original obligation for recovery or permitted backup; it does not prompt another full payment. Costs and any returned excess remain visible.
 
@@ -96,7 +96,7 @@ The interface presents one guided task with separately tracked funding and payou
 
 The company invites an employee, contractor or supplier. The recipient confirms the primary asset, network and receiving address, then sets up a distinct USDC backup and authorizes when it may be used. Recurring automated payouts require a valid backup. A manual profile without one remains visible as incomplete for automatic recovery.
 
-Defaults are suggestions until confirmed. FLOAT must not infer a network from an EVM address or copy an address to another chain without confirmation.
+Defaults are suggestions until confirmed. Razor must not infer a network from an EVM address or copy an address to another chain without confirmation.
 
 ### Run payroll
 
@@ -108,11 +108,11 @@ A recipient submits an invoice or agreed milestone request. Private AI produces 
 
 ### Recover an unavailable payout
 
-FLOAT prefers the approved primary route. If it is unavailable before execution, or a prior attempt is conclusively closed without delivery and the necessary funds are available again, FLOAT may use the authorized USDC backup within the approved cost ceiling. An uncertain or still-processing transfer remains held for reconciliation.
+Razor prefers the approved primary route. If it is unavailable before execution, or a prior attempt is conclusively closed without delivery and the necessary funds are available again, Razor may use the authorized USDC backup within the approved cost ceiling. An uncertain or still-processing transfer remains held for reconciliation.
 
 ### Clear mutual business invoices
 
-Participating companies may agree to offset compatible, accepted obligations. Each approves the exact clearing changes before they take effect. FLOAT settles and reconciles the remaining payments. Employee wages and contractor compensation are not silently included in business netting.
+Participating companies may agree to offset compatible, accepted obligations. Each approves the exact clearing changes before they take effect. Razor settles and reconciles the remaining payments. Employee wages and contractor compensation are not silently included in business netting.
 
 ## Product defaults
 

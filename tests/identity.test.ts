@@ -58,12 +58,12 @@ test("social login requires configured verification keys and accepts only correc
   delete process.env.PRIVY_APP_SECRET;
   delete process.env.PRIVY_JWKS_URL;
   delete process.env.PRIVY_VERIFICATION_KEY;
-  process.env.PRIVY_APP_ID="test-float-app";
+  process.env.PRIVY_APP_ID="test-razor-app";
   try {
     assert.equal((await request("/auth/privy",{accessToken:"unverified-token-not-accepted"})).status,503);
     const {publicKey,privateKey}=await generateKeyPair("ES256");
     process.env.PRIVY_VERIFICATION_KEY=await exportSPKI(publicKey);
-    const valid=await new SignJWT({}).setProtectedHeader({alg:"ES256"}).setSubject("did:privy:test-user").setIssuer("privy.io").setAudience("test-float-app").setIssuedAt().setExpirationTime("5m").sign(privateKey);
+    const valid=await new SignJWT({}).setProtectedHeader({alg:"ES256"}).setSubject("did:privy:test-user").setIssuer("privy.io").setAudience("test-razor-app").setIssuedAt().setExpirationTime("5m").sign(privateKey);
     const signed=await request("/auth/privy",{accessToken:valid});
     assert.equal(signed.status,200);
     assert.match(signed.headers.get("set-cookie")!,/HttpOnly/i);

@@ -1,6 +1,6 @@
 # Project workflow
 
-- Build FLOAT's company payments, payroll and treasury workflows first. Marketing pages and visual polish come last.
+- Build Razor's company payments, payroll and treasury workflows first. Marketing pages and visual polish come last.
 - Use at most three feature worktrees in `.worktrees/`. Review and merge finished work, then remove its worktree before starting another slice.
 - Do not commit `research/`, `inspiration/`, local credentials, databases or compiled contract artifacts.
 - Reuse reviewed libraries and compatible source with required license notices. Legacy source is reference material, not runtime truth.

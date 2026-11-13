@@ -27,7 +27,7 @@ test("permanent recipient access survives expired invitations and isolates other
   assert.throws(()=>getAccess(user,org),(error)=>error instanceof ApiError&&error.status===403);
   const app=new Hono<AppEnv>().route("/",recipientWorkspaceRoutes);
   app.onError((error,c)=>{if(error instanceof ApiError)return c.json({code:error.code},error.status as 400);throw error;});
-  const headers={Cookie:`float_session=${sessionToken}`};
+  const headers={Cookie:`razor_session=${sessionToken}`};
   const response=await app.request("http://localhost:3000/",{headers});
   assert.equal(response.status,200);assert.equal((await response.json()).payments.length,1);
   assert.equal((await app.request("http://localhost:3000/profiles/profile-two",{headers})).status,404);

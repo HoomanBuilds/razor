@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FLOAT | Company payments",
+  title: "Razor | Company payments",
   description: "Company payroll, invoices and payments on NEAR.",
 };
 

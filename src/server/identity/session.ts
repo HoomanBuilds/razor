@@ -5,7 +5,7 @@ import { getDb, row, rows } from "../db";
 import { ApiError, type AccessContext, type AppEnv } from "../context";
 import { hashToken, newToken } from "./crypto";
 
-const SESSION_COOKIE = "float_session";
+const SESSION_COOKIE = "razor_session";
 const HOURS = 8;
 export const PERMISSIONS = ["company:read", "company:manage", "recipients:read", "recipients:manage", "payments:read", "payments:prepare", "payments:approve", "payments:execute", "reports:read", "documents:manage"];
 

@@ -1,4 +1,4 @@
-# FLOAT build checklist
+# Razor build checklist
 
 Use this document to compare the actual build with the intended product throughout development.
 
@@ -43,7 +43,7 @@ The evidence review on 13 November 2026 verifies **11 of 127 checks: 10 of 82 co
 - [ ] `WAL-02` Supported EVM and Solana source wallets can fund through Intents; routes without a connector show correct explicit deposit instructions rather than a fake connection flow.
 - [ ] `WAL-03` A payer can link and deliberately select among several wallets; external balances remain distinct from confirmed company funds.
 - [ ] `WAL-04` A social-login user can establish a NEAR-capable signer and owner-controlled treasury without manually importing a seed phrase; ownership, recovery and any sponsored setup actually work.
-- [ ] `WAL-05` Every wallet action previews purpose, source, token, amount, network, destination and costs before requesting the necessary signature or approval; FLOAT never requests a private key or seed phrase.
+- [ ] `WAL-05` Every wallet action previews purpose, source, token, amount, network, destination and costs before requesting the necessary signature or approval; Razor never requests a private key or seed phrase.
 - [ ] `WAL-06` Unsupported wallets, rejected signatures, wrong networks, insufficient native gas and connection interruption produce actionable errors without losing the draft or claiming payment success.
 - [ ] `WAL-07` Account or network changes revalidate stale previews and selections; disconnecting preserves the company and monitoring of already submitted transfers.
 - [ ] `WAL-08` App identity, funding wallets, company treasury authority, agent mandates and recipient addresses remain separate; connecting one wallet does not grant every financial role.

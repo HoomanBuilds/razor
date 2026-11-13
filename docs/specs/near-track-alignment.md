@@ -4,7 +4,7 @@ Reviewed against official event materials and linked AI prompts on 12 November 2
 
 ## NEAR requirement
 
-The agreed interpretation is NEAR infrastructure throughout FLOAT, with external-chain funding and receiving endpoints accessed through NEAR Intents.
+The agreed interpretation is NEAR infrastructure throughout Razor, with external-chain funding and receiving endpoints accessed through NEAR Intents.
 
 NEAR accounts and contracts must provide material financial authority, NEAR Intents must execute the supported cross-chain flow, and NEAR AI Cloud must perform the proposed private financial analysis. A wallet connection and branding alone do not satisfy the product's own integration requirements.
 
@@ -12,7 +12,7 @@ NEAR accounts and contracts must provide material financial authority, NEAR Inte
 
 The event's HACKATHON.md permits testnet-only projects, with mainnet used where an integration requires it. Q-011 says there are no mandatory integrations: the listed technologies are hints, and an own NEAR contract fitting the track is sufficient. Multiple tracks can be selected for one project. [Official rules](https://nearhackathon.com/HACKATHON.md).
 
-The linked repository labels the per-track files as starter prompts and allows replacing their example ideas. Those examples inform the quality bar and integration design rather than requiring FLOAT to become their sample application. [Official prompt repository](https://github.com/nearai/near-hackathon-prompt-examples).
+The linked repository labels the per-track files as starter prompts and allows replacing their example ideas. Those examples inform the quality bar and integration design rather than requiring Razor to become their sample application. [Official prompt repository](https://github.com/nearai/near-hackathon-prompt-examples).
 
 ## Target tracks
 
@@ -32,39 +32,39 @@ The recommended lead is Real-World Money. Add Business and Privacy only with wor
 
 ### Real-World Money
 
-The example is a freelancer invoice link accepting clients' existing tokens and chains, with USDC received on NEAR. It emphasizes invoice details, a restricted gas sponsor, honest payment states and an accountant-readable export. FLOAT expands those operating needs to company payroll and supplier bills. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/08-realworld.md).
+The example is a freelancer invoice link accepting clients' existing tokens and chains, with USDC received on NEAR. It emphasizes invoice details, a restricted gas sponsor, honest payment states and an accountant-readable export. Razor expands those operating needs to company payroll and supplier bills. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/08-realworld.md).
 
-Required FLOAT demonstration: create an invoice or payroll obligation, fund it, approve the payment, deliver to a confirmed recipient preference and export the reconciled record. Include a separate backup case and show where the funds actually went.
+Required Razor demonstration: create an invoice or payroll obligation, fund it, approve the payment, deliver to a confirmed recipient preference and export the reconciled record. Include a separate backup case and show where the funds actually went.
 
 ### Autonomous Business
 
 The sample runs a report-selling agent with inference spending limits, revenue rules, protected credentials, an owner stop control and records of sales, costs and payouts. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/04-business.md).
 
-FLOAT should show a company agent preparing and executing an approved pay run or recurring bill within a mandate. It must refuse a changed destination or unauthorized amount and remain revocable. A manually operated payment form alone does not establish this planned automation.
+Razor should show a company agent preparing and executing an approved pay run or recurring bill within a mandate. It must refuse a changed destination or unauthorized amount and remain revocable. A manually operated payment form alone does not establish this planned automation.
 
 ### Privacy & Private AI
 
 The example privately analyzes expenses on NEAR AI Cloud, verifies fresh attestation, exposes the checks and supplies fictional documents. Its zero-retention example is narrower than a business product that needs stored payroll records. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/03-privacy.md).
 
-FLOAT must define which records are retained with authorization, which temporary inputs are deleted and who can access them. Verify the actual inference evidence and demonstrate a failed-verification path. Do not claim zero storage when financial records are retained or complete monetary privacy when transfers remain public.
+Razor must define which records are retained with authorization, which temporary inputs are deleted and who can access them. Verify the actual inference evidence and demonstrate a failed-verification path. Do not claim zero storage when financial records are retained or complete monetary privacy when transfers remain public.
 
 ### AI Security & Defense
 
 The example checks counterparties and refuses blocked actions, escalates warnings and demonstrates an injected agent being stopped. It also requires explaining scoped-key limits. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/06-security.md).
 
-FLOAT's relevant evidence is an injected invoice or forged recipient change failing to redirect an approved obligation, plus rejection of a duplicate payout and an over-budget attempt. Access-key gas allowance is not a token spending limit; enforce payment budgets in the financial authorization logic. [NEAR access-key semantics](https://docs.near.org/protocol/accounts-contracts/access-keys).
+Razor's relevant evidence is an injected invoice or forged recipient change failing to redirect an approved obligation, plus rejection of a duplicate payout and an over-budget attempt. Access-key gas allowance is not a token spending limit; enforce payment budgets in the financial authorization logic. [NEAR access-key semantics](https://docs.near.org/protocol/accounts-contracts/access-keys).
 
 ### AI Swarms
 
 The starter uses distinct buyer and seller agents, sealed bidding, identifiable subaccounts, explicit round rules and a reproducible scripted simulation. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/05-swarms.md).
 
-FLOAT may apply the coordination principle to independent businesses accepting or refusing a clearing plan under separate policies. A single optimizer with several animated agent cards is insufficient for this proposed claim. Netting remains useful without presenting it as a swarm.
+Razor may apply the coordination principle to independent businesses accepting or refusing a clearing plan under separate policies. A single optimizer with several animated agent cards is insufficient for this proposed claim. Netting remains useful without presenting it as a swarm.
 
 ### Unstoppable DeFi
 
 The example is a scheduled cross-chain vault with quotes, slippage controls, visible custody, recovery states and a dry run. [Official prompt](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/01-defi.md).
 
-FLOAT should claim this track only if the clearing or separately developed financing protocol is substantive and reproducible. Employee payment routing is the Real-World Money feature, not evidence that FLOAT has built an exchange or lending market.
+Razor should claim this track only if the clearing or separately developed financing protocol is substantive and reproducible. Employee payment routing is the Real-World Money feature, not evidence that Razor has built an exchange or lending market.
 
 ### Agent Economy
 
@@ -76,7 +76,7 @@ An eventual service-procurement extension could support this track. It is not ne
 
 NEAR Intents has no official testnet. Some starter examples request a testnet loop, but that does not create a testnet version of Intents. Separate NEAR contract tests, real dry quotes, simulations and actual mainnet settlements in every demonstration. [Official Intents quickstart](https://docs.near-intents.org/integration/distribution-channels/1click-api/quickstart/introduction).
 
-NEAR AI's current verification flow distinguishes fresh gateway evidence, model evidence, request bindings and response signatures where available. Fetching a report is not verification; document the checks required by FLOAT and their actual result. [NEAR AI verification](https://docs.near.ai/cloud/verification).
+NEAR AI's current verification flow distinguishes fresh gateway evidence, model evidence, request bindings and response signatures where available. Fetching a report is not verification; document the checks required by Razor and their actual result. [NEAR AI verification](https://docs.near.ai/cloud/verification).
 
 Meta transactions can sponsor permitted NEAR actions. They do not make every source-chain funding transaction free or guarantee a recipient never needs gas for future unrelated activity. The company pays its approved execution costs explicitly.
 

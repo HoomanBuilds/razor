@@ -22,7 +22,7 @@ export function TreasuryCreation() {
   const {data:config,error:configError,loading}=useResource<FactoryState>(`${base}/onboarding/config`,revision),{busy,error,run}=useAction();
   const [owner,setOwner]=useState(""),[slug,setSlug]=useState(""),[perPayment,setPerPayment]=useState("10000"),[daily,setDaily]=useState("100000");
   const [quoted,setQuoted]=useState<QuoteResult|null>(null),[result,setResult]=useState<CreationResult|null>(null),[txHash,setTxHash]=useState<string|null>(null),[acknowledged,setAcknowledged]=useState(false),pollCount=useRef(0);
-  const ownerAccount=owner || config?.verifiedWallets[0]?.address || "",rememberKey=`float:treasury-creation:${session.user.id}:${organization.id}:v1`;
+  const ownerAccount=owner || config?.verifiedWallets[0]?.address || "",rememberKey=`razor:treasury-creation:${session.user.id}:${organization.id}:v1`;
   const refreshCreation=useCallback(async(ownerAccount:string,slug:string)=>{
     const current=await api<CreationResult>(`${base}/onboarding/reconcile`,{ownerAccount,slug});
     setResult(current);if(current.configured)refresh();return current;
@@ -84,7 +84,7 @@ export function TreasuryCreation() {
       <Action busy={busy==="create"} disabled={!canCreate||!!busy} onClick={()=>void run("create",create)}>Create treasury in my wallet</Action>
     </section>:null}
     {recorded?<section className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-center gap-3"><h3 className="text-sm font-medium">Factory creation status</h3><Status value={recorded.status}/></div><Address value={recorded.account_id} network={config?.network}/>
-      {recorded.status==="pending"?<p className="text-sm text-muted-foreground">Creation is pending. FLOAT checks the factory before connecting the treasury. Reusing this wallet and name cannot schedule a second deployment.</p>:null}
+      {recorded.status==="pending"?<p className="text-sm text-muted-foreground">Creation is pending. Razor checks the factory before connecting the treasury. Reusing this wallet and name cannot schedule a second deployment.</p>:null}
       {recorded.status==="failed"?<><p className="text-sm text-muted-foreground">Deployment failed. The factory records a refund claim for {near(recorded.refund_amount)}. Its record storage fee is retained. Claiming costs 1 yoctoNEAR plus wallet gas.</p><Action busy={busy==="refund"} disabled={!!busy} onClick={()=>void run("refund",async()=>{const prepared=await api<{walletActions:NearWalletAction[]}>(`${base}/onboarding/refund`,{ownerAccount,slug});await sign(prepared.walletActions,ownerAccount,config!.network);pollCount.current=0;await refreshCreation(ownerAccount,slug);})}>Claim creation refund</Action></>:null}
       {recorded.status==="refunding"?<p className="text-sm text-muted-foreground">A refund transfer is pending. Check its final receipt before requesting recovery. A second refund is never unlocked on a timer.</p>:null}
       {recorded.status==="refunded"?<p className="text-sm text-muted-foreground">The refund completed. You can request a fresh deposit quote for this name.</p>:null}

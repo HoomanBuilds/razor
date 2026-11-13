@@ -927,7 +927,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "float-treasury"
+name = "razor-treasury"
 version = "0.1.0"
 dependencies = [
  "near-sdk",

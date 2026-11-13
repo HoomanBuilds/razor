@@ -10,7 +10,7 @@ export function validNearAccount(value: string): boolean {
 
 async function rpc<T>(network: "mainnet" | "testnet", method: string, params: unknown): Promise<T> {
   const url = network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org";
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "float", method, params }), signal: AbortSignal.timeout(15_000), cache: "no-store" });
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "razor", method, params }), signal: AbortSignal.timeout(15_000), cache: "no-store" });
   if (!response.ok) throw new ApiError(503, "NEAR RPC is unavailable", "NEAR_UNAVAILABLE");
   const payload = await response.json();
   if (payload.error) throw new ApiError(422, "NEAR could not verify this account or receipt", "NEAR_VERIFICATION_FAILED");

@@ -1,4 +1,4 @@
-# FLOAT feature catalog
+# Razor feature catalog
 
 Status: intended product behavior, not a shipped-feature list. Updated 12 November 2026.
 

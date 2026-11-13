@@ -184,7 +184,7 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
     if (!origin) throw new ApiError(422, "Choose a live supported source asset", "ASSET_UNSUPPORTED");
     if (destination.contractAddress !== request.token_contract) throw new ApiError(409, "The live catalog's settlement token changed", "FUNDING_TARGET_CHANGED");
     const deadline = new Date(Math.min(Date.now() + 2 * 60 * 60_000, Date.parse(request.expires_at))).toISOString();
-    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: `float:funding-request:${request.id}` });
+    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: `razor:funding-request:${request.id}` });
     if (quote.quote.amountOut !== initial.remainingAmount || Date.parse(quote.quote.deadline ?? deadline) > Date.parse(request.expires_at)) throw new ApiError(502, "The signed quote changed the fixed amount or request expiry", "FUNDING_QUOTE_MISMATCH");
     await frozenTarget(request);
     return transaction(() => {

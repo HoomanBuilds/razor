@@ -29,7 +29,7 @@ reconciliationRoutes.post("/funding/:id/verify", async (c) => {
 });
 reconciliationRoutes.get("/export", (c) => {
   c.header("Content-Type", "text/csv; charset=utf-8");
-  c.header("Content-Disposition", 'attachment; filename="float-reconciliation.csv"');
+  c.header("Content-Disposition", 'attachment; filename="razor-reconciliation.csv"');
   c.header("Cache-Control", "no-store");
   return c.body(accountingExport(c.get("access")));
 });

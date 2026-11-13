@@ -1,6 +1,6 @@
 # Company operations
 
-FLOAT keeps recurring drafts, due-payment notices and settlement checks in SQLite jobs. Jobs and notices survive process restarts. The worker creates payment drafts and executes only exact routes already approved on NEAR; it never approves a new route, selects a new fallback or marks external delivery from a source transaction alone.
+Razor keeps recurring drafts, due-payment notices and settlement checks in SQLite jobs. Jobs and notices survive process restarts. The worker creates payment drafts and executes only exact routes already approved on NEAR; it never approves a new route, selects a new fallback or marks external delivery from a source transaction alone.
 
 Run one local tick or a persistent worker:
 
@@ -25,10 +25,10 @@ Every generated obligation remains `draft` without an approver or signature. Sou
 Without these optional server settings, due work stays labeled as requiring an owner wallet:
 
 ```text
-FLOAT_EXECUTOR_ACCOUNT_ID
-FLOAT_EXECUTOR_TREASURY_ACCOUNT_ID
-FLOAT_EXECUTOR_NETWORK=mainnet|testnet
-FLOAT_EXECUTOR_PRIVATE_KEY
+RAZOR_EXECUTOR_ACCOUNT_ID
+RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID
+RAZOR_EXECUTOR_NETWORK=mainnet|testnet
+RAZOR_EXECUTOR_PRIVATE_KEY
 ```
 
 The key must be installed on a dedicated NEAR executor account and limited to exactly one receiver treasury and exactly `execute_payment`. A full-access key, unrestricted method list, other receiver, owner account or approver account is rejected. Key setup and gas funding remain operator actions; never paste a full-access owner key into the application. The owner's recovery keys stay with the account owner. The [NEAR access-key documentation](https://docs.near.org/protocol/accounts-contracts/access-keys) distinguishes gas allowances from permission to spend treasury assets.

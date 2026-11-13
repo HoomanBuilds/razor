@@ -27,11 +27,11 @@ function settings():Settings {
   const network=process.env.NEAR_NETWORK || "testnet",factoryId=process.env.NEAR_FACTORY_ID;
   if(network!=="mainnet"&&network!=="testnet")throw new ApiError(503,"Choose mainnet or testnet for NEAR_NETWORK","FACTORY_SETUP_REQUIRED");
   if(!factoryId||!validNearAccount(factoryId))throw new ApiError(503,"Configure a deployed NEAR_FACTORY_ID for this network to enable wallet-created treasuries","FACTORY_SETUP_REQUIRED");
-  return {network,factoryId,factoryCodeHash:reviewedArtifactHash("NEAR_FACTORY_CODE_HASH","float_factory.wasm"),treasuryCodeHash:reviewedArtifactHash("NEAR_TREASURY_CODE_HASH","float_treasury.wasm")};
+  return {network,factoryId,factoryCodeHash:reviewedArtifactHash("NEAR_FACTORY_CODE_HASH","razor_factory.wasm"),treasuryCodeHash:reviewedArtifactHash("NEAR_TREASURY_CODE_HASH","razor_treasury.wasm")};
 }
 
 async function rpc<T>(config:Settings,method:string,params:unknown):Promise<T> {
-  const response=await fetch(process.env.NEAR_RPC_URL || `https://rpc.${config.network}.near.org`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:"float-onboarding",method,params}),cache:"no-store",signal:AbortSignal.timeout(15000)});
+  const response=await fetch(process.env.NEAR_RPC_URL || `https://rpc.${config.network}.near.org`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:"razor-onboarding",method,params}),cache:"no-store",signal:AbortSignal.timeout(15000)});
   if(!response.ok)throw new ApiError(503,"NEAR is unavailable. Refresh the creation status before trying again.","NEAR_UNAVAILABLE");
   const result=await response.json();
   if(result.error)throw new ApiError(422,"NEAR could not verify the factory or treasury. Check the configured network and account.","FACTORY_VERIFICATION_FAILED");

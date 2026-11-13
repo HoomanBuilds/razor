@@ -1,10 +1,10 @@
 # Private invoice extraction
 
-FLOAT sends invoice text to NEAR AI Cloud through `@nearai/inference-sdk/node`. The assistant extracts a draft. It has no treasury key, payment tool, recipient mutation or approval permission.
+Razor sends invoice text to NEAR AI Cloud through `@nearai/inference-sdk/node`. The assistant extracts a draft. It has no treasury key, payment tool, recipient mutation or approval permission.
 
-The server verifies fresh Gateway and model attestations before sending invoice text. Verification checks Intel collateral, report nonces, measurement binding, approved deployment configuration, NVIDIA GPU evidence and the Gateway TLS key. The invoice fields are encrypted to the verified model key. FLOAT accepts output only after the SDK verifies the `provider_tee` signature against the exact request and response bytes. Gateway-only receipts and model fallback are rejected.
+The server verifies fresh Gateway and model attestations before sending invoice text. Verification checks Intel collateral, report nonces, measurement binding, approved deployment configuration, NVIDIA GPU evidence and the Gateway TLS key. The invoice fields are encrypted to the verified model key. Razor accepts output only after the SDK verifies the `provider_tee` signature against the exact request and response bytes. Gateway-only receipts and model fallback are rejected.
 
-FLOAT's application server receives the original text and decrypted output. This feature protects inference transport and processing; it does not conceal invoices from the organization or its application operator. A valid attestation proves the checked execution identity and byte binding. It does not establish that an invoice is truthful or the model's extraction is correct.
+Razor's application server receives the original text and decrypted output. This feature protects inference transport and processing; it does not conceal invoices from the organization or its application operator. A valid attestation proves the checked execution identity and byte binding. It does not establish that an invoice is truthful or the model's extraction is correct.
 
 ## Configuration
 

@@ -26,7 +26,7 @@ function SocialButton({onComplete,link=false}:{onComplete:()=>Promise<void>;link
   async function switchAccount() {
     if(lock.current)return;lock.current=true;setPending(true);setError(null);
     try {
-      if(!link){const response=await fetch("/api/auth/logout",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok&&response.status!==401)throw new Error("Your FLOAT session could not be closed. Please try again.");}
+      if(!link){const response=await fetch("/api/auth/logout",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok&&response.status!==401)throw new Error("Your Razor session could not be closed. Please try again.");}
       await logout();await onComplete();
     }catch(error){setError(walletErrorMessage(error));}finally{lock.current=false;setPending(false);}
   }

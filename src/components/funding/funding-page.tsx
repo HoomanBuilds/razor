@@ -10,7 +10,7 @@ import { useAction } from "@/components/workspace/hooks";
 import { Action, control, Empty, Field, Panel, Status } from "@/components/workspace/shared";
 
 const FundingWalletAction = dynamic(() => import("@/components/auth/funding-wallet").then((module) => module.FundingWalletAction), { ssr: false });
-const storageKey = (id: string) => `float:funding-request:${id}:quote`;
+const storageKey = (id: string) => `razor:funding-request:${id}:quote`;
 function savedKey(id: string) {
   try { const value = sessionStorage.getItem(storageKey(id)); return value && /^[A-Za-z0-9_-]{16,128}$/.test(value) ? value : ""; } catch { return ""; }
 }

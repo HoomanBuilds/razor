@@ -1,6 +1,6 @@
 # NEAR contracts and self-service setup
 
-`float-treasury` holds company USDC, enforces approvals and budgets, and funds exact NEAR Intents routes. `float-factory` lets a payer create a treasury from their own NEAR wallet. The deployed child has no access keys; the caller's existing NEAR account becomes its contract owner. The factory receives no authority to spend its USDC.
+`razor-treasury` holds company USDC, enforces approvals and budgets, and funds exact NEAR Intents routes. `razor-factory` lets a payer create a treasury from their own NEAR wallet. The deployed child has no access keys; the caller's existing NEAR account becomes its contract owner. The factory receives no authority to spend its USDC.
 
 ## Build
 
@@ -13,15 +13,15 @@ Requires Rust 1.86 or newer and the installed `wasm32-unknown-unknown` target. B
 For focused checks:
 
 ```sh
-CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/float-treasury/Cargo.toml --lib
-FLOAT_TREASURY_WASM="$PWD/.tools/wasm/float_treasury.wasm" CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/float-factory/Cargo.toml --lib
+CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/razor-treasury/Cargo.toml --lib
+RAZOR_TREASURY_WASM="$PWD/.tools/wasm/razor_treasury.wasm" CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/razor-factory/Cargo.toml --lib
 ```
 
 Tests run locally with NEAR's SDK. They do not deploy or spend funds.
 
 ## Platform setup
 
-An operator must deploy `float_factory.wasm` to a funded NEAR account and initialize it atomically with:
+An operator must deploy `razor_factory.wasm` to a funded NEAR account and initialize it atomically with:
 
 ```json
 {
@@ -55,4 +55,4 @@ For a missing creation callback, `refresh_creation({owner_id,slug})` with zero d
 
 The factory admin can pause new creation with `set_paused({paused})` and exactly 1 yoctoNEAR. Pausing leaves status reads and recovery available. Private callback methods are internal.
 
-Payment settlement, refund trust boundaries and the complete treasury ABI are documented in [float-treasury/README.md](float-treasury/README.md). Company balances remain public on NEAR. The factory creates immutable keyless children; changing their deployed code is not supported by this version.
+Payment settlement, refund trust boundaries and the complete treasury ABI are documented in [razor-treasury/README.md](razor-treasury/README.md). Company balances remain public on NEAR. The factory creates immutable keyless children; changing their deployed code is not supported by this version.

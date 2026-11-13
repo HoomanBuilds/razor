@@ -25,5 +25,5 @@ businessRoutes.get("/payroll", (c) => c.json({ runs: listPayrollRuns(c.get("acce
 businessRoutes.post("/payroll", async (c) => c.json({ run: createPayrollRun(c.get("access"), payrollInput.parse(await c.req.json())) }, 201));
 businessRoutes.get("/payroll/:id", (c) => c.json({ run: getPayrollRun(c.get("access"), c.req.param("id")) }));
 businessRoutes.post("/payroll/:id/approve", async (c) => c.json({ run: approveReviewedPayrollRun(c.get("access"), c.req.param("id"), z.object({ reviewToken: z.string().regex(/^[a-f0-9]{64}$/) }).parse(await c.req.json()).reviewToken) }));
-businessRoutes.get("/reports/export", (c) => { c.header("Content-Type", "text/csv; charset=utf-8"); c.header("Content-Disposition", 'attachment; filename="float-payments.csv"'); return c.body(report(c.get("access"))); });
+businessRoutes.get("/reports/export", (c) => { c.header("Content-Type", "text/csv; charset=utf-8"); c.header("Content-Disposition", 'attachment; filename="razor-payments.csv"'); return c.body(report(c.get("access"))); });
 businessRoutes.get("/activity", (c) => { const access = c.get("access"); requirePermission(access, "company:read"); return c.json({ activity: rows("SELECT * FROM activity WHERE organization_id = ? ORDER BY created_at DESC LIMIT 200", access.organizationId) }); });

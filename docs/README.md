@@ -1,6 +1,6 @@
-# FLOAT product documentation
+# Razor product documentation
 
-FLOAT is a company payments and payroll platform built on NEAR. Companies fund it with supported assets, manage employee and contractor obligations, approve spending, and pay recipients in their preferred supported asset and network. USDC is the default settlement and backup payout asset.
+Razor is a company payments and payroll platform built on NEAR. Companies fund it with supported assets, manage employee and contractor obligations, approve spending, and pay recipients in their preferred supported asset and network. USDC is the default settlement and backup payout asset.
 
 New users can sign in through familiar social or email methods, create a company without an invitation and connect their existing wallets to fund the treasury or pay an approved obligation. NEAR financial authority remains explicit throughout onboarding.
 

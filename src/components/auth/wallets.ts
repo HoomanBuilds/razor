@@ -18,7 +18,7 @@ export async function identityRequest<T=unknown>(path:string,body?:unknown,metho
 }
 
 export async function getNearConnector():Promise<NearConnector> {
-  if(typeof window==="undefined") throw new Error("Open FLOAT in your browser to connect a wallet.");
+  if(typeof window==="undefined") throw new Error("Open Razor in your browser to connect a wallet.");
   if(!connectorPromise) {
     connectorPromise=Promise.all([import("@hot-labs/near-connect"),identityRequest<AuthConfig>("/auth/config")]).then(([{NearConnector},config])=>new NearConnector({network:config.nearNetwork,features:{signMessage:true},autoConnect:true}));
     connectorPromise.catch(()=>{connectorPromise=undefined;});
@@ -70,6 +70,6 @@ export async function authenticateWallet(family:WalletFamily,options:{link?:bool
 export function walletErrorMessage(error:unknown):string {
   const candidate=error as {code?:number;name?:string;message?:string;shortMessage?:string};
   if(candidate.code===4001 || /reject|denied|cancel/i.test(candidate.message || "")) return "Request cancelled. Your account has not changed.";
-  if(candidate.name==="TypeError" && /fetch/i.test(candidate.message || "")) return "FLOAT could not reach the server. Check your connection and try again.";
+  if(candidate.name==="TypeError" && /fetch/i.test(candidate.message || "")) return "Razor could not reach the server. Check your connection and try again.";
   return candidate.shortMessage || candidate.message || "The wallet request could not be completed. Please try again.";
 }

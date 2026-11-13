@@ -402,7 +402,7 @@ fn add(left: u128, right: u128) -> u128 {
 fn emit(event: &str, data: serde_json::Value) {
     env::log_str(&format!(
         "EVENT_JSON:{}",
-        json!({"standard":"float","version":"1.0.0","event":event,"data":[data]})
+        json!({"standard":"razor","version":"1.0.0","event":event,"data":[data]})
     ));
 }
 

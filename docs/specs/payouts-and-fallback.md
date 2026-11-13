@@ -4,7 +4,7 @@ Status: product requirements. Updated 12 November 2026.
 
 ## Purpose
 
-A recipient can prefer a supported payout token and network while authorizing a practical USDC backup. FLOAT uses that backup when the primary route cannot safely complete under the approved terms. Backup payments remain routed through NEAR Intents.
+A recipient can prefer a supported payout token and network while authorizing a practical USDC backup. Razor uses that backup when the primary route cannot safely complete under the approved terms. Backup payments remain routed through NEAR Intents.
 
 This is destination fallback within the NEAR payment workflow. It is not a guarantee that another provider will be available during an Intents outage.
 
@@ -17,7 +17,7 @@ This is destination fallback within the NEAR payment workflow. It is not a guara
 | Primary address | The recipient-confirmed destination on that network |
 | Primary metadata | Any destination details required and supported by the route |
 | Backup token | Native, Circle-issued USDC |
-| Backup network | One recipient-selected network from FLOAT's enabled curated choices |
+| Backup network | One recipient-selected network from Razor's enabled curated choices |
 | Backup address | A separately confirmed compatible USDC receiving destination |
 | Fallback consent | Whether the recipient permits automatic backup use under the displayed conditions |
 | Profile version | The exact receiving preferences and consent accepted for a payment |
@@ -39,10 +39,10 @@ An enabled backup must satisfy all of the following:
 1. The chain and exact asset are supported by the current Intents integration.
 2. The asset matches Circle-issued native USDC on that network, rather than relying on a token symbol or substituting a bridged representation.
 3. A live executable quote supports the amount and receiving destination within the mandate.
-4. The network is operational under FLOAT's current availability policy.
+4. The network is operational under Razor's current availability policy.
 5. The recipient has confirmed the network and address, and the company has approved its use.
 
-Circle publishes native USDC identities for these chains. FLOAT must match current routing assets to those identities. [Circle USDC reference](https://developers.circle.com/stablecoins/usdc-contract-addresses). NEAR Intents publishes chain support and uses an asset catalog and quotes to establish route availability. [Supported chains](https://docs.near-intents.org/resources/chain-support).
+Circle publishes native USDC identities for these chains. Razor must match current routing assets to those identities. [Circle USDC reference](https://developers.circle.com/stablecoins/usdc-contract-addresses). NEAR Intents publishes chain support and uses an asset catalog and quotes to establish route availability. [Supported chains](https://docs.near-intents.org/resources/chain-support).
 
 Saved destinations do not silently migrate when the enabled choices change. A disabled backup becomes unavailable and prompts an authorized update.
 
@@ -75,7 +75,7 @@ The company approval binds the obligation, net entitlement, primary and backup p
 
 The system must establish that no earlier attempt can still deliver before starting a new payable attempt. A provider failure label or an application timeout does not by itself prove that funds have returned or that a signed action cannot execute later.
 
-If neither destination is available, the obligation stays unpaid and visible. FLOAT does not choose a third chain, invent a wallet or pay a different token without authorization.
+If neither destination is available, the obligation stays unpaid and visible. Razor does not choose a third chain, invent a wallet or pay a different token without authorization.
 
 ## Execution and recovery model
 
@@ -115,7 +115,7 @@ Use neutral descriptions of availability. Do not promise that a popular network 
 
 A contractor is owed 1,000 USDC and prefers an equivalent amount of a supported token. The contractor has authorized USDC on Base as backup. The company approved a maximum total debit of 1,008 USDC.
 
-The primary route is unavailable before any executable authorization or funds are committed. A permitted backup quote delivers 1,000 USDC for a total company cost of 1,002.40 USDC. FLOAT executes it, confirms receipt, records 2.40 USDC of costs and releases the remaining 5.60 USDC of the reserved ceiling.
+The primary route is unavailable before any executable authorization or funds are committed. A permitted backup quote delivers 1,000 USDC for a total company cost of 1,002.40 USDC. Razor executes it, confirms receipt, records 2.40 USDC of costs and releases the remaining 5.60 USDC of the reserved ceiling.
 
 These costs are illustrative rather than market quotes. If the primary were already processing, this example would stop at monitoring rather than immediately sending the backup.
 

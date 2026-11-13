@@ -14,7 +14,7 @@ import { clientReserveTotals } from "../client-reserves/accounting";
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
 const json = (value: unknown) => JSON.stringify(value);
-const onchainReference = (payment: Payment) => `float:${payment.id}`;
+const onchainReference = (payment: Payment) => `razor:${payment.id}`;
 function atomic(value: string | bigint, allowZero = false) {
   try { return parseAtomic(value, allowZero); } catch { throw new ApiError(422, "Use a valid unsigned integer token amount within the supported range", "INVALID_AMOUNT"); }
 }
@@ -91,7 +91,7 @@ export async function configureTreasury(access: AccessContext, input: { nearAcco
   requirePermission(access, "company:manage");
   if (!validNearAccount(input.nearAccountId) || !validNearAccount(input.tokenContract)) throw new ApiError(422, "Enter valid NEAR account IDs", "INVALID_ACCOUNT");
   const config: TreasuryConfig = { organization_id: access.organizationId, near_account_id: input.nearAccountId, network: input.network, token_contract: input.tokenContract };
-  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "float_treasury.wasm")) throw new ApiError(409, "This account does not run the reviewed FLOAT treasury contract", "TREASURY_CODE_MISMATCH");
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "This account does not run the reviewed Razor treasury contract", "TREASURY_CODE_MISMATCH");
   const contract = await view<{ token_contract: string; owner_id: string }>(config, "get_config");
   if (contract.token_contract !== input.tokenContract) throw new ApiError(422, "The treasury contract uses another settlement token", "SETTLEMENT_TOKEN_MISMATCH");
   if (config.network === "mainnet" && config.token_contract !== "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1") throw new ApiError(422, "Live settlement requires native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
@@ -108,7 +108,7 @@ export async function configureTreasury(access: AccessContext, input: { nearAcco
 export async function syncTreasury(access: AccessContext) {
   requirePermission(access, "company:read");
   const config = configFor(access);
-  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "float_treasury.wasm")) throw new ApiError(409, "Treasury code changed. Review the contract before recognizing balances or preparing payments", "TREASURY_CODE_MISMATCH");
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Treasury code changed. Review the contract before recognizing balances or preparing payments", "TREASURY_CODE_MISMATCH");
   const actual = await view<{ balance: string; reserved: string; available: string; in_flight: string; confirmed_at_ms: string }>(config, "get_balance");
   const confirmed = atomic(actual.balance, true);
   transaction(() => {
@@ -509,7 +509,7 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   if (!sourceToken) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
   const destination = nativeUsdc(tokens, "near");
   if (input.paymentId) getPayment(access, input.paymentId);
-  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "float:funding" });
+  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "razor:funding" });
   if (input.dry) return { dry: true, quote };
   const fundingId = id();
   getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(fundingId, access.organizationId, input.paymentId ?? null, input.reference, input.originAsset, quote.quote.amountIn, quote.quote.amountOut, json(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, "pending_deposit", now(), now());

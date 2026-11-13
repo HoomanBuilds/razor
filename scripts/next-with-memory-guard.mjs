@@ -21,7 +21,7 @@ function availableMb() {
 }
 
 if (availableMb() < 4096) {
-  console.error("Wait for at least 4 GB of available memory before starting FLOAT compilation.");
+  console.error("Wait for at least 4 GB of available memory before starting Razor compilation.");
   process.exit(1);
 }
 
@@ -41,7 +41,7 @@ for (let attempt = 0; attempt < 2; attempt++) {
     const pid = Number(readFileSync(lockPath, "utf8"));
     let active = true;
     try { process.kill(pid, 0); } catch (cause) { if (cause.code === "ESRCH") active = false; }
-    if (active || attempt) { console.error("Another FLOAT development server or production build is active. Stop it before compiling."); process.exit(1); }
+    if (active || attempt) { console.error("Another Razor development server or production build is active. Stop it before compiling."); process.exit(1); }
     unlinkSync(lockPath);
   }
 }
@@ -63,7 +63,7 @@ function stop(signal = "SIGTERM") {
 }
 const monitor = setInterval(() => {
   lowReadings = availableMb() < 3072 ? lowReadings + 1 : 0;
-  if (lowReadings >= 2) { console.error("Stopping FLOAT compilation to preserve 3 GB of available memory for the laptop."); stop(); }
+  if (lowReadings >= 2) { console.error("Stopping Razor compilation to preserve 3 GB of available memory for the laptop."); stop(); }
 }, 1500);
 function cleanup() {
   clearInterval(monitor);

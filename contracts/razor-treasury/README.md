@@ -1,4 +1,4 @@
-# FLOAT treasury
+# Razor treasury
 
 A NEAR contract holding one configured NEP-141 native USDC token for company payroll, contractor and supplier obligations. The application converts supported funding assets through NEAR Intents before they enter this treasury. Token amounts use integer microUSDC strings. Each company deploys its own treasury account and retains a separate owner account for recovery.
 
@@ -9,7 +9,7 @@ cargo test --locked --lib
 cargo build --locked --target wasm32-unknown-unknown --release
 ```
 
-The artifact is `target/wasm32-unknown-unknown/release/float_treasury.wasm`. Rust 1.86 or newer is declared; development checks use Rust 1.92 and near-sdk 5.26.1. No contract is deployed by these commands.
+The artifact is `target/wasm32-unknown-unknown/release/razor_treasury.wasm`. Rust 1.86 or newer is declared; development checks use Rust 1.92 and near-sdk 5.26.1. No contract is deployed by these commands.
 
 Before funding, register the treasury account with the configured USDC contract's storage management interface. Direct NEAR recipients and Intents deposit accounts must also accept that token. Keep enough native NEAR in the treasury for storage and the 1 yoctoNEAR attached to each FT transfer.
 
@@ -127,7 +127,7 @@ Reconciliation actions, zero deposit unless noted:
 
 `ft_on_transfer({sender_id,amount,msg})` accepts empty messages and only the configured token predecessor. Its async balance query observes cash instead of trusting additive credits. If a source callback is pending, it accepts the deposit and leaves cash recognition to a later `refresh_balance`. Direct FT transfers that do not invoke `ft_on_transfer` also require `refresh_balance`.
 
-Payment states are `proposed`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `float`, version `1.0.0`.
+Payment states are `proposed`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `razor`, version `1.0.0`.
 
 NEAR's independent asynchronous receipts require explicit callback recovery, as described in the [official cross-contract documentation](https://docs.near.org/smart-contracts/anatomy/crosscontract).
 

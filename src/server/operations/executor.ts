@@ -51,14 +51,14 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   const terms = executionTerms(quote);
   const deadline = Date.parse(terms.deadline);
   if (deadline <= Date.now() || String(deadline) !== exact.route.deadline_ms) return blocked("The owner-authorized quote expired or its deadline changed.");
-  if (chain.amount !== payment.amount || chain.max_fee !== payment.max_fee || chain.reference !== `float:${payment.id}` || chain.recipient_id !== payment.recipient_id
+  if (chain.amount !== payment.amount || chain.max_fee !== payment.max_fee || chain.reference !== `razor:${payment.id}` || chain.recipient_id !== payment.recipient_id
     || exact.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex") || exact.route.kind !== terms.kind
     || exact.route.input_amount !== attempt.amount_in || exact.route.output_amount !== attempt.expected_output || exact.route.source_receiver !== attempt.deposit_address
     || exact.destination.asset_id !== attempt.destination_asset || exact.destination.network !== attempt.destination_network || exact.destination.address !== attempt.destination_address
     || exact.use_backup !== (attempt.route === "backup")) return blocked("The stored payment and the exact onchain route disagree. Reconcile them before signing.");
   const { Account, JsonRpcProvider, KeyPairSigner, SignedTransaction, actions } = await import("near-api-js");
   const provider = new JsonRpcProvider({ url: config.network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org" }, { retries: 0 });
-  const signer = KeyPairSigner.fromSecretKey(process.env.FLOAT_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`);
+  const signer = KeyPairSigner.fromSecretKey(process.env.RAZOR_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`);
   const publicKey = await signer.getPublicKey();
   const key = await provider.viewAccessKey({ accountId: worker.accountId, publicKey, finalityQuery: { finality: "final" } });
   const permission = typeof key.permission === "object" && "FunctionCall" in key.permission ? key.permission.FunctionCall : null;

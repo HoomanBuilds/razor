@@ -151,7 +151,7 @@ function Workspace() {
             href="/"
             className="text-2xl font-black tracking-tight text-primary"
           >
-            FLOAT
+            Razor
             <span className="ml-1 inline-block size-2 rounded-full bg-primary" />
           </a>
           <button
@@ -406,7 +406,7 @@ function CreateCompany({
   const { busy, error, run } = useAction();
   return (
     <main className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-5 py-12">
-      <p className="mb-8 text-3xl font-black text-primary">FLOAT</p>
+      <p className="mb-8 text-3xl font-black text-primary">Razor</p>
       <Panel
         title="Create your company"
         description="Start with payees, invoices and payroll. Connect your NEAR treasury when you are ready to fund payments."
