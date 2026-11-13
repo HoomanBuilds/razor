@@ -67,6 +67,8 @@ function preview(current: State, selected: RetainedAsset | { token_contract: str
 }
 
 export async function retainedOverview(access: AccessContext) {
+  requirePermission(access, "company:read");
+  if (!row("SELECT organization_id FROM treasury_config WHERE organization_id=?", access.organizationId)) return { configured: false as const };
   const current = await state(access);
   let catalog: Token[] = [], catalogUnavailable = false, catalogObservedAt: string | undefined;
   try { catalog = await getSupportedTokens(true); catalogObservedAt = new Date().toISOString(); } catch { catalogUnavailable = true; }
@@ -89,7 +91,7 @@ export async function retainedOverview(access: AccessContext) {
   }));
   const events = rows<{ id: string; token_contract: string; amount: string; event_type: string; transaction_hash: string; created_at: string }>("SELECT id,token_contract,amount,event_type,transaction_hash,created_at FROM retained_asset_events WHERE organization_id=? ORDER BY created_at DESC LIMIT 20", access.organizationId);
   const canManage = access.permissions.includes("company:manage") && !!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, current.contract.owner_id, current.config.network);
-  return { configured: true, network: current.config.network, treasuryAccount: current.config.near_account_id, ownerAccount: current.contract.owner_id, paused: current.localPaused || current.contract.paused, canManage, canDeposit: access.permissions.includes("payments:prepare"), catalogUnavailable, supportedTokens: eligible, holdings, events, scope: "Retained NEAR NEP-141 tokens. Quantities and indicative valuations never add to spendable company USDC or payment reserves." };
+  return { configured: true as const, network: current.config.network, treasuryAccount: current.config.near_account_id, ownerAccount: current.contract.owner_id, paused: current.localPaused || current.contract.paused, canManage, canDeposit: access.permissions.includes("payments:prepare"), catalogUnavailable, supportedTokens: eligible, holdings, events, scope: "Retained NEAR NEP-141 tokens. Quantities and indicative valuations never add to spendable company USDC or payment reserves." };
 }
 
 export async function prepareRetainedPolicy(access: AccessContext, input: { tokenContract: string; enabled: boolean }) {

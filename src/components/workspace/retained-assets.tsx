@@ -11,7 +11,7 @@ import { useAction, useResource } from "./hooks";
 import { Action, Address, control, DataTable, Empty, Field, Panel, Status } from "./shared";
 
 interface Holding extends RetainedAsset { observedBalance: string | null; observedAt: string | null; reconciliationRequired: boolean; identityVerified: boolean; currentlySupported: boolean; indicativeValueMicroUsd: string | null; priceUpdatedAt: string | null; priceObservedAt: string | null; observationError: string | null }
-interface Overview { configured: boolean; network: "mainnet" | "testnet"; treasuryAccount: string; ownerAccount: string; paused: boolean; canManage: boolean; canDeposit: boolean; catalogUnavailable: boolean; supportedTokens: Token[]; holdings: Holding[]; events: { id: string; token_contract: string; amount: string; event_type: string; transaction_hash: string; created_at: string }[]; scope: string }
+interface Overview { configured: true; network: "mainnet" | "testnet"; treasuryAccount: string; ownerAccount: string; paused: boolean; canManage: boolean; canDeposit: boolean; catalogUnavailable: boolean; supportedTokens: Token[]; holdings: Holding[]; events: { id: string; token_contract: string; amount: string; event_type: string; transaction_hash: string; created_at: string }[]; scope: string }
 interface Preview extends RetainedPreview { sourceHash?: string }
 function units(value: FormDataEntryValue | null, decimals: number) {
   try { const amount = parseUnits(String(value), decimals); if (amount === "0") throw new Error("Enter a positive token amount"); return amount; }
@@ -33,7 +33,8 @@ async function sign(preview: RetainedPreview) {
 
 export function RetainedAssetsPanel() {
   const { base, revision, refresh, session, notify } = useWorkspace();
-  const { data, loading, error: loadError } = useResource<Overview>(`${base}/retained-assets`, revision);
+  const { data: response, loading, error: loadError } = useResource<Overview | {configured:false}>(`${base}/retained-assets`, revision);
+  const data = response?.configured ? response : null;
   const { busy, error, run } = useAction();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [depositToken, setDepositToken] = useState("");

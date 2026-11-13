@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { AssetGuidance } from "@/components/assets/asset-guidance";
 import { useRef, useState } from "react";
 import { api, RequestError } from "@/lib/api";
 import { dateLabel, usd } from "@/lib/format";
@@ -65,6 +66,7 @@ export function PaymentFundingTask({ paymentId, close }: { paymentId: string; cl
       {task.stage === "reconcile_payout" && <button type="button" className="text-sm text-primary" onClick={() => navigate("activity")}>Open delivery and recovery evidence</button>}
     </div>
     {task.canQuote && <form className="mb-6 grid gap-4 rounded-lg border p-4 sm:grid-cols-2" onSubmit={event => { event.preventDefault(); void run("quote", async () => { if (!selected) throw new RequestError("Choose a supported source asset", 422, "ASSET_REQUIRED"); const recovery = wallet?.address ?? refundAddress; const terms = JSON.stringify({ paymentId, source, walletId, recovery, review: task.reviewToken }); if (quoteKey.current?.terms !== terms) quoteKey.current = { terms, key: crypto.randomUUID() }; await api(`${taskUrl}/quote`, { originAsset: source, refundAddress: recovery, walletId: wallet?.id, reviewToken: task.reviewToken, idempotencyKey: quoteKey.current.key }); refresh(); }); }}>
+      <AssetGuidance kind="funding" className="sm:col-span-2" tokens={assets?.tokens ?? []} selectedAssetId={source} onSelect={asset => { setSource(asset.assetId); setSearch(""); setWalletId(""); }} disabled={!!busy} />
       <Field label="Find source asset"><input className={control} value={search} onChange={event => setSearch(event.target.value)} placeholder="USDC, ETH, SOL..." /></Field>
       <Field label="Source asset and network"><select required className={control} value={source} onChange={event => { setSource(event.target.value); setWalletId(""); }}><option value="">Choose a supported asset</option>{tokens.map(token => <option key={token.assetId} value={token.assetId}>{token.symbol} on {token.blockchain}</option>)}</select></Field>
       <Field label="Connected source wallet" hint="This wallet receives any source refund. Razor verifies its account and network again before the transfer."><select required className={control} value={walletId} onChange={event => setWalletId(event.target.value)}><option value="">Choose your verified wallet</option><option value="manual">Other wallet or exchange</option>{wallets.map(value => <option key={value.id} value={value.id}>{value.label || value.family}: {value.address}</option>)}</select></Field>
