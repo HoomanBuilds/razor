@@ -10,6 +10,7 @@ const requirements: Record<Section, readonly string[]> = {
   treasury: ["company:read"],
   assistant: ["company:read", "payments:read"],
   activity: ["company:read", "reports:read"],
+  billing: ["company:read"],
   settings: ["company:read"],
 };
 
@@ -21,8 +22,9 @@ export function canOpenSection(section: Section, permissions: readonly string[] 
   return !!requirements[section] && hasPermissions(permissions, requirements[section]);
 }
 
-export function workspacePath(companyId: string, section: Section, paymentId?: string) {
+export function workspacePath(companyId: string, section: Section, paymentId?: string, invoiceId?: string) {
   const params = new URLSearchParams({ company: companyId, section });
   if (section === "payments" && paymentId) params.set("payment", paymentId);
+  if (section === "billing" && invoiceId) params.set("invoice", invoiceId);
   return `/?${params}`;
 }

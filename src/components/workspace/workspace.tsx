@@ -5,6 +5,7 @@ import {
   Activity,
   Building2,
   CalendarDays,
+  CreditCard,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -44,6 +45,8 @@ import { RetainedAssetsPanel } from "./retained-assets";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
+import { Billing, BillingAccessNotice } from "./billing";
+import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
 const navigation = [
@@ -56,6 +59,7 @@ const navigation = [
   { id: "treasury", title: "Treasury", icon: Building2 },
   { id: "assistant", title: "Private assistant", icon: Sparkles },
   { id: "activity", title: "Activity & reports", icon: Activity },
+  { id: "billing", title: "Billing & plans", icon: CreditCard },
   { id: "settings", title: "Company settings", icon: Settings2 },
 ] as const;
 
@@ -108,7 +112,7 @@ function Workspace() {
   useEffect(() => {
     if (!organization) return;
     const params = new URLSearchParams(window.location.search);
-    window.history.replaceState(null, "", workspacePath(organization.id, visibleSection, params.get("payment") ?? undefined));
+    window.history.replaceState(null, "", workspacePath(organization.id, visibleSection, params.get("payment") ?? undefined, params.get("invoice") ?? undefined));
   }, [organization?.id, visibleSection]);
   useEffect(() => {
     if (!sidebar) return;
@@ -390,6 +394,7 @@ function CompanyWorkspace({
     organization.permissions?.includes("recipients:read") ? `${base}/recipients` : null,
     revision,
   );
+  const billing = useResource<BillingEntitlements>(`${base}/billing/entitlements`, revision);
   return (
     <WorkspaceContext.Provider
       value={{
@@ -398,6 +403,8 @@ function CompanyWorkspace({
         base,
         recipients: data?.recipients ?? [],
         revision,
+        billing: billing.data,
+        billingError: billing.error,
         refresh,
         navigate,
         notify,
@@ -413,6 +420,7 @@ function CompanyWorkspace({
           Payee directory: {error}
         </p>
       )}
+      <BillingAccessNotice section={section} />
       {section === "overview" ? (
         <Overview />
       ) : section === "payments" ? (
@@ -444,6 +452,8 @@ function CompanyWorkspace({
         <Assistant />
       ) : section === "activity" ? (
         <div className="grid gap-6"><ActivityLog /><ProjectReportsPanel /></div>
+      ) : section === "billing" ? (
+        <Billing />
       ) : (
         <div className="grid gap-6"><CompanySettings /><TreasuryRecoveryPanel /><NotificationInbox /></div>
       )}

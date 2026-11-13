@@ -8,4 +8,4 @@ export interface Token { assetId: string; symbol: string; blockchain: string; de
 export interface Bill { deliveredAmount: string; setoffAmount: string; remainingLiability: string; project_reference?: string | null; cost_center_reference?: string | null; id: string; recipient_id: string; reference: string; title: string; amount: string; max_fee: string; due_date: string | null; status: string; payment: Payment | null }
 export interface PayrollItem { deliveredAmount: string; remainingLiability: string; spent: string; id: string; recipient_id: string; amount: string; max_fee: string; payment: Payment | null }
 export interface PayrollRun { id: string; reference: string; period_start: string; period_end: string; status: string; total: string; maxFees: string; scheduled_for: string | null; items: PayrollItem[] }
-export type Section = "overview" | "payments" | "payroll" | "bills" | "clearing" | "recipients" | "treasury" | "assistant" | "activity" | "settings";
+export type Section = "overview" | "payments" | "payroll" | "bills" | "clearing" | "recipients" | "treasury" | "assistant" | "activity" | "billing" | "settings";

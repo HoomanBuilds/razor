@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type { Organization, Recipient, Section, Session } from "./types";
+import type { BillingEntitlements } from "@/server/billing/types";
 
 export interface WorkspaceContextValue {
   session: Session;
@@ -9,6 +10,8 @@ export interface WorkspaceContextValue {
   recipients: Recipient[];
   base: string;
   revision: number;
+  billing?: BillingEntitlements | null;
+  billingError?: string;
   refresh: () => void;
   navigate: (section: Section, paymentId?: string) => void;
   notify: (message: string) => void;
