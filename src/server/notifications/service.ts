@@ -74,7 +74,7 @@ export async function dispatchNotifications(organizationId?: string, limit = 5) 
       continue;
     }
     if (Date.now() - Date.parse(delivery.created_at) >= 23 * 3600_000) {
-      getDb().prepare("UPDATE notification_email_outbox SET state='unknown',last_error='Send window expired; provider acceptance may require review',updated_at=? WHERE id=? AND lease_owner=?").run(now(), delivery.id, delivery.lease_owner);
+      getDb().prepare("UPDATE notification_email_outbox SET state='unknown',lease_owner=NULL,lease_until=NULL,last_error='Send window expired; provider acceptance may require review',updated_at=? WHERE id=? AND lease_owner=?").run(now(), delivery.id, delivery.lease_owner);
       continue;
     }
     try {

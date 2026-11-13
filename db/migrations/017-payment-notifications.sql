@@ -63,3 +63,16 @@ BEGIN
     'Open your personal payment history for the current status and any available receipt. A pending or held payment has not been reported as delivered.',NEW.updated_at
   FROM recipients r WHERE r.id=NEW.recipient_id AND r.organization_id=NEW.organization_id AND r.user_id IS NOT NULL;
 END;
+
+CREATE TRIGGER backup_delivery_notice AFTER UPDATE OF state ON payout_attempts
+WHEN NEW.state='delivered' AND OLD.state!=NEW.state AND NEW.route='backup'
+  AND EXISTS(SELECT 1 FROM payments p WHERE p.id=NEW.payment_id AND p.organization_id=NEW.organization_id AND p.status='paid')
+BEGIN
+  INSERT OR IGNORE INTO notices(id,organization_id,title,body,entity_id,required_permission,dedupe_key,created_at)
+  VALUES(lower(hex(randomblob(16))),NEW.organization_id,'USDC backup delivery reconciled','Review the original obligation and recorded backup delivery receipt.',NEW.payment_id,'payments:read','backup-delivered:'||NEW.id,NEW.updated_at);
+  INSERT OR IGNORE INTO recipient_notices(id,organization_id,user_id,recipient_id,entity_id,event_key,title,body,created_at)
+  SELECT lower(hex(randomblob(16))),NEW.organization_id,r.user_id,r.id,p.id,'backup-delivered:'||NEW.id,
+    'Payment delivered using your USDC backup','Your payer reconciled delivery using your consented USDC backup. Open your personal history for its receipt.',NEW.updated_at
+  FROM payments p JOIN recipients r ON r.id=p.recipient_id AND r.organization_id=p.organization_id
+  WHERE p.id=NEW.payment_id AND p.organization_id=NEW.organization_id AND r.user_id IS NOT NULL;
+END;

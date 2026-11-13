@@ -35,6 +35,11 @@ test("destination and payment notices are transactional, personal and never repo
   assert(notices.some(notice => notice.title === "Payment awaiting company action"));
   assert(!notices.some(notice => notice.title.includes("delivered")));
   assert(!JSON.stringify(notices).includes("1000000"));
+  const attempt = randomUUID(), now = new Date().toISOString();
+  db.prepare("UPDATE payments SET status='paid',updated_at=? WHERE id=?").run(now, payment.id);
+  db.prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,created_at,updated_at) VALUES(?,?,?,'backup','reported_delivered','{}','USDC','near','recipient.near','1000000','1000000','fixture.near',?,?)").run(attempt, payment.id, access.organizationId, now, now);
+  db.prepare("UPDATE payout_attempts SET state='delivered' WHERE id=?").run(attempt);
+  assert((listRecipientNotices(receiver) as { title: string }[]).some(notice => notice.title === "Payment delivered using your USDC backup"));
 });
 
 test("email notifications require verified opt-in, redact financial details and record provider acceptance once", async () => {
