@@ -6,6 +6,8 @@ import { PERMISSIONS, getAccess } from "../src/server/identity/session";
 import { approveBill, createBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
 import { createRecurring, listNotices, readNotice, setRecurring, saveMandate } from "../src/server/operations/service";
 import { tickOperations } from "../src/server/operations/worker";
+import { executeApprovedAttempt } from "../src/server/operations/executor";
+import type { OperationJob } from "../src/server/operations/types";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "ac".repeat(32);
@@ -126,4 +128,25 @@ test("recurring payroll preserves the approved net components and supplied expla
   const terms = row<{ base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string }>("SELECT t.* FROM payroll_item_terms t JOIN payroll_items i ON i.id=t.item_id JOIN payroll_runs r ON r.id=i.run_id WHERE r.organization_id=? AND r.id!=?", access.organizationId, source.id)!;
   assert.equal(terms.base_amount, "100"); assert.equal(terms.bonus_amount, "20"); assert.equal(terms.adjustment_amount, "-5");
   assert.ok(terms.note_ciphertext.startsWith("enc1:"));
+});
+
+test("the restricted worker refuses changed treasury code before parsing or broadcasting its signer", async () => {
+  const { access, invoice } = fixture(), db = getDb(), at = new Date().toISOString(), attemptId = randomUUID(), account = `treasury-${access.organizationId.slice(0,8)}.testnet`;
+  db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,'testnet','usdc.testnet',?)").run(access.organizationId, account, at);
+  db.prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,created_at,updated_at) VALUES(?,?,?,'primary','prepared','{}','USDC','near','supplier.testnet','10000000','10000000','solver.testnet',?,?)").run(attemptId, invoice.payment_id!, access.organizationId, at, at);
+  db.prepare("INSERT INTO agent_mandates(organization_id,executor_account_id,max_amount,expires_at,enabled,created_by,updated_at) VALUES(?,'executor.testnet','11000000',?,1,?,?)").run(access.organizationId, new Date(Date.now()+3600000).toISOString(), access.userId, at);
+  const keys = ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY", "NEAR_TREASURY_CODE_HASH"], saved = keys.map(key=>process.env[key]), fetch = globalThis.fetch;
+  Object.assign(process.env, { RAZOR_EXECUTOR_ACCOUNT_ID: "executor.testnet", RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID: account, RAZOR_EXECUTOR_NETWORK: "testnet", RAZOR_EXECUTOR_PRIVATE_KEY: "unusable-fixture-key", NEAR_TREASURY_CODE_HASH: "11111111111111111111111111111111" });
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body)); assert.equal(request.method, "query");
+    const params = request.params;
+    if (params.request_type === "view_account") return Response.json({ result: { code_hash: "unreviewed-code-not-live" } });
+    const value = params.method_name === "get_payment" ? { attempts: [{ id: attemptId, status: "prepared", authorized: true }], status: "approved" } : {};
+    return Response.json({ result: { result: [...Buffer.from(JSON.stringify(value))] } });
+  };
+  try {
+    const result = await executeApprovedAttempt({ organization_id: access.organizationId, entity_id: attemptId } as OperationJob, access);
+    assert.equal(result.status, "blocked"); assert.match(String((result.detail as { reason: string }).reason), /treasury code changed/);
+    assert.equal(row<{ count: number }>("SELECT COUNT(*) AS count FROM operation_submissions WHERE attempt_id=?", attemptId)!.count, 0);
+  } finally { globalThis.fetch = fetch; for (const [index,key] of keys.entries()) { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index]; } }
 });

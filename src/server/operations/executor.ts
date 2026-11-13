@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { base58 } from "@scure/base";
 import { getDb, row, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
-import { view } from "../payments/near";
+import { contractCodeHash, view } from "../payments/near";
 import { reconcilePayment } from "../payments/service";
 import type { AccessContext } from "../context";
 import type { ApprovalStatus, ChainPayment, Payment, PayoutAttempt, TreasuryConfig } from "../payments/types";
@@ -11,6 +11,7 @@ import { assertLease } from "./worker";
 import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { executionTerms, type ExecutionRecord } from "../reconciliation/direct";
 import type { AgentMandate, OperationJob } from "./types";
+import { reviewedArtifactHash } from "../near-artifacts";
 
 interface Submission { tx_hash: string; signed_transaction_ciphertext: string; status: string; executor_account_id: string }
 interface ChainConfig { paused: boolean; owner_id: string; token_contract: string; policy_version: string; executors: string[]; approvers: string[] }
@@ -36,7 +37,10 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   const recipient = row<{ version: number; archived: number; preference_status: string }>("SELECT version,archived,preference_status FROM recipients WHERE id=? AND organization_id=?", payment.recipient_id, job.organization_id);
   if (!recipient || recipient.version !== payment.recipient_version || recipient.archived || recipient.preference_status !== "confirmed") return blocked("Recipient preferences changed. Review a new payment before execution.");
   if (BigInt(attempt.amount_in) > BigInt(mandate.max_amount)) return blocked("The exact source amount exceeds the execution mandate ceiling.");
-  const [chain, chainConfig] = await Promise.all([view<RoutePayment | null>(config, "get_payment", { payment_id: payment.id }), view<ChainConfig>(config, "get_config")]);
+  let reviewedCode: string;
+  try { reviewedCode = reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm"); } catch { return blocked("Review the treasury deployment before enabling automatic execution."); }
+  const [chain, chainConfig, code] = await Promise.all([view<RoutePayment | null>(config, "get_payment", { payment_id: payment.id }), view<ChainConfig>(config, "get_config"), contractCodeHash(config)]);
+  if (code !== reviewedCode) return blocked("The treasury code changed from the reviewed deployment. Automatic signing is disabled until its authority is reviewed.");
   const recorded = chain?.attempts.find((item) => item.id === attempt.id);
   const exact = chain?.attempts.at(-1);
   if (recorded && ["sending", "source_sent", "uncertain", "refund_pending", "refund_verifying", "delivered", "partially_delivered", "refunded", "transfer_failed", "discarded"].includes(recorded.status)) {
