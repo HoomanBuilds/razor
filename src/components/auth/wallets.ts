@@ -4,6 +4,7 @@ import type { NearConnector } from "@hot-labs/near-connect";
 import type { WalletProvider } from "@/components/account/types";
 import { createWalletClient, custom, type EIP1193Provider } from "viem";
 import { walletFailureMessage } from "@/lib/client-errors";
+import { api } from "@/lib/api";
 
 export type WalletFamily = "near" | "evm" | "solana";
 export interface AuthConfig { socialEnabled:boolean; privyAppId:string|null; nearNetwork:"mainnet"|"testnet"; origin:string; walletFamilies:WalletFamily[];ownerWalletSetup?:{providers:WalletProvider[];preferredProvider:string|null;nativeEmbeddedNear:false} }
@@ -13,10 +14,7 @@ interface SolanaProvider { connect:()=>Promise<{publicKey:{toString:()=>string}}
 let connectorPromise:Promise<NearConnector>|undefined;
 
 export async function identityRequest<T=unknown>(path:string,body?:unknown,method=body===undefined?"GET":"POST"):Promise<T> {
-  const response=await fetch(`/api${path}`,{method,credentials:"same-origin",headers:body===undefined?undefined:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});
-  const result=await response.json();
-  if(!response.ok) throw new Error(result.error?.message || result.message || (typeof result.error==="string"?result.error:"The request could not be completed. Please try again."));
-  return result as T;
+  return api<T>(path,body,method);
 }
 
 export async function getNearConnector():Promise<NearConnector> {
