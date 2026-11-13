@@ -18,6 +18,7 @@ import { verifyCompanyFundingTarget } from "../funding-requests/service";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
 import { assertSameRecipientOwner, recordedRecipientName } from "./recipient-names";
+import { activeClearingRound, assertNoActiveClearing } from "../clearing/locks";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -42,14 +43,14 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
   requirePermission(access, "payments:read");
   const item = row<Payment>("SELECT * FROM payments WHERE id = ? AND organization_id = ?", paymentId, access.organizationId);
   if (!item) throw new ApiError(404, "Payment not found", "PAYMENT_NOT_FOUND");
-  return { ...item, recipientName: recordedRecipientName(access.organizationId, item) };
+  return { ...item, recipientName: recordedRecipientName(access.organizationId, item), activeClearingRound: activeClearingRound(access.organizationId, item.id) };
 }
 
 export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
   requirePermission(access, "payments:read");
   const query = "SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC,p.id DESC";
   const payments = page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
-  return payments.map(payment => ({ ...payment, recipientName: recordedRecipientName(access.organizationId, payment) }));
+  return payments.map(payment => ({ ...payment, recipientName: recordedRecipientName(access.organizationId, payment), activeClearingRound: activeClearingRound(access.organizationId, payment.id) }));
 }
 
 export function paymentPage(access: AccessContext, page: number, pageSize: number) {
@@ -197,6 +198,7 @@ export function revalidatePaymentRecipient(access: AccessContext, paymentId: str
   requirePermission(access, "payments:prepare");
   return transaction(() => {
     const payment = getPayment(access, paymentId);
+    assertNoActiveClearing(access.organizationId, payment.id);
     if (payment.status !== "draft" || payment.approved_at || listAttempts(access, paymentId).length) throw new ApiError(409, "Cancel the approved obligation and prepare a new one before changing its recipient terms", "FRESH_APPROVAL_REQUIRED");
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=? AND archived=0", payment.recipient_id, access.organizationId);
     if (!recipient) throw new ApiError(409, "Choose an active recipient", "RECIPIENT_UNAVAILABLE");
@@ -237,6 +239,7 @@ function applyApprovalReservation(access: AccessContext, paymentId: string, exis
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
+    assertNoActiveClearing(access.organizationId, payment.id);
     if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
     assertPaymentLiabilityApproved(access, payment);
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
@@ -264,6 +267,7 @@ function applyApprovalReservation(access: AccessContext, paymentId: string, exis
 export async function cancelPayment(access: AccessContext, paymentId: string) {
   requirePermission(access, "payments:approve");
   const payment = getPayment(access, paymentId);
+  assertNoActiveClearing(access.organizationId, payment.id);
   if (payment.status === "cancelled") return { payment, walletActions: [] };
   const attempts = listAttempts(access, paymentId);
   if (["paid", "partially_paid"].includes(payment.status) || BigInt(payment.delivered_amount) > 0n || attempts.some((attempt) => activeStates.includes(attempt.state))) throw new ApiError(409, "Reconcile active delivery before cancelling", "ATTEMPT_ACTIVE");
@@ -275,6 +279,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
   }
   transaction(() => {
     const latest = getPayment(access, paymentId);
+    assertNoActiveClearing(access.organizationId, latest.id);
     if (latest.status === "cancelled") return;
     if (["paid", "partially_paid"].includes(latest.status) || BigInt(latest.delivered_amount) > 0n || row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered','reported_partial')", paymentId)) throw new ApiError(409, "Payment delivery changed while cancelling. Reconcile it before cancellation", "ATTEMPT_ACTIVE");
     const current = balance(access.organizationId);

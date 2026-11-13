@@ -15,6 +15,7 @@ import { recipientRouteReadiness } from "./routing";
 import { liabilityPayments } from "../partial-settlement/model";
 import { assertSameRecipientOwner, recordedRecipientName } from "../payments/recipient-names";
 import { fundingPositions } from "../payment-funding/accounting";
+import { activeClearingRound } from "../clearing/locks";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
 interface Replacement { old_payment_id: string; new_payment_id: string; liability_kind: string; liability_id: string; reason_ciphertext: string; created_at: string }
@@ -58,7 +59,7 @@ function profile(recipient: RecipientRecord): RecipientSnapshot {
 function paymentReview(access: AccessContext, payment: Payment) {
   const recipient = getRecipient(access.organizationId, payment.recipient_id);
   const recordedProfile = JSON.parse(payment.recipient_snapshot) as RecipientSnapshot;
-  return { payment, recipientName: recordedRecipientName(access.organizationId, payment), recordedProfile, currentProfile: profile(recipient), profileChanged: payment.recipient_version !== recipient.version };
+  return { payment, activeClearingRound: activeClearingRound(access.organizationId, payment.id), recipientName: recordedRecipientName(access.organizationId, payment), recordedProfile, currentProfile: profile(recipient), profileChanged: payment.recipient_version !== recipient.version };
 }
 
 function currentRun(access: AccessContext, runId: string): Run {
@@ -117,6 +118,7 @@ export function adjustPayrollItem(access: AccessContext, runId: string, itemId: 
 }
 
 function validateReviewedPayment(review: ReturnType<typeof paymentReview>) {
+  if (review.activeClearingRound) throw new ApiError(409, "This invoice is committed to an active clearing round. Reconcile or revoke that round before approval", "CLEARING_ROUND_LOCKED");
   if (review.payment.status === "paid") return;
   if (!["draft", "approved_unfunded", "approved"].includes(review.payment.status) || review.payment.delivered_amount !== "0") throw new ApiError(409, "Reconcile or replace the unresolved obligation before approving this review", "PAYMENT_REVIEW_BLOCKED");
   if (review.profileChanged || review.currentProfile.archived || review.currentProfile.preference_status !== "confirmed") throw new ApiError(409, "Refresh unapproved recipient details, or cancel and replace an approved obligation, before approval", "RECIPIENT_REVIEW_CHANGED");

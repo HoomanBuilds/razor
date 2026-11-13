@@ -5,6 +5,7 @@ import { decrypt, encrypt, hashToken } from "../identity/crypto";
 import { atomic } from "../../lib/money";
 import { approvePayment, getPayment, getTreasury } from "../payments/service";
 import { paymentTermsHash, reservePositions, type ReservePosition, type ReserveRecord } from "./accounting";
+import { assertNoActiveClearing } from "../clearing/locks";
 
 interface ReserveEvent { id: string; reserve_id: string; actor_id: string; action: string; request_key: string; input_fingerprint: string; details_ciphertext: string; created_at: string }
 const now = () => new Date().toISOString();
@@ -71,6 +72,7 @@ export function createClientReserve(access: AccessContext, input: { idempotencyK
     const treasury = getTreasury(access);
     if (!treasury.config || !treasury.lastSyncedAt || atomic(treasury.available, true) < atomic(amount)) throw new ApiError(409, "Sync and fund enough unreserved company cash before creating this earmark", "CLIENT_RESERVE_UNFUNDED");
     const payment = terms.paymentId ? getPayment(access, terms.paymentId) : null;
+    if (payment) assertNoActiveClearing(access.organizationId, payment.id);
     if (payment && (payment.amount !== amount || ["paid", "partially_paid"].includes(payment.status))) throw new ApiError(409, "Link one unpaid obligation with exactly the same principal", "CLIENT_PAYMENT_MISMATCH");
     if (payment && row("SELECT id FROM client_reserves WHERE payment_id=? AND state!='released'", payment.id)) throw new ApiError(409, "This principal already belongs to another active client earmark", "CLIENT_PAYMENT_ALREADY_LINKED");
     if (terms.fundingId) {

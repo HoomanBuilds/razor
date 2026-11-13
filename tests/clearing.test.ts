@@ -4,10 +4,11 @@ import { base58 } from "@scure/base";
 import { computeClearing } from "../src/server/clearing/algorithm";
 import { acceptInvoice, createRound, eligibleTerms, offerInvoice, overview, prepareRoundAction, previewRound, reconcileRound, roundDetail, shareInvoice } from "../src/server/clearing/service";
 import { getDb, row } from "../src/server/db";
-import { createBill, approveBill, listBills } from "../src/server/business/service";
-import { getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
+import { createBill, approveBill, disputeBill, listBills } from "../src/server/business/service";
+import { acceptBillMilestone, getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
+import { cancelPayment, revalidatePaymentRecipient } from "../src/server/payments/service";
 import { accountingExport } from "../src/server/reconciliation/export";
-import type { AccessContext } from "../src/server/context";
+import { ApiError, type AccessContext } from "../src/server/context";
 import type { ChainRound } from "../src/server/clearing/types";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -60,11 +61,23 @@ test("stale invoices, personal pay and concurrent payment authority cannot enter
   assert.equal(row<{ count: number }>("SELECT count(*) AS count FROM clearing_rounds")!.count, 0);
   assert.throws(() => eligibleTerms(fixture.a.organizationId, invoice(fixture.a, "1000000", "employee").id), /only confirmed business/);
   const fresh = reciprocal(), reviewed = previewRound(fresh.a, fresh.input), round = createRound(fresh.a, { ...fresh.input, reviewToken: reviewed.reviewToken });
-  assert.throws(() => approveBill(fresh.a, fresh.billA.id), /CLEARING_LOCKED/);
+  assert.throws(() => approveBill(fresh.a, fresh.billA.id), error => error instanceof ApiError && error.code === "CLEARING_ROUND_LOCKED");
   assert.throws(() => getDb().prepare("UPDATE payments SET reserved_amount='1' WHERE id=?").run(fresh.billB.payment_id!), /CLEARING_LOCKED/);
   assert.throws(() => createRound(fresh.a, { ...fresh.input, reviewToken: reviewed.reviewToken }), /already uses/);
   assert.equal(round.status, "prepared");
   assert.throws(() => roundDetail(company(), round.id), /not found/);
+});
+
+test("active clearing locks are exposed as actionable conflicts before financial mutations", async () => {
+  const f = reciprocal(), preview = previewRound(f.a, f.input), round = createRound(f.a, { ...f.input, reviewToken: preview.reviewToken });
+  const locked = (error: unknown) => error instanceof ApiError && error.status === 409 && error.code === "CLEARING_ROUND_LOCKED";
+  assert.equal(getBillTerms(f.a, f.billA.id).activeClearingRound?.id, round.id);
+  assert.throws(() => setBillTerms(f.a, f.billA.id, { paymentAmount: f.billA.amount, maxFee: "1", requiresAcceptance: false }), locked);
+  assert.throws(() => disputeBill(f.a, f.billA.id, "Pause this invoice"), locked);
+  assert.throws(() => acceptBillMilestone(f.a, f.billA.id, "Different acceptance"), locked);
+  assert.throws(() => revalidatePaymentRecipient(f.a, f.billA.payment_id!), locked);
+  await assert.rejects(cancelPayment(f.a, f.billA.payment_id!), locked);
+  assert.equal(row<{ status: string }>("SELECT status FROM payments WHERE id=?", f.billA.payment_id!)!.status, "draft");
 });
 
 test("a three-company cycle needs both counterparties to authorize every additional amount share", () => {

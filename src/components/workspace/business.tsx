@@ -16,6 +16,7 @@ import {
   Status,
 } from "./shared";
 import type { Bill, Payment, PayrollRun, Recipient } from "./types";
+import type { PayrollCsvItem } from "@/lib/csv";
 import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
 
@@ -273,6 +274,7 @@ export function Payroll() {
   } = useResource<{ runs: PayrollRun[] }>(canRead ? `${base}/payroll` : null, revision);
   const { busy, error, run, setError } = useAction();
   const [items, setItems] = useState<Record<string, string>>({});
+  const [importedRows, setImportedRows] = useState<Record<string, PayrollCsvItem>>({});
   const [reviewRunId, setReviewRunId] = useState("");
   if (!canRead) return null;
   return (
@@ -307,13 +309,19 @@ export function Payroll() {
                       organization.timezone,
                     )
                   : undefined,
-                items: selected.map(([recipientId, value]) => ({
-                  recipientId,
-                  amount: dollars(value),
-                  maxFee: dollars(values.get("fee"), true),
-                })),
+                items: selected.map(([recipientId, value]) => {
+                  const imported = importedRows[recipientId], adjustment = imported?.adjustmentAmount;
+                  return {
+                    recipientId,
+                    amount: dollars(value),
+                    maxFee: dollars(imported?.maxFee ?? values.get("fee"), true),
+                    note: imported?.note,
+                    ...(imported?.baseAmount !== undefined ? { baseAmount: dollars(imported.baseAmount, true), bonusAmount: dollars(imported.bonusAmount ?? "0", true), adjustmentAmount: adjustment?.startsWith("-") ? `-${dollars(adjustment.slice(1), true)}` : dollars(adjustment ?? "0", true) } : {}),
+                  };
+                }),
               });
               setItems({});
+              setImportedRows({});
               form.reset();
               refresh();
             });
@@ -361,13 +369,14 @@ export function Payroll() {
                       inputMode="decimal"
                       placeholder="0.00"
                       value={items[recipient.id] ?? ""}
-                      onChange={(event) =>
-                        setItems({
-                          ...items,
-                          [recipient.id]: event.target.value,
-                        })
-                      }
+                      readOnly={importedRows[recipient.id]?.baseAmount !== undefined}
+                      title={importedRows[recipient.id]?.baseAmount !== undefined ? "Imported components stay together. Save the draft, then adjust its base, bonus or correction in the review." : undefined}
+                      onChange={(event) => {
+                        setItems(previous => ({ ...previous, [recipient.id]: event.target.value }));
+                        setImportedRows(previous => previous[recipient.id] ? { ...previous, [recipient.id]: { ...previous[recipient.id], amount: event.target.value } } : previous);
+                      }}
                     />
+                    {importedRows[recipient.id]?.baseAmount !== undefined && <p className="mt-1 max-w-56 text-xs text-muted-foreground">Imported base, bonus and correction are preserved. Edit their amounts in the saved run review.</p>}
                   </td>
                 </tr>
               ))}
@@ -397,13 +406,15 @@ export function Payroll() {
                 onChange={async (event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
-                  const { parsePayrollCsv } = await import("@/lib/csv");
+                  const { parsePayrollDetailsCsv } = await import("@/lib/csv");
                   try {
-                    const parsed = parsePayrollCsv(
+                    const parsed = parsePayrollDetailsCsv(
                       await file.text(),
                       recipients,
                     );
-                    setItems(parsed);
+                    setItems(Object.fromEntries(Object.entries(parsed).map(([recipientId, item]) => [recipientId, item.amount])));
+                    setImportedRows(parsed);
+                    setError("");
                     setError("");
                   } catch (cause) {
                     setError((cause as Error).message);
@@ -414,8 +425,7 @@ export function Payroll() {
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            CSV columns: recipient_id or email, amount. Fill the pay period
-            above after import.
+            CSV columns: recipient_id or email, amount (net USDC). Optional: base_amount, bonus_amount, adjustment_amount, note and max_fee. A bonus or correction needs base_amount and a note; an amount column must match their net total. Fill the pay period above after import.
           </p>
         </form>
         {error && (
