@@ -43,6 +43,26 @@ Remote mode only reads public NEAR network, shared treasury/clearing configurati
 4. Configure the NEAR AI model, API key, approved model/gateway compose hashes, retention period and attestation age. Review approved measurements before enabling inference. Send fictional documents through the actual application and retain successful required verification evidence, a rejection example and deletion/expiry results. Configuration alone cannot prove private inference.
 5. For optional email, configure a verified Resend sender/domain and the transport key. A recipient must opt in with a verified email identity. Confirm actual arrival separately from provider acceptance; messages contain sign-in links without private payment details.
 
+## Recover shared treasury callbacks and refunds
+
+Set the shared treasury's `refund_reporter` to a dedicated recoverable operator account through its platform owner. Link that account to an actual Razor operator user using verified NEAR wallet linking. The operator does not need a company membership; the command verifies the current onchain platform reporter, reviewed treasury code, network and the selected company's immutable binding before granting a narrow local admin context. Audit entries retain the operator user's own identity.
+
+Inspect the original final receipts first. This command reuses the application's exact provider, token-transfer and callback recovery checks. It cannot approve a timeout, move arbitrary funds or choose an unrelated recipient. Amounts below are integer microUSDC, so `1000000` is 1 USDC.
+
+```sh
+npm run recovery:admin -- --company COMPANY_ID --operator-user OPERATOR_USER_ID --account REPORTER.near --network mainnet --kind refund --attempt ATTEMPT_ID --hash REFUND_NEAR_TX_HASH --sender REFUND_TX_SIGNER.near --refund-amount 1000000
+npm run recovery:admin -- --company COMPANY_ID --operator-user OPERATOR_USER_ID --account REPORTER.near --network mainnet --kind source --attempt ATTEMPT_ID --hash ORIGINAL_SOURCE_NEAR_TX_HASH --sender ORIGINAL_TX_SIGNER.near
+npm run recovery:admin -- --company COMPANY_ID --operator-user OPERATOR_USER_ID --account REPORTER.near --network mainnet --kind retained --token RETAINED_TOKEN.near --hash ORIGINAL_WITHDRAWAL_NEAR_TX_HASH --sender ORIGINAL_TX_SIGNER.near
+```
+
+The default prints one verified unsigned call with the exact company, method, arguments, operator and zero attached deposit. Review it in the operator wallet. It records the review and receipt evidence without broadcasting. A refund transaction must appear in that route's provider report and match its final canonical USDC receipt. Source and retained recovery must reference the exact original transfer with a missing callback.
+
+For optional CLI broadcasting, set `RAZOR_RECOVERY_ACCOUNT_ID`, `RAZOR_RECOVERY_NETWORK` and `RAZOR_RECOVERY_PRIVATE_KEY` in ignored configuration. Give that account a function-call key whose receiver is exactly `NEAR_TREASURY_ID`, whose nonempty method list contains only `confirm_refund`, `recover_source_transfer` and/or `recover_retained_withdrawal`, and whose bounded allowance covers 100 Tgas at the live network gas price. The key must include the selected method. Full-access keys, empty or broader method lists, wrong receivers and insufficient allowances are refused before preparing attestations. Keep this key separate from the ordinary company executor key. The reporter calls require the freshly reviewed shared contract version that accepts zero attached deposit for this role.
+
+Append `--send` to the reviewed command to sign and broadcast. Signed transaction bytes are encrypted and journaled in the database before broadcast. Keep the original database and encryption key together. An uncertain outcome stays held: repeating the exact command checks its original transaction, and `--send` can only rebroadcast those same saved bytes. A changed proof or another recovery for the same unresolved entity cannot create a replacement signature. Never delete the journal to retry an unknown outcome.
+
+A final transaction and a matching company-scoped recovery state are both required for confirmation. A conclusive transaction failure or a callback that returns false requires review. After fixing its cause, repeat the exact command with `--send --retry-final` to recheck the proof and create a fresh signature; this flag is refused while the original outcome is unknown. Prior signed submissions remain in the audit journal. No recovery broadcasts have been performed by local implementation checks.
+
 ## Complete financial evidence
 
 Use a deliberately funded company and confirmed fictional payees under your own control. Before each real transfer, review the exact amount, fee ceiling, asset/network identity, receiving address, backup consent and signer. Preserve final receipts with the company accounting export.
