@@ -1,6 +1,6 @@
 # Razor treasury
 
-A NEAR contract holding one configured NEP-141 native USDC token for company payroll, contractor and supplier obligations. The application converts supported funding assets through NEAR Intents before they enter this treasury. Token amounts use integer microUSDC strings. Each company deploys its own treasury account and retains a separate owner account for recovery.
+A NEAR contract holding one configured NEP-141 native USDC token for company payroll, contractor and supplier obligations. The application converts supported funding assets through NEAR Intents before they enter this treasury. Token amounts use integer microUSDC strings. One shared NEAR account hosts isolated company ledgers. Each company retains a separate owner account for recovery; registering a company creates state rather than deploying another account or code copy.
 
 ## Build
 
@@ -22,9 +22,9 @@ Before funding, register the treasury account with the configured USDC contract'
 - Reservations prevent concurrent obligations from spending the same cash. Input amounts consume UTC daily limits before the FT promise is issued. A failed FT transfer restores the input and daily allowance; if released fee headroom was spent concurrently, the obligation is held until funded again.
 - Intents source transfer success means `source_sent`. It never means the employee or supplier has received payment. Only direct NEAR USDC transfer success closes delivery without an external settlement report.
 - The owner or explicitly configured settlement reporter attests external delivery and route closure. This authority can misreport external state. A receipt is an audit reference, not a contract-verified external-chain proof. No worker receives this authority by default.
-- A refund needs both a trusted closure attestation and an actual `ft_balance_of` check. Cash is replaced with the observed token balance, never increased synthetically by the claimed refund. Lost input reduces the remaining fee budget. Existing company cash may support a reservation only after that explicit attestation; the balance observation alone cannot establish refund provenance.
+- A refund needs a platform-appointed `refund_reporter`, a final-receipt attribution attestation, a globally unused receipt reference and an actual `ft_balance_of` check. The check must cover every company's liabilities, including pending outflows, plus the refund. Only the attributed refund amount is credited. Any concurrent liability change invalidates its pooled-balance snapshot. A company owner or company-appointed reporter cannot allocate unmatched pooled transfers to itself. The global reporter is trusted to verify attribution; the contract does not cryptographically verify external receipts.
 - Backup execution is blocked while the prior route may still deliver. There is no timeout refund or automatic fallback. Only an unsent prepared route, failed source transfer or verified closed refund permits another attempt.
-- The owner can recover a missing source callback using a final NEAR receipt. Declaring failure is safe only after proving the transfer cannot later execute. A subsequent callback is idempotent. Owner withdrawals use unreserved funds; pause does not prevent cancellation, reconciliation or owner recovery.
+- The company owner can attest successful source or retained withdrawals, which only reduces its own liabilities. Declaring a failed source or retained withdrawal can recreate a balance and therefore requires the platform refund reporter with conclusive final receipt evidence. Subsequent callbacks are idempotent. Owner withdrawals use unreserved funds and unique callback IDs; pause does not prevent cancellation, reconciliation or owner recovery.
 - Recipient consent is recorded by the owner from the application's authenticated preference flow. This contract does not verify an employee's off-chain identity or signature.
 
 The treasury does not provide confidential balances, zero-knowledge privacy, insurance, fiat off-ramps or tax calculation. Contract state and event data are public. Keep personal payroll details off-chain; use opaque references.
@@ -37,14 +37,20 @@ Initialize once:
 
 ```json
 {
-  "owner_id": "company-owner.testnet",
-  "token_contract": "configured-usdc.testnet",
-  "per_payment_limit": "1000000000",
-  "daily_limit": "10000000000"
+  "owner_id": "platform-operator.testnet",
+  "token_contract": "configured-usdc.testnet"
 }
 ```
 
-Call this object with `new`. Examples use placeholder testnet token accounts, not verified deployments.
+Call this object with `new` once for the shared platform. Examples use placeholder testnet token accounts, not verified deployments.
+
+`get_platform_config()` identifies `architecture: "shared_v1"`, version, platform owner, token, pause status, refund reporter and registration storage policy. The platform owner can set `set_platform_paused` and `set_refund_reporter`, each with 1 yoctoNEAR. These roles do not grant arbitrary company withdrawals.
+
+Register a company with `register_company({company_id,per_payment_limit,daily_limit})`. Its owner is the predecessor account. The company ID is the application organization UUID followed by `:` and the first 16 lowercase hexadecimal characters of SHA-256(owner account). The contract verifies this initial owner binding, so copying another wallet's pending registration cannot preempt its company ID. An existing ID cannot be overwritten. Ownership transfer preserves the original ID.
+
+`quote_registration({company_id})` returns the required deposit for 8,192 bytes of prepaid company storage. Registration measures actual initial state use; the remainder funds later history. `get_storage({company_id})` returns `storage_credit`, `storage_used` and `storage_available` in yoctoNEAR. Any sponsor can use payable `add_storage({company_id})`. Ordinary writes retain a 1,024-byte callback reserve; private callbacks can use that reserve. Token balances are separate from NEAR storage credit.
+
+Every company view/action in the tables below additionally requires `company_id`. `get_company({company_id})` returns the company config or null. Amounts, authorization hashes, recipient versions, role memberships, reservations, daily spending and callback routing are company-scoped. Approval hashes also bind the company ID.
 
 Views:
 
@@ -135,19 +141,23 @@ Reconciliation actions, zero deposit unless noted:
 | --- | --- |
 | `report_settlement` | Owner or reporter: `{payment_id,attempt_id,outcome,receipt,actual_output}`; outcome is `delivered`, `uncertain` or `refund_pending`. Full delivery requires a decimal destination output at least equal to the exact route output. `actual_output` may be null for unresolved or zero-delivery refund reports |
 | `report_partial_settlement` | Owner or reporter: `{payment_id,attempt_id,expected_quote_hash,actual_output,credited_amount,route_closed,receipt}`; binds the exact quote, positive short destination output, explicitly agreed partial microUSDC credit and terminal route closure |
-| `confirm_refund` | Owner or reporter: `{payment_id,attempt_id,refund_amount,receipt}` after `refund_pending`; queries actual token balance |
-| `recover_source_transfer` | Owner, 1 yoctoNEAR: `{payment_id,attempt_id,succeeded,receipt}`; only a still-`sending` attempt with conclusive source receipt evidence |
+| `confirm_refund` | Platform refund reporter: `{payment_id,attempt_id,refund_amount,receipt}` after `refund_pending`; queries actual token balance |
+| `recover_source_transfer` | Company owner for success or platform refund reporter for either outcome, 1 yoctoNEAR: `{payment_id,attempt_id,succeeded,receipt}`; only a still-`sending` attempt with conclusive source receipt evidence |
 | `cancel_payment` | Approver, 1 yoctoNEAR: `{payment_id}`; only obligations without a potentially delivering attempt |
 | `refresh_balance` | Anyone: `{}`; call with at least 40 Tgas and no pending source callback |
 | `withdraw_available` | Owner, 1 yoctoNEAR: `{receiver_id,amount}`; only unreserved cash |
 
-`ft_on_transfer({sender_id,amount,msg})` accepts empty messages and only the configured token predecessor. Its async balance query observes cash instead of trusting additive credits. If a source callback is pending, it accepts the deposit and leaves cash recognition to a later `refresh_balance`. Direct FT transfers that do not invoke `ft_on_transfer` also require `refresh_balance`.
+`ft_on_transfer({sender_id,amount,msg})` requires strict JSON `msg` containing `{company_id,deposit_id,kind}`. `kind` is `funding` for the configured native USDC or `retained` for a company-enabled non-USDC token. Each accepted callback credits exactly its NEP-141 transfer amount and records the globally unique deposit ID. Unknown companies, duplicate IDs, malformed messages, unknown fields and wrong token/kind combinations reject the transfer-call. Use fresh unpredictable deposit IDs. A preempting dust transfer using an exposed ID can disrupt that deposit, but cannot redirect its credit to another company; the rejected transfer must follow the token/provider refund flow.
 
-Payment states are `proposed`, `awaiting_approvals`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`, `partially_paid`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`, `partially_delivered`. Attempts retain `actual_output` in destination units and `credited_amount` in microUSDC. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `razor`, version `1.0.0`.
+`get_deposit({company_id,deposit_id})` returns the credited company, deposit ID, token, sender, exact amount, kind and timestamp. `deposit_credited` events contain the same fields in the actual transfer-call receipt. The application verifies both that event and the final token transfer before recognizing a funding leg. Intents funding supplies this JSON through `customRecipientMsg`; its experimental NEAR transfer-call path requires a registered token receiver.
+
+Direct `ft_transfer` transfers without a tagged callback remain unallocated. Neither `refresh_balance` nor retained balance probes allocate the pooled token balance to a company. Balance probes only verify ledger coverage. Pooled NEP-141 balances are not a substitute for company-specific funding provenance.
+
+Payment states are `proposed`, `awaiting_approvals`, `approved`, `in_flight`, `retryable`, `recovery_pending`, `held`, `paid`, `cancelled`, `partially_paid`. Attempt states are `prepared`, `discarded`, `sending`, `source_sent`, `uncertain`, `refund_pending`, `refund_verifying`, `refunded`, `transfer_failed`, `delivered`, `partially_delivered`. Attempts retain `actual_output` in destination units and `credited_amount` in microUSDC. Full serialized field definitions are in `src/types.rs`. Private callbacks are called only by this treasury account. Events follow NEP-297 with standard `razor`, version `2.0.0`, with `company_id` in company event data.
 
 Partial closure requires `route_closed: true`, an actual output strictly between zero and the quoted output, and an agreed credit strictly between zero and the original entitlement. The reporter's receipt cannot be reused. A previous observed output cannot decrease, and positive delivery cannot become a full-refund retry. The contract does not infer USDC value from a different asset's token units. Native NEAR treasury USDC credit must equal the actual output. The owner or appointed reporter is trusted to verify external delivery, its agreed value and terminal closure; this method is not a cross-chain proof verifier.
 
-A terminal partial releases no new funds, preserves the original face entitlement and all source spending, and blocks cancellation, retry and backup of that original. The application may prepare a separately approved remainder with a new payment ID and current recipient terms. The new contract state fields require a fresh deployment; immutable keyless children from an older build cannot be upgraded by deploying this WASM elsewhere.
+A terminal partial releases no new funds, preserves the original face entitlement and all source spending, and blocks cancellation, retry and backup of that original. The application may prepare a separately approved remainder with a new payment ID and current recipient terms. The shared state layout requires a fresh shared deployment. Existing isolated treasuries must never be repointed to it as if they were migrated; migration needs explicit balance, authority and liability reconciliation. Immutable keyless children cannot be upgraded by deploying this WASM elsewhere.
 
 NEAR's independent asynchronous receipts require explicit callback recovery, as described in the [official cross-contract documentation](https://docs.near.org/smart-contracts/anatomy/crosscontract).
 

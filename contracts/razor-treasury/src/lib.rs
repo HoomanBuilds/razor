@@ -1,1184 +1,288 @@
-mod partial;
-mod retained;
+mod core;
 mod types;
-pub use retained::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
+pub use core::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
 pub use types::*;
 
+use core::CompanyTreasury;
 use near_sdk::{
-    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, env,
-    ext_contract,
+    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, ext_contract,
     json_types::{U64, U128},
     near, require,
     serde_json::json,
-    store::IterableMap,
+    store::LookupMap,
 };
-use std::collections::BTreeSet;
 
-const DAY_MS: u64 = 86_400_000;
-const GAS_TRANSFER: Gas = Gas::from_tgas(20);
-const GAS_CALLBACK: Gas = Gas::from_tgas(15);
-const GAS_BALANCE: Gas = Gas::from_tgas(5);
-const MAX_ATTEMPTS: usize = 10;
-const MAX_APPROVAL_TIERS: usize = 8;
-const MAX_REQUIRED_APPROVALS: u8 = 8;
-const MAX_APPROVERS: usize = 16;
-
-#[ext_contract(ext_ft)]
-#[allow(dead_code)]
-trait FungibleToken {
-    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
-    fn ft_balance_of(&self, account_id: AccountId) -> U128;
-}
+const REGISTRATION_BYTES: u64 = 8_192;
+const EMERGENCY_BYTES: u64 = 1_024;
 
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
 trait Callbacks {
-    fn on_transfer_result(&mut self, payment_id: String, attempt_id: String) -> bool;
-    fn on_balance_sync(&mut self, epoch: U64) -> bool;
-    fn on_deposit_sync(&mut self, epoch: U64) -> U128;
-    fn on_refund_verified(&mut self, payment_id: String, attempt_id: String, epoch: U64) -> bool;
-    fn on_withdraw_result(&mut self, amount: U128) -> bool;
-    fn on_retained_balance_sync(&mut self, token_contract: AccountId, epoch: U64) -> bool;
-    fn on_retained_deposit_sync(&mut self, token_contract: AccountId, epoch: U64) -> U128;
+    fn on_transfer_result(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+    ) -> bool;
+    fn on_balance_sync(&mut self, company_id: String, epoch: U64) -> bool;
+    fn on_deposit_sync(&mut self, company_id: String, epoch: U64) -> U128;
+    fn on_refund_verified(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool;
+    fn on_withdraw_result(&mut self, company_id: String, withdrawal_id: U64, amount: U128) -> bool;
+    fn on_retained_balance_sync(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        epoch: U64,
+    ) -> bool;
+    fn on_retained_deposit_sync(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        epoch: U64,
+    ) -> U128;
     fn on_retained_withdraw_result(
         &mut self,
+        company_id: String,
         token_contract: AccountId,
         withdrawal_id: U64,
     ) -> bool;
 }
 
+#[near(serializers = [json])]
+pub struct PlatformConfig {
+    pub architecture: String,
+    pub version: u8,
+    pub owner_id: AccountId,
+    pub token_contract: AccountId,
+    pub paused: bool,
+    pub refund_reporter: Option<AccountId>,
+    pub registration_storage_bytes: U64,
+    pub minimum_registration_deposit: U128,
+}
+
+#[near(serializers = [json])]
+pub struct RegistrationQuote {
+    pub architecture: String,
+    pub company_id: String,
+    pub token_contract: AccountId,
+    pub minimum_deposit: U128,
+    pub storage_bytes: U64,
+}
+
+#[near(serializers = [json])]
+pub struct StorageView {
+    pub storage_credit: U128,
+    pub storage_used: U128,
+    pub storage_available: U128,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct DepositCredit {
+    pub company_id: String,
+    pub deposit_id: String,
+    pub token_contract: AccountId,
+    pub sender_id: AccountId,
+    pub amount: U128,
+    pub kind: String,
+    pub credited_at_ms: U64,
+}
+
+#[near(serializers = [json])]
+#[serde(deny_unknown_fields)]
+struct DepositMessage {
+    company_id: String,
+    deposit_id: String,
+    kind: String,
+}
+
+#[near(serializers = [borsh])]
+struct RefundClaim {
+    company_id: String,
+    payment_id: String,
+    attempt_id: String,
+    amount: U128,
+    credited: bool,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Treasury {
-    retained_assets: IterableMap<AccountId, RetainedAsset>,
-    next_retained_withdrawal: u64,
     owner_id: AccountId,
     token_contract: AccountId,
     paused: bool,
-    per_payment_limit: u128,
-    daily_limit: u128,
-    policy_version: u64,
-    approval_tiers: Vec<ApprovalTier>,
-    approvers: BTreeSet<AccountId>,
-    executors: BTreeSet<AccountId>,
-    settlement_reporter: Option<AccountId>,
-    backup_assets: IterableMap<String, String>,
-    balance: u128,
-    reserved: u128,
-    in_flight: u128,
-    unsettled_payments: u64,
-    balance_epoch: u64,
-    confirmed_at_ms: u64,
-    recipients: IterableMap<String, Recipient>,
-    payments: IterableMap<String, Payment>,
-    obligations: IterableMap<String, String>,
-    spent_by_day: IterableMap<u64, u128>,
-    partial_receipts: IterableMap<String, String>,
+    refund_reporter: Option<AccountId>,
+    pool_epoch: u64,
+    companies: LookupMap<String, CompanyTreasury>,
+    deposits: LookupMap<String, DepositCredit>,
+    liabilities: LookupMap<AccountId, u128>,
+    refund_claims: LookupMap<String, RefundClaim>,
 }
 
 #[near]
 impl Treasury {
     #[init]
-    pub fn new(
-        owner_id: AccountId,
-        token_contract: AccountId,
-        per_payment_limit: U128,
-        daily_limit: U128,
-    ) -> Self {
+    pub fn new(owner_id: AccountId, token_contract: AccountId) -> Self {
         require!(
             owner_id != env::current_account_id(),
             "OWNER_MUST_BE_RECOVERABLE"
         );
         require!(
-            per_payment_limit.0 > 0 && daily_limit.0 >= per_payment_limit.0,
-            "INVALID_LIMITS"
+            token_contract != env::current_account_id(),
+            "INVALID_TOKEN_CONTRACT"
         );
-        let mut backup_assets = IterableMap::new(b"b");
-        backup_assets.insert("near".into(), format!("nep141:{token_contract}"));
         Self {
-            retained_assets: IterableMap::new(b"h"),
-            next_retained_withdrawal: 0,
             owner_id,
             token_contract,
             paused: false,
-            per_payment_limit: per_payment_limit.0,
-            daily_limit: daily_limit.0,
-            policy_version: 1,
-            approval_tiers: vec![ApprovalTier {
-                up_to: daily_limit,
-                required_approvals: 1,
-            }],
-            approvers: BTreeSet::new(),
-            executors: BTreeSet::new(),
-            settlement_reporter: None,
-            backup_assets,
-            balance: 0,
-            reserved: 0,
-            in_flight: 0,
-            unsettled_payments: 0,
-            balance_epoch: 0,
-            confirmed_at_ms: 0,
-            recipients: IterableMap::new(b"r"),
-            payments: IterableMap::new(b"p"),
-            obligations: IterableMap::new(b"o"),
-            spent_by_day: IterableMap::new(b"d"),
-            partial_receipts: IterableMap::new(b"t"),
+            refund_reporter: None,
+            pool_epoch: 0,
+            companies: LookupMap::new(b"C"),
+            deposits: LookupMap::new(b"D"),
+            liabilities: LookupMap::new(b"L"),
+            refund_claims: LookupMap::new(b"F"),
         }
     }
 
-    pub fn get_config(&self) -> ConfigView {
-        ConfigView {
-            retained_assets_enabled: true,
-            max_retained_assets: retained::MAX_RETAINED_ASSETS,
+    pub fn get_platform_config(&self) -> PlatformConfig {
+        PlatformConfig {
+            architecture: "shared_v1".into(),
+            version: 1,
             owner_id: self.owner_id.clone(),
             token_contract: self.token_contract.clone(),
             paused: self.paused,
-            per_payment_limit: U128(self.per_payment_limit),
-            daily_limit: U128(self.daily_limit),
-            policy_version: U64(self.policy_version),
-            settlement_reporter: self.settlement_reporter.clone(),
-            executor_trust_daily_budget: U128(0),
-            approvers: self.approvers.iter().cloned().collect(),
-            executors: self.executors.iter().cloned().collect(),
-            approval_tiers: self.approval_tiers.clone(),
-            approval_amount_basis: "principal_plus_max_fee".into(),
+            refund_reporter: self.refund_reporter.clone(),
+            registration_storage_bytes: U64(REGISTRATION_BYTES),
+            minimum_registration_deposit: U128(storage_cost(REGISTRATION_BYTES)),
         }
-    }
-
-    pub fn get_balance(&self) -> BalanceView {
-        BalanceView {
-            balance: U128(self.balance),
-            reserved: U128(self.reserved),
-            available: U128(self.balance.saturating_sub(self.reserved)),
-            in_flight: U128(self.in_flight),
-            confirmed_at_ms: U64(self.confirmed_at_ms),
-        }
-    }
-
-    pub fn get_payment(&self, payment_id: String) -> Option<Payment> {
-        self.payments.get(&payment_id).cloned()
-    }
-    pub fn get_recipient(&self, recipient_id: String) -> Option<Recipient> {
-        self.recipients.get(&recipient_id).cloned()
-    }
-    pub fn get_attempt(&self, payment_id: String, attempt_id: String) -> Option<Attempt> {
-        self.payments.get(&payment_id).and_then(|payment| {
-            payment
-                .attempts
-                .iter()
-                .find(|attempt| attempt.id == attempt_id)
-                .cloned()
-        })
-    }
-    pub fn get_approval_status(
-        &self,
-        payment_id: String,
-        attempt_id: Option<String>,
-    ) -> ApprovalStatus {
-        let payment = self.load_payment(&payment_id);
-        let attempt = attempt_id
-            .as_ref()
-            .and_then(|id| payment.attempts.iter().find(|attempt| &attempt.id == id))
-            .or_else(|| {
-                if attempt_id.is_none() {
-                    payment.attempts.last()
-                } else {
-                    None
-                }
-            });
-        self.approval_status(&payment, attempt)
-    }
-    pub fn get_obligation(&self, reference: String) -> Option<String> {
-        self.obligations.get(&reference).cloned()
-    }
-    pub fn get_backup_asset(&self, network: String) -> Option<String> {
-        self.backup_assets.get(&network).cloned()
-    }
-    pub fn list_payments(&self, from_index: Option<u32>, limit: Option<u32>) -> Vec<Payment> {
-        self.payments
-            .values()
-            .skip(from_index.unwrap_or(0) as usize)
-            .take(limit.unwrap_or(25).min(100) as usize)
-            .cloned()
-            .collect()
-    }
-    pub fn get_daily_spend(&self, day: U64) -> U128 {
-        U128(*self.spent_by_day.get(&day.0).unwrap_or(&0))
     }
 
     #[payable]
-    pub fn set_paused(&mut self, paused: bool) {
-        self.assert_owner();
+    pub fn set_platform_paused(&mut self, paused: bool) {
+        self.assert_platform_owner();
         self.paused = paused;
-        emit("pause_changed", json!({"paused": paused}));
     }
 
     #[payable]
-    pub fn set_policy(&mut self, per_payment_limit: U128, daily_limit: U128) {
-        self.assert_owner();
+    pub fn set_refund_reporter(&mut self, account_id: Option<AccountId>) {
+        self.assert_platform_owner();
         require!(
-            per_payment_limit.0 > 0 && daily_limit.0 >= per_payment_limit.0,
-            "INVALID_LIMITS"
+            account_id.as_ref() != Some(&env::current_account_id()),
+            "INVALID_REPORTER"
         );
-        self.per_payment_limit = per_payment_limit.0;
-        self.daily_limit = daily_limit.0;
-        if let Some(tier) = self.approval_tiers.last_mut() {
-            if tier.up_to.0 < daily_limit.0 {
-                tier.up_to = daily_limit;
-            }
+        self.refund_reporter = account_id;
+    }
+
+    pub fn quote_registration(&self, company_id: String) -> RegistrationQuote {
+        validate_company_id(&company_id);
+        RegistrationQuote {
+            architecture: "shared_v1".into(),
+            company_id,
+            token_contract: self.token_contract.clone(),
+            minimum_deposit: U128(storage_cost(REGISTRATION_BYTES)),
+            storage_bytes: U64(REGISTRATION_BYTES),
         }
-        self.policy_version = self
-            .policy_version
-            .checked_add(1)
-            .expect("VERSION_OVERFLOW");
-        emit(
-            "policy_changed",
-            json!({"version": U64(self.policy_version)}),
-        );
     }
 
     #[payable]
-    pub fn set_approval_policy(&mut self, tiers: Vec<ApprovalTier>, expected_policy_version: U64) {
-        self.assert_owner();
-        require!(
-            expected_policy_version.0 == self.policy_version,
-            "POLICY_CHANGED"
-        );
-        require!(
-            !tiers.is_empty() && tiers.len() <= MAX_APPROVAL_TIERS,
-            "INVALID_APPROVAL_TIERS"
-        );
-        let eligible = self
-            .approvers
+    pub fn register_company(
+        &mut self,
+        company_id: String,
+        per_payment_limit: U128,
+        daily_limit: U128,
+    ) -> ConfigView {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        validate_company_id(&company_id);
+        let expected_owner = env::sha256(env::predecessor_account_id().as_bytes())
             .iter()
-            .filter(|account| *account != &self.owner_id)
-            .count()
-            + 1;
-        let mut previous_amount = 0u128;
-        let mut previous_required = 1u8;
-        for tier in &tiers {
-            require!(
-                tier.up_to.0 > previous_amount,
-                "APPROVAL_TIERS_NOT_ASCENDING"
-            );
-            require!(
-                tier.required_approvals >= previous_required
-                    && tier.required_approvals <= MAX_REQUIRED_APPROVALS,
-                "INVALID_APPROVAL_QUORUM"
-            );
-            require!(
-                tier.required_approvals as usize <= eligible,
-                "INSUFFICIENT_APPROVER_ACCOUNTS"
-            );
-            previous_amount = tier.up_to.0;
-            previous_required = tier.required_approvals;
-        }
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         require!(
-            previous_amount >= self.daily_limit,
-            "APPROVAL_TIERS_MUST_COVER_DAILY_LIMIT"
+            company_id.rsplit_once(':').map(|(_, suffix)| suffix) == Some(expected_owner.as_str()),
+            "COMPANY_OWNER_BINDING_MISMATCH"
         );
-        self.approval_tiers = tiers;
-        self.policy_version = self
-            .policy_version
-            .checked_add(1)
-            .expect("VERSION_OVERFLOW");
-        emit(
-            "approval_policy_changed",
-            json!({"policy_version": U64(self.policy_version), "tiers": self.approval_tiers, "amount_basis": "principal_plus_max_fee"}),
+        require!(
+            !self.companies.contains_key(&company_id),
+            "COMPANY_ALREADY_REGISTERED"
         );
+        let attached = env::attached_deposit().as_yoctonear();
+        require!(
+            attached >= storage_cost(REGISTRATION_BYTES),
+            "INSUFFICIENT_REGISTRATION_STORAGE"
+        );
+        let before = env::storage_usage();
+        let mut company = CompanyTreasury::new(
+            company_id.clone(),
+            env::predecessor_account_id(),
+            self.token_contract.clone(),
+            per_payment_limit,
+            daily_limit,
+        );
+        company.storage_credit = attached;
+        company.flush();
+        self.companies.insert(company_id.clone(), company);
+        self.flush();
+        let used = storage_cost(
+            env::storage_usage()
+                .checked_sub(before)
+                .expect("STORAGE_ACCOUNTING"),
+        );
+        require!(
+            used <= attached.saturating_sub(storage_cost(EMERGENCY_BYTES)),
+            "INSUFFICIENT_REGISTRATION_STORAGE"
+        );
+        let company = self
+            .companies
+            .get_mut(&company_id)
+            .expect("COMPANY_NOT_FOUND");
+        company.storage_used = used;
+        company.get_config()
+    }
+
+    pub fn get_company(&self, company_id: String) -> Option<ConfigView> {
+        self.companies
+            .get(&company_id)
+            .map(CompanyTreasury::get_config)
+    }
+
+    pub fn get_storage(&self, company_id: String) -> StorageView {
+        let company = self.company(&company_id);
+        StorageView {
+            storage_credit: U128(company.storage_credit),
+            storage_used: U128(company.storage_used),
+            storage_available: U128(company.storage_credit.saturating_sub(company.storage_used)),
+        }
     }
 
     #[payable]
-    pub fn set_role(&mut self, account_id: AccountId, role: String, enabled: bool) {
-        self.assert_owner();
-        require!(
-            account_id != env::current_account_id(),
-            "INVALID_ROLE_ACCOUNT"
-        );
-        let set = match role.as_str() {
-            "approver" => &mut self.approvers,
-            "executor" => &mut self.executors,
-            _ => env::panic_str("INVALID_ROLE"),
-        };
-        if role == "approver" && enabled && !set.contains(&account_id) {
-            require!(set.len() < MAX_APPROVERS, "APPROVER_LIMIT");
-        }
-        let changed = if enabled {
-            set.insert(account_id.clone())
-        } else {
-            set.remove(&account_id)
-        };
-        if role == "approver" && changed {
-            self.policy_version = self
-                .policy_version
-                .checked_add(1)
-                .expect("VERSION_OVERFLOW");
-        }
-        emit(
-            "role_changed",
-            json!({"account_id": account_id, "role": role, "enabled": enabled, "policy_version": U64(self.policy_version)}),
-        );
+    pub fn add_storage(&mut self, company_id: String) -> StorageView {
+        let amount = env::attached_deposit().as_yoctonear();
+        require!(amount > 0, "STORAGE_DEPOSIT_REQUIRED");
+        let company = self
+            .companies
+            .get_mut(&company_id)
+            .expect("COMPANY_NOT_FOUND");
+        company.storage_credit = checked_add(company.storage_credit, amount);
+        self.get_storage(company_id)
     }
 
-    #[payable]
-    pub fn set_settlement_reporter(&mut self, account_id: Option<AccountId>) {
-        self.assert_owner();
-        self.settlement_reporter = account_id.clone();
-        emit(
-            "settlement_reporter_changed",
-            json!({"account_id": account_id}),
-        );
+    pub fn get_deposit(&self, company_id: String, deposit_id: String) -> Option<DepositCredit> {
+        self.deposits
+            .get(&deposit_id)
+            .filter(|credit| credit.company_id == company_id)
+            .cloned()
     }
 
-    #[payable]
-    pub fn transfer_ownership(&mut self, new_owner_id: AccountId) {
-        self.assert_owner();
-        require!(self.paused, "OWNER_TRANSFER_REQUIRES_PAUSE");
-        require!(self.in_flight == 0, "OWNER_TRANSFER_SOURCE_PENDING");
-        require!(
-            self.unsettled_payments == 0,
-            "OWNER_TRANSFER_SETTLEMENT_PENDING"
-        );
-        require!(
-            self.retained_assets
-                .values()
-                .all(|asset| asset.in_flight.0 == 0),
-            "OWNER_TRANSFER_RETAINED_PENDING"
-        );
-        require!(
-            new_owner_id != env::current_account_id(),
-            "OWNER_MUST_BE_RECOVERABLE"
-        );
-        let available = self
-            .approvers
-            .iter()
-            .filter(|account| *account != &new_owner_id)
-            .count()
-            + 1;
-        require!(
-            self.approval_tiers
-                .iter()
-                .all(|tier| tier.required_approvals as usize <= available),
-            "OWNER_TRANSFER_QUORUM_UNREACHABLE"
-        );
-        self.owner_id = new_owner_id.clone();
-        self.policy_version = self
-            .policy_version
-            .checked_add(1)
-            .expect("VERSION_OVERFLOW");
-        emit("owner_changed", json!({"owner_id": new_owner_id}));
-    }
-
-    #[payable]
-    pub fn set_backup_asset(&mut self, network: String, asset_id: Option<String>) {
-        self.assert_owner();
-        require!(
-            matches!(
-                network.as_str(),
-                "near"
-                    | "base"
-                    | "arb"
-                    | "arbitrum"
-                    | "pol"
-                    | "polygon"
-                    | "sol"
-                    | "solana"
-                    | "eth"
-                    | "ethereum"
-            ),
-            "BACKUP_NETWORK_NOT_ALLOWED"
-        );
-        if let Some(asset) = &asset_id {
-            require!(!asset.is_empty() && asset.len() <= 256, "INVALID_ASSET");
-            self.backup_assets.insert(network.clone(), asset.clone());
-        } else {
-            self.backup_assets.remove(&network);
-        }
-        self.policy_version = self
-            .policy_version
-            .checked_add(1)
-            .expect("VERSION_OVERFLOW");
-        emit(
-            "backup_asset_changed",
-            json!({"network": network, "asset_id": asset_id}),
-        );
-    }
-
-    #[payable]
-    pub fn set_recipient(
-        &mut self,
-        recipient_id: String,
-        primary: Destination,
-        backup: Option<Destination>,
-        backup_consent: bool,
-        active: bool,
-    ) -> Recipient {
-        self.assert_owner();
-        validate_id(&recipient_id);
-        validate_destination(&primary);
-        if let Some(destination) = &backup {
-            validate_destination(destination);
-            require!(destination != &primary, "DUPLICATE_BACKUP");
-            require!(
-                self.backup_assets.get(&destination.network) == Some(&destination.asset_id),
-                "BACKUP_USDC_NOT_CONFIGURED"
-            );
-        }
-        require!(
-            !backup_consent || backup.is_some(),
-            "BACKUP_DESTINATION_REQUIRED"
-        );
-        let version = self
-            .recipients
-            .get(&recipient_id)
-            .map_or(1, |r| r.version.0.checked_add(1).expect("VERSION_OVERFLOW"));
-        let recipient = Recipient {
-            id: recipient_id.clone(),
-            primary,
-            backup,
-            backup_consent,
-            active,
-            version: U64(version),
-        };
-        self.recipients
-            .insert(recipient_id.clone(), recipient.clone());
-        emit(
-            "recipient_changed",
-            json!({"recipient_id": recipient_id, "version": U64(version)}),
-        );
-        recipient
-    }
-
-    pub fn propose_payment(
-        &mut self,
-        payment_id: String,
-        recipient_id: String,
-        amount: U128,
-        max_fee: U128,
-        expires_at_ms: U64,
-        reference: String,
-        not_before_ms: Option<U64>,
-    ) -> Payment {
-        self.assert_executor();
-        require!(!self.paused, "PAUSED");
-        validate_id(&payment_id);
-        validate_id(&reference);
-        require!(!self.payments.contains_key(&payment_id), "PAYMENT_EXISTS");
-        require!(
-            !self.obligations.contains_key(&reference),
-            "OBLIGATION_EXISTS"
-        );
-        require!(
-            amount.0 > 0 && amount.0 <= self.per_payment_limit,
-            "PAYMENT_LIMIT"
-        );
-        let total = add(amount.0, max_fee.0);
-        require!(total <= self.daily_limit, "DAILY_LIMIT");
-        require!(expires_at_ms.0 > now_ms(), "PAYMENT_EXPIRED");
-        let not_before_ms = not_before_ms.unwrap_or(U64(0));
-        require!(not_before_ms.0 < expires_at_ms.0, "INVALID_SCHEDULE");
-        let recipient = self
-            .recipients
-            .get(&recipient_id)
-            .expect("RECIPIENT_NOT_FOUND");
-        require!(recipient.active, "RECIPIENT_INACTIVE");
-        let payment = Payment {
-            id: payment_id.clone(),
-            recipient_id,
-            recipient_version: recipient.version,
-            amount,
-            max_fee,
-            incurred_cost: U128(0),
-            reservation: U128(0),
-            expires_at_ms,
-            not_before_ms,
-            reference: reference.clone(),
-            proposer: env::predecessor_account_id(),
-            approver: None,
-            approvals: BTreeSet::new(),
-            policy_version: U64(self.policy_version),
-            status: PaymentStatus::Proposed,
-            attempts: Vec::new(),
-        };
-        self.obligations.insert(reference, payment_id.clone());
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "payment_proposed",
-            json!({"payment_id": payment_id, "amount": amount, "max_fee": max_fee}),
-        );
-        payment
-    }
-
-    #[payable]
-    pub fn approve_payment(
-        &mut self,
-        payment_id: String,
-        expected_policy_version: U64,
-        expected_terms_hash: String,
-    ) -> Payment {
-        self.assert_approver();
-        require!(!self.paused, "PAUSED");
-        let mut payment = self.load_payment(&payment_id);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::Proposed
-                    | PaymentStatus::AwaitingApprovals
-                    | PaymentStatus::Held
-                    | PaymentStatus::Approved
-                    | PaymentStatus::Retryable
-            ),
-            "PAYMENT_NOT_APPROVABLE"
-        );
-        self.assert_current(&payment);
-        require!(
-            expected_policy_version.0 == self.policy_version,
-            "POLICY_CHANGED"
-        );
-        require!(
-            expected_terms_hash == self.payment_terms_hash(&payment),
-            "APPROVAL_TERMS_CHANGED"
-        );
-        require!(
-            payment.incurred_cost.0 <= payment.max_fee.0,
-            "FEE_LIMIT_EXHAUSTED"
-        );
-        require!(payment.amount.0 <= self.per_payment_limit, "PAYMENT_LIMIT");
-        require!(
-            add(payment.amount.0, payment.max_fee.0) <= self.daily_limit,
-            "DAILY_LIMIT"
-        );
-        if payment.policy_version.0 != self.policy_version {
-            payment.approvals.clear();
-            for attempt in &mut payment.attempts {
-                if attempt.status == AttemptStatus::Prepared {
-                    attempt.approvals.clear();
-                    attempt.authorized = false;
-                    attempt.approval_policy_version = U64(self.policy_version);
-                }
-            }
-        }
-        payment.policy_version = U64(self.policy_version);
-        let caller = env::predecessor_account_id();
-        payment.approvals.insert(caller.clone());
-        payment.approver = Some(caller.clone());
-        let required = self.required_approvals(&payment);
-        let collected = self.payment_approvals(&payment).len();
-        if collected >= required as usize {
-            let reservation = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
-            let new_reserved = add(self.reserved - payment.reservation.0, reservation);
-            require!(self.balance >= new_reserved, "INSUFFICIENT_CONFIRMED_FUNDS");
-            self.reserved = new_reserved;
-            payment.reservation = U128(reservation);
-            payment.status = PaymentStatus::Approved;
-        } else {
-            payment.status = PaymentStatus::AwaitingApprovals;
-        }
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "payment_approved",
-            json!({"payment_id": payment_id, "reservation": payment.reservation, "approver": caller, "required_approvals": required, "collected_approvals": collected, "policy_version": expected_policy_version, "terms_hash": expected_terms_hash}),
-        );
-        payment
-    }
-
-    pub fn create_attempt(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        use_backup: bool,
-        route: Route,
-    ) -> Payment {
-        self.assert_executor();
-        require!(!self.paused, "PAUSED");
-        validate_id(&attempt_id);
-        let mut payment = self.load_payment(&payment_id);
-        self.assert_current(&payment);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::Proposed
-                    | PaymentStatus::AwaitingApprovals
-                    | PaymentStatus::Approved
-                    | PaymentStatus::Retryable
-            ),
-            "PAYMENT_NOT_READY"
-        );
-        require!(
-            payment.policy_version.0 == self.policy_version,
-            "POLICY_CHANGED"
-        );
-        require!(payment.attempts.len() < MAX_ATTEMPTS, "ATTEMPT_LIMIT");
-        require!(
-            !payment.attempts.iter().any(|a| a.id == attempt_id),
-            "ATTEMPT_EXISTS"
-        );
-        if let Some(last) = payment.attempts.last() {
-            require!(
-                matches!(
-                    last.status,
-                    AttemptStatus::Refunded
-                        | AttemptStatus::TransferFailed
-                        | AttemptStatus::Discarded
-                ),
-                "PRIOR_ATTEMPT_NOT_CLOSED"
-            );
-        }
-        require!(
-            payment.incurred_cost.0 <= payment.max_fee.0,
-            "FEE_LIMIT_EXHAUSTED"
-        );
-        require!(
-            payment.amount.0 <= self.per_payment_limit
-                && add(payment.amount.0, payment.max_fee.0) <= self.daily_limit,
-            "PAYMENT_LIMIT"
-        );
-        let reservation = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
-        let new_reserved = add(self.reserved - payment.reservation.0, reservation);
-        require!(self.balance >= new_reserved, "INSUFFICIENT_CONFIRMED_FUNDS");
-        let recipient = self
-            .recipients
-            .get(&payment.recipient_id)
-            .expect("RECIPIENT_NOT_FOUND");
-        let destination = if use_backup {
-            require!(recipient.backup_consent, "BACKUP_NOT_AUTHORIZED");
-            let backup = recipient.backup.clone().expect("BACKUP_NOT_CONFIGURED");
-            require!(
-                self.backup_assets.get(&backup.network) == Some(&backup.asset_id),
-                "BACKUP_USDC_NOT_CONFIGURED"
-            );
-            backup
-        } else {
-            recipient.primary.clone()
-        };
-        require!(
-            route.input_amount.0 > 0
-                && route.input_amount.0
-                    <= add(payment.amount.0, payment.max_fee.0)
-                        .checked_sub(payment.incurred_cost.0)
-                        .expect("FEE_LIMIT_EXHAUSTED"),
-            "COST_LIMIT"
-        );
-        require!(route.output_amount.0 > 0, "OUTPUT_AMOUNT_REQUIRED");
-        if use_backup || self.backup_assets.get(&destination.network) == Some(&destination.asset_id)
-        {
-            require!(
-                route.output_amount == payment.amount,
-                "USDC_ENTITLEMENT_MISMATCH"
-            );
-        }
-        require!(
-            route.deadline_ms.0 > now_ms() && route.deadline_ms.0 <= payment.expires_at_ms.0,
-            "INVALID_QUOTE_DEADLINE"
-        );
-        if payment.not_before_ms.0 > now_ms() {
-            require!(
-                route.deadline_ms.0 >= payment.not_before_ms.0.saturating_add(60_000),
-                "SCHEDULE_OUTLIVES_ROUTE"
-            );
-        }
-        require!(
-            route.source_receiver != env::current_account_id(),
-            "INVALID_SOURCE_RECEIVER"
-        );
-        if route.kind == RouteKind::Direct {
-            require!(destination.network == "near", "DIRECT_REQUIRES_NEAR");
-            require!(
-                destination.asset_id == format!("nep141:{}", self.token_contract),
-                "DIRECT_REQUIRES_TREASURY_TOKEN"
-            );
-            require!(
-                destination.address == route.source_receiver.as_str(),
-                "RECIPIENT_MISMATCH"
-            );
-            require!(
-                route.input_amount == payment.amount,
-                "DIRECT_AMOUNT_MISMATCH"
-            );
-            require!(
-                route.output_amount == payment.amount,
-                "DIRECT_AMOUNT_MISMATCH"
-            );
-        } else {
-            require!(
-                !route.quote_id.is_empty() && route.quote_id.len() <= 128,
-                "QUOTE_ID_REQUIRED"
-            );
-            require!(
-                route.quote_hash.len() == 64
-                    && route.quote_hash.bytes().all(|b| b.is_ascii_hexdigit()),
-                "QUOTE_HASH_REQUIRED"
-            );
-        }
-        self.reserved = new_reserved;
-        payment.reservation = U128(reservation);
-        payment.attempts.push(Attempt {
-            id: attempt_id.clone(),
-            use_backup,
-            destination,
-            route,
-            authorized: false,
-            approvals: BTreeSet::new(),
-            approval_policy_version: U64(self.policy_version),
-            status: AttemptStatus::Prepared,
-            sent_day: U64(0),
-            refund_amount: U128(0),
-            receipt: None,
-            actual_output: U128(0),
-            credited_amount: U128(0),
-        });
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "attempt_created",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "use_backup": use_backup}),
-        );
-        payment
-    }
-
-    #[payable]
-    pub fn authorize_attempt(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        expected_policy_version: U64,
-        expected_terms_hash: String,
-    ) -> Payment {
-        self.assert_approver();
-        require!(!self.paused, "PAUSED");
-        let mut payment = self.load_payment(&payment_id);
-        self.assert_current(&payment);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::AwaitingApprovals
-                    | PaymentStatus::Approved
-                    | PaymentStatus::Retryable
-            ),
-            "PAYMENT_NOT_READY"
-        );
-        require!(
-            expected_policy_version.0 == self.policy_version
-                && payment.policy_version.0 == self.policy_version,
-            "POLICY_CHANGED"
-        );
-        let status = self.approval_status(&payment, payment.attempts.last());
-        require!(
-            status.attempt_id.as_deref() == Some(attempt_id.as_str())
-                && status.attempt_terms_hash.as_deref() == Some(expected_terms_hash.as_str()),
-            "APPROVAL_TERMS_CHANGED"
-        );
-        let caller = env::predecessor_account_id();
-        require!(
-            self.payment_approvals(&payment).contains(&caller),
-            "PAYMENT_APPROVAL_REQUIRED"
-        );
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            attempt.status == AttemptStatus::Prepared,
-            "ATTEMPT_NOT_PREPARED"
-        );
-        if attempt.use_backup {
-            require!(
-                self.backup_assets.get(&attempt.destination.network)
-                    == Some(&attempt.destination.asset_id),
-                "BACKUP_USDC_NOT_CONFIGURED"
-            );
-        }
-        require!(attempt.route.deadline_ms.0 > now_ms(), "QUOTE_EXPIRED");
-        if attempt.approval_policy_version.0 != self.policy_version {
-            attempt.approvals.clear();
-        }
-        attempt.approval_policy_version = U64(self.policy_version);
-        attempt.approvals.insert(caller.clone());
-        let status = self.approval_status(&payment, payment.attempts.last());
-        payment
-            .attempts
-            .last_mut()
-            .expect("ATTEMPT_NOT_FOUND")
-            .authorized = status.attempt_ready;
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "attempt_authorized",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "approver": caller, "required_approvals": status.required_approvals, "collected_approvals": status.attempt_collected, "policy_version": expected_policy_version, "terms_hash": expected_terms_hash}),
-        );
-        payment
-    }
-
-    pub fn discard_attempt(&mut self, payment_id: String, attempt_id: String) -> Payment {
-        self.assert_executor();
-        let mut payment = self.load_payment(&payment_id);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::Proposed
-                    | PaymentStatus::AwaitingApprovals
-                    | PaymentStatus::Approved
-                    | PaymentStatus::Retryable
-            ),
-            "PAYMENT_NOT_READY"
-        );
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            attempt.status == AttemptStatus::Prepared,
-            "SOURCE_MAY_STILL_DELIVER"
-        );
-        attempt.status = AttemptStatus::Discarded;
-        attempt.authorized = false;
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "attempt_discarded",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id}),
-        );
-        payment
-    }
-
-    pub fn execute_payment(&mut self, payment_id: String, attempt_id: String) -> Promise {
-        self.assert_executor();
-        require!(!self.paused, "PAUSED");
-        require!(env::prepaid_gas() >= Gas::from_tgas(50), "INSUFFICIENT_GAS");
-        let mut payment = self.load_payment(&payment_id);
-        self.assert_current(&payment);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::Approved | PaymentStatus::Retryable
-            ),
-            "PAYMENT_NOT_READY"
-        );
-        require!(
-            payment.policy_version.0 == self.policy_version,
-            "POLICY_CHANGED"
-        );
-        require!(now_ms() >= payment.not_before_ms.0, "PAYMENT_NOT_DUE");
-        require!(
-            self.approval_status(&payment, payment.attempts.last())
-                .can_execute,
-            "APPROVAL_QUORUM_NOT_MET"
-        );
-        let amount_limit = payment.reservation.0;
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            attempt.authorized && attempt.status == AttemptStatus::Prepared,
-            "ATTEMPT_NOT_AUTHORIZED"
-        );
-        if attempt.use_backup {
-            require!(
-                self.backup_assets.get(&attempt.destination.network)
-                    == Some(&attempt.destination.asset_id),
-                "BACKUP_USDC_NOT_CONFIGURED"
-            );
-        }
-        require!(attempt.route.deadline_ms.0 > now_ms(), "QUOTE_EXPIRED");
-        let amount = attempt.route.input_amount.0;
-        require!(
-            amount > 0 && amount <= amount_limit && amount <= self.balance,
-            "INSUFFICIENT_RESERVED_FUNDS"
-        );
-        let day = now_ms() / DAY_MS;
-        let spent = *self.spent_by_day.get(&day).unwrap_or(&0);
-        require!(add(spent, amount) <= self.daily_limit, "DAILY_LIMIT");
-        attempt.status = AttemptStatus::Sending;
-        attempt.sent_day = U64(day);
-        let receiver = attempt.route.source_receiver.clone();
-        self.spent_by_day.insert(day, add(spent, amount));
-        self.reserved -= payment.reservation.0;
-        payment.reservation = U128(0);
-        self.balance -= amount;
-        self.in_flight = add(self.in_flight, amount);
-        self.unsettled_payments = self
-            .unsettled_payments
-            .checked_add(1)
-            .expect("ACTIVE_PAYMENT_OVERFLOW");
-        self.bump_epoch();
-        payment.status = PaymentStatus::InFlight;
-        self.payments.insert(payment_id.clone(), payment);
-        emit(
-            "source_transfer_started",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "amount": U128(amount), "receiver_id": receiver}),
-        );
-        ext_ft::ext(self.token_contract.clone())
-            .with_attached_deposit(NearToken::from_yoctonear(1))
-            .with_static_gas(GAS_TRANSFER)
-            .ft_transfer(receiver, U128(amount), Some(payment_id.clone()))
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_CALLBACK)
-                    .on_transfer_result(payment_id, attempt_id),
-            )
-    }
-
-    #[private]
-    pub fn on_transfer_result(&mut self, payment_id: String, attempt_id: String) -> bool {
-        let success = !matches!(
-            env::promise_result_checked(0, 64),
-            Err(PromiseError::Failed)
-        );
-        self.resolve_source_transfer(payment_id, attempt_id, success)
-    }
-
-    #[payable]
-    pub fn recover_source_transfer(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        succeeded: bool,
-        receipt: String,
-    ) -> bool {
-        self.assert_owner();
-        validate_receipt(&receipt);
-        let mut payment = self.load_payment(&payment_id);
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            attempt.status == AttemptStatus::Sending,
-            "SOURCE_ALREADY_RESOLVED"
-        );
-        attempt.receipt = Some(receipt);
-        self.payments.insert(payment_id.clone(), payment);
-        emit(
-            "source_recovery_attested",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "succeeded": succeeded, "owner": env::predecessor_account_id()}),
-        );
-        self.resolve_source_transfer(payment_id, attempt_id, succeeded)
-    }
-
-    fn resolve_source_transfer(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        success: bool,
-    ) -> bool {
-        let Some(mut payment) = self.payments.get(&payment_id).cloned() else {
-            return false;
-        };
-        let Some(attempt) = payment.attempts.last_mut() else {
-            return false;
-        };
-        if attempt.id != attempt_id || attempt.status != AttemptStatus::Sending {
-            return false;
-        }
-        let amount = attempt.route.input_amount.0;
-        self.in_flight = self
-            .in_flight
-            .checked_sub(amount)
-            .expect("IN_FLIGHT_UNDERFLOW");
-        self.bump_epoch();
-        if success {
-            if attempt.route.kind == RouteKind::Direct {
-                attempt.status = AttemptStatus::Delivered;
-                attempt.actual_output = attempt.route.output_amount;
-                attempt.credited_amount = payment.amount;
-                payment.status = PaymentStatus::Paid;
-                self.finish_unsettled_payment();
-            } else {
-                attempt.status = AttemptStatus::SourceSent;
-            }
-        } else {
-            self.finish_unsettled_payment();
-            self.balance = add(self.balance, amount);
-            let spent = *self.spent_by_day.get(&attempt.sent_day.0).unwrap_or(&0);
-            self.spent_by_day.insert(
-                attempt.sent_day.0,
-                spent.checked_sub(amount).expect("SPEND_UNDERFLOW"),
-            );
-            attempt.status = AttemptStatus::TransferFailed;
-            let reserve = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
-            if self.balance >= add(self.reserved, reserve) {
-                self.reserved = add(self.reserved, reserve);
-                payment.reservation = U128(reserve);
-                payment.status = PaymentStatus::Retryable;
-            } else {
-                payment.status = PaymentStatus::Held;
-            }
-        }
-        let status = payment.status.clone();
-        self.payments.insert(payment_id.clone(), payment);
-        emit(
-            "source_transfer_result",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "success": success, "payment_status": status}),
-        );
-        success
-    }
-
-    pub fn report_settlement(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        outcome: SettlementOutcome,
-        receipt: String,
-        actual_output: Option<U128>,
-    ) -> Payment {
-        self.assert_reporter();
-        validate_receipt(&receipt);
-        let mut payment = self.load_payment(&payment_id);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::InFlight | PaymentStatus::RecoveryPending
-            ),
-            "PAYMENT_NOT_IN_FLIGHT"
-        );
-        let entitlement = payment.amount;
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            matches!(
-                attempt.status,
-                AttemptStatus::SourceSent | AttemptStatus::Uncertain | AttemptStatus::RefundPending
-            ),
-            "SOURCE_NOT_CONFIRMED"
-        );
-        attempt.receipt = Some(receipt);
-        match outcome {
-            SettlementOutcome::Delivered => {
-                let actual = actual_output.expect("ACTUAL_OUTPUT_REQUIRED");
-                require!(
-                    actual.0 >= attempt.route.output_amount.0,
-                    "DELIVERY_BELOW_EXPECTED"
-                );
-                attempt.status = AttemptStatus::Delivered;
-                attempt.actual_output = actual;
-                attempt.credited_amount = entitlement;
-                payment.status = PaymentStatus::Paid;
-                self.finish_unsettled_payment();
-            }
-            SettlementOutcome::Uncertain => {
-                if let Some(actual) = actual_output {
-                    require!(
-                        actual.0 >= attempt.actual_output.0,
-                        "OUTPUT_CANNOT_DECREASE"
-                    );
-                    attempt.actual_output = actual;
-                }
-                attempt.status = AttemptStatus::Uncertain;
-                payment.status = PaymentStatus::RecoveryPending;
-            }
-            SettlementOutcome::RefundPending => {
-                require!(
-                    attempt.actual_output.0 == 0 && actual_output.unwrap_or(U128(0)).0 == 0,
-                    "DELIVERY_ALREADY_OBSERVED"
-                );
-                attempt.status = AttemptStatus::RefundPending;
-                payment.status = PaymentStatus::RecoveryPending;
-            }
-        }
-        self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
-            "settlement_reported",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "outcome": outcome, "reporter": env::predecessor_account_id()}),
-        );
-        payment
-    }
-
-    pub fn confirm_refund(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        refund_amount: U128,
-        receipt: String,
-    ) -> Promise {
-        self.assert_reporter();
-        validate_receipt(&receipt);
-        require!(self.in_flight == 0, "SOURCE_CALLBACK_PENDING");
-        let mut payment = self.load_payment(&payment_id);
-        require!(
-            payment.status == PaymentStatus::RecoveryPending,
-            "NOT_RECOVERING"
-        );
-        let attempt = last_attempt_mut(&mut payment, &attempt_id);
-        require!(
-            attempt.status == AttemptStatus::RefundPending,
-            "REFUND_NOT_REPORTED"
-        );
-        require!(attempt.actual_output.0 == 0, "DELIVERY_ALREADY_OBSERVED");
-        require!(
-            refund_amount.0 <= attempt.route.input_amount.0,
-            "REFUND_EXCEEDS_INPUT"
-        );
-        attempt.status = AttemptStatus::RefundVerifying;
-        attempt.refund_amount = refund_amount;
-        attempt.receipt = Some(receipt);
-        self.payments.insert(payment_id.clone(), payment);
-        ext_ft::ext(self.token_contract.clone())
-            .with_static_gas(GAS_BALANCE)
-            .ft_balance_of(env::current_account_id())
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_CALLBACK)
-                    .on_refund_verified(payment_id, attempt_id, U64(self.balance_epoch)),
-            )
-    }
-
-    #[private]
-    pub fn on_refund_verified(
-        &mut self,
-        payment_id: String,
-        attempt_id: String,
-        epoch: U64,
-    ) -> bool {
-        let Some(mut payment) = self.payments.get(&payment_id).cloned() else {
-            return false;
-        };
-        let Some(attempt) = payment.attempts.last_mut() else {
-            return false;
-        };
-        if attempt.id != attempt_id || attempt.status != AttemptStatus::RefundVerifying {
-            return false;
-        }
-        let Some(actual) = read_balance() else {
-            attempt.status = AttemptStatus::RefundPending;
-            self.payments.insert(payment_id, payment);
-            return false;
-        };
-        if epoch.0 != self.balance_epoch || self.in_flight != 0 {
-            attempt.status = AttemptStatus::RefundPending;
-            self.payments.insert(payment_id, payment);
-            return false;
-        }
-        self.balance = actual;
-        self.confirmed_at_ms = now_ms();
-        let lost = attempt.route.input_amount.0 - attempt.refund_amount.0;
-        payment.incurred_cost = U128(add(payment.incurred_cost.0, lost));
-        attempt.status = AttemptStatus::Refunded;
-        self.finish_unsettled_payment();
-        if payment.incurred_cost.0 <= payment.max_fee.0 {
-            let needed = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
-            if self.balance >= add(self.reserved, needed) {
-                self.reserved = add(self.reserved, needed);
-                payment.reservation = U128(needed);
-                payment.status = PaymentStatus::Retryable;
-            } else {
-                payment.status = PaymentStatus::Held;
-            }
-        } else {
-            payment.status = PaymentStatus::Held;
-        }
-        self.payments.insert(payment_id.clone(), payment);
-        emit(
-            "refund_verified",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id, "actual_balance": U128(actual)}),
-        );
-        true
-    }
-
-    #[payable]
-    pub fn cancel_payment(&mut self, payment_id: String) {
-        self.assert_approver();
-        let mut payment = self.load_payment(&payment_id);
-        require!(
-            matches!(
-                payment.status,
-                PaymentStatus::Proposed
-                    | PaymentStatus::AwaitingApprovals
-                    | PaymentStatus::Approved
-                    | PaymentStatus::Retryable
-                    | PaymentStatus::Held
-            ),
-            "PAYMENT_MAY_STILL_DELIVER"
-        );
-        self.reserved -= payment.reservation.0;
-        payment.reservation = U128(0);
-        payment.status = PaymentStatus::Cancelled;
-        self.payments.insert(payment_id.clone(), payment);
-        emit("payment_cancelled", json!({"payment_id": payment_id}));
+    pub fn get_pool_liability(&self, token_contract: AccountId) -> U128 {
+        U128(*self.liabilities.get(&token_contract).unwrap_or(&0))
     }
 
     pub fn ft_on_transfer(
@@ -1187,329 +291,736 @@ impl Treasury {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        let token_contract = env::predecessor_account_id();
-        if token_contract != self.token_contract {
-            return self.retained_deposit(token_contract, sender_id, amount, msg);
-        }
-        require!(msg != retained::RETAIN_MESSAGE, "USDC_IS_PAYMENT_CASH");
         require!(msg.len() <= 1024, "DEPOSIT_MESSAGE_TOO_LONG");
-        self.bump_epoch();
-        emit(
-            "deposit_received",
-            json!({"sender_id": sender_id, "amount": amount}),
+        let message: DepositMessage =
+            near_sdk::serde_json::from_str(&msg).expect("SCOPED_DEPOSIT_MESSAGE_REQUIRED");
+        validate_company_id(&message.company_id);
+        validate_deposit_id(&message.deposit_id);
+        require!(amount.0 > 0, "DEPOSIT_AMOUNT_REQUIRED");
+        require!(
+            !self.deposits.contains_key(&message.deposit_id),
+            "DEPOSIT_ID_REUSED"
         );
-        if self.in_flight != 0 {
-            return PromiseOrValue::Value(U128(0));
-        }
-        PromiseOrValue::Promise(
-            ext_ft::ext(self.token_contract.clone())
-                .with_static_gas(GAS_BALANCE)
-                .ft_balance_of(env::current_account_id())
-                .then(
-                    ext_self::ext(env::current_account_id())
-                        .with_static_gas(GAS_CALLBACK)
-                        .on_deposit_sync(U64(self.balance_epoch)),
-                ),
-        )
-    }
-
-    pub fn refresh_balance(&mut self) -> Promise {
-        require!(self.in_flight == 0, "SOURCE_CALLBACK_PENDING");
-        ext_ft::ext(self.token_contract.clone())
-            .with_static_gas(GAS_BALANCE)
-            .ft_balance_of(env::current_account_id())
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_CALLBACK)
-                    .on_balance_sync(U64(self.balance_epoch)),
+        let token_contract = env::predecessor_account_id();
+        require!(
+            (message.kind == "funding" && token_contract == self.token_contract)
+                || (message.kind == "retained" && token_contract != self.token_contract),
+            "DEPOSIT_KIND_TOKEN_MISMATCH"
+        );
+        let credit = DepositCredit {
+            company_id: message.company_id.clone(),
+            deposit_id: message.deposit_id.clone(),
+            token_contract,
+            sender_id: sender_id.clone(),
+            amount,
+            kind: message.kind.clone(),
+            credited_at_ms: U64(env::block_timestamp_ms()),
+        };
+        self.company(&message.company_id);
+        self.deposits
+            .insert(message.deposit_id.clone(), credit.clone());
+        let accepted = self.with_company(&message.company_id, |company| {
+            company.ft_on_transfer(
+                sender_id,
+                amount,
+                if message.kind == "retained" {
+                    "razor:retain".into()
+                } else {
+                    String::new()
+                },
             )
+        });
+        env::log_str(&format!(
+            "EVENT_JSON:{}",
+            json!({"standard":"razor","version":"2.0.0","event":"deposit_credited","data":[credit]})
+        ));
+        accepted
+    }
+
+    pub fn confirm_refund(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        refund_amount: U128,
+        receipt: String,
+    ) -> Promise {
+        self.assert_refund_reporter();
+        if let Some(claim) = self.refund_claims.get(&receipt) {
+            require!(
+                !claim.credited
+                    && claim.company_id == company_id
+                    && claim.payment_id == payment_id
+                    && claim.attempt_id == attempt_id
+                    && claim.amount == refund_amount,
+                "REFUND_RECEIPT_REUSED"
+            );
+        }
+        self.refund_claims.insert(
+            receipt.clone(),
+            RefundClaim {
+                company_id: company_id.clone(),
+                payment_id: payment_id.clone(),
+                attempt_id: attempt_id.clone(),
+                amount: refund_amount,
+                credited: false,
+            },
+        );
+        self.with_company(&company_id, |company| {
+            company.confirm_refund(payment_id, attempt_id, refund_amount, receipt)
+        })
     }
 
     #[private]
-    pub fn on_balance_sync(&mut self, epoch: U64) -> bool {
-        if epoch.0 != self.balance_epoch || self.in_flight != 0 {
-            return false;
+    pub fn on_refund_verified(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool {
+        let accounted = U128(*self.liabilities.get(&self.token_contract).unwrap_or(&0));
+        let pool_current = pool_epoch.0 == self.pool_epoch;
+        let receipt = self
+            .company(&company_id)
+            .get_attempt(payment_id.clone(), attempt_id.clone())
+            .and_then(|attempt| attempt.receipt);
+        let success = self.with_company_emergency(&company_id, |company| {
+            company.on_refund_verified(payment_id, attempt_id, epoch, accounted, pool_current)
+        });
+        if success {
+            let key = receipt.expect("REFUND_RECEIPT_REQUIRED");
+            self.refund_claims
+                .get_mut(&key)
+                .expect("REFUND_CLAIM_REQUIRED")
+                .credited = true;
         }
-        if let Some(actual) = read_balance() {
-            self.balance = actual;
-            self.confirmed_at_ms = now_ms();
-            true
-        } else {
-            false
-        }
-    }
-
-    #[private]
-    pub fn on_deposit_sync(&mut self, epoch: U64) -> U128 {
-        self.on_balance_sync(epoch);
-        U128(0)
+        success
     }
 
     #[payable]
-    pub fn withdraw_available(&mut self, receiver_id: AccountId, amount: U128) -> Promise {
-        self.assert_owner();
-        require!(
-            amount.0 > 0 && amount.0 <= self.balance.saturating_sub(self.reserved),
-            "INSUFFICIENT_AVAILABLE_FUNDS"
-        );
-        require!(receiver_id != env::current_account_id(), "INVALID_RECEIVER");
-        self.balance -= amount.0;
-        self.in_flight = add(self.in_flight, amount.0);
-        self.bump_epoch();
-        ext_ft::ext(self.token_contract.clone())
-            .with_attached_deposit(NearToken::from_yoctonear(1))
-            .with_static_gas(GAS_TRANSFER)
-            .ft_transfer(receiver_id, amount, Some("Razor owner withdrawal".into()))
-            .then(
-                ext_self::ext(env::current_account_id())
-                    .with_static_gas(GAS_CALLBACK)
-                    .on_withdraw_result(amount),
-            )
+    pub fn recover_source_transfer(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        succeeded: bool,
+        receipt: String,
+    ) -> bool {
+        self.assert_recovery_authority(&company_id, succeeded);
+        self.with_company(&company_id, |company| {
+            company.recover_source_transfer(payment_id, attempt_id, succeeded, receipt)
+        })
+    }
+
+    #[payable]
+    pub fn recover_retained_withdrawal(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        withdrawal_id: U64,
+        succeeded: bool,
+        receipt: String,
+    ) -> Promise {
+        self.assert_recovery_authority(&company_id, succeeded);
+        self.with_company(&company_id, |company| {
+            company.recover_retained_withdrawal(token_contract, withdrawal_id, succeeded, receipt)
+        })
     }
 
     #[private]
-    pub fn on_withdraw_result(&mut self, amount: U128) -> bool {
-        let success = !matches!(
-            env::promise_result_checked(0, 64),
-            Err(PromiseError::Failed)
-        );
-        self.in_flight = self
-            .in_flight
-            .checked_sub(amount.0)
-            .expect("IN_FLIGHT_UNDERFLOW");
-        self.bump_epoch();
-        if !success {
-            self.balance = add(self.balance, amount.0);
+    pub fn on_withdraw_result(
+        &mut self,
+        company_id: String,
+        withdrawal_id: U64,
+        amount: U128,
+    ) -> bool {
+        self.with_company_emergency(&company_id, |company| {
+            company.on_withdraw_result(withdrawal_id, amount)
+        })
+    }
+    pub fn get_config(&self, company_id: String) -> ConfigView {
+        self.company(&company_id).get_config()
+    }
+
+    pub fn get_balance(&self, company_id: String) -> BalanceView {
+        self.company(&company_id).get_balance()
+    }
+
+    pub fn get_payment(&self, company_id: String, payment_id: String) -> Option<Payment> {
+        self.company(&company_id).get_payment(payment_id)
+    }
+
+    pub fn get_recipient(&self, company_id: String, recipient_id: String) -> Option<Recipient> {
+        self.company(&company_id).get_recipient(recipient_id)
+    }
+
+    pub fn get_attempt(
+        &self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+    ) -> Option<Attempt> {
+        self.company(&company_id)
+            .get_attempt(payment_id, attempt_id)
+    }
+
+    pub fn get_approval_status(
+        &self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: Option<String>,
+    ) -> ApprovalStatus {
+        self.company(&company_id)
+            .get_approval_status(payment_id, attempt_id)
+    }
+
+    pub fn get_obligation(&self, company_id: String, reference: String) -> Option<String> {
+        self.company(&company_id).get_obligation(reference)
+    }
+
+    pub fn get_backup_asset(&self, company_id: String, network: String) -> Option<String> {
+        self.company(&company_id).get_backup_asset(network)
+    }
+
+    pub fn list_payments(
+        &self,
+        company_id: String,
+        from_index: Option<u32>,
+        limit: Option<u32>,
+    ) -> Vec<Payment> {
+        self.company(&company_id).list_payments(from_index, limit)
+    }
+
+    pub fn get_daily_spend(&self, company_id: String, day: U64) -> U128 {
+        self.company(&company_id).get_daily_spend(day)
+    }
+
+    #[payable]
+    pub fn set_paused(&mut self, company_id: String, paused: bool) {
+        self.with_company(&company_id, |company| company.set_paused(paused))
+    }
+
+    #[payable]
+    pub fn set_policy(&mut self, company_id: String, per_payment_limit: U128, daily_limit: U128) {
+        self.with_company(&company_id, |company| {
+            company.set_policy(per_payment_limit, daily_limit)
+        })
+    }
+
+    #[payable]
+    pub fn set_approval_policy(
+        &mut self,
+        company_id: String,
+        tiers: Vec<ApprovalTier>,
+        expected_policy_version: U64,
+    ) {
+        self.with_company(&company_id, |company| {
+            company.set_approval_policy(tiers, expected_policy_version)
+        })
+    }
+
+    #[payable]
+    pub fn set_role(
+        &mut self,
+        company_id: String,
+        account_id: AccountId,
+        role: String,
+        enabled: bool,
+    ) {
+        self.with_company(&company_id, |company| {
+            company.set_role(account_id, role, enabled)
+        })
+    }
+
+    #[payable]
+    pub fn set_settlement_reporter(&mut self, company_id: String, account_id: Option<AccountId>) {
+        self.with_company(&company_id, |company| {
+            company.set_settlement_reporter(account_id)
+        })
+    }
+
+    #[payable]
+    pub fn transfer_ownership(&mut self, company_id: String, new_owner_id: AccountId) {
+        self.with_company(&company_id, |company| {
+            company.transfer_ownership(new_owner_id)
+        })
+    }
+
+    #[payable]
+    pub fn set_backup_asset(
+        &mut self,
+        company_id: String,
+        network: String,
+        asset_id: Option<String>,
+    ) {
+        self.with_company(&company_id, |company| {
+            company.set_backup_asset(network, asset_id)
+        })
+    }
+
+    #[payable]
+    pub fn set_recipient(
+        &mut self,
+        company_id: String,
+        recipient_id: String,
+        primary: Destination,
+        backup: Option<Destination>,
+        backup_consent: bool,
+        active: bool,
+    ) -> Recipient {
+        self.with_company(&company_id, |company| {
+            company.set_recipient(recipient_id, primary, backup, backup_consent, active)
+        })
+    }
+
+    pub fn propose_payment(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        recipient_id: String,
+        amount: U128,
+        max_fee: U128,
+        expires_at_ms: U64,
+        reference: String,
+        not_before_ms: Option<U64>,
+    ) -> Payment {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.propose_payment(
+                payment_id,
+                recipient_id,
+                amount,
+                max_fee,
+                expires_at_ms,
+                reference,
+                not_before_ms,
+            )
+        })
+    }
+
+    #[payable]
+    pub fn approve_payment(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        expected_policy_version: U64,
+        expected_terms_hash: String,
+    ) -> Payment {
+        self.with_company(&company_id, |company| {
+            company.approve_payment(payment_id, expected_policy_version, expected_terms_hash)
+        })
+    }
+
+    pub fn create_attempt(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        use_backup: bool,
+        route: Route,
+    ) -> Payment {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.create_attempt(payment_id, attempt_id, use_backup, route)
+        })
+    }
+
+    #[payable]
+    pub fn authorize_attempt(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        expected_policy_version: U64,
+        expected_terms_hash: String,
+    ) -> Payment {
+        self.with_company(&company_id, |company| {
+            company.authorize_attempt(
+                payment_id,
+                attempt_id,
+                expected_policy_version,
+                expected_terms_hash,
+            )
+        })
+    }
+
+    pub fn discard_attempt(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+    ) -> Payment {
+        self.with_company(&company_id, |company| {
+            company.discard_attempt(payment_id, attempt_id)
+        })
+    }
+
+    pub fn execute_payment(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+    ) -> Promise {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.execute_payment(payment_id, attempt_id)
+        })
+    }
+
+    #[private]
+    pub fn on_transfer_result(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+    ) -> bool {
+        self.with_company_emergency(&company_id, |company| {
+            company.on_transfer_result(payment_id, attempt_id)
+        })
+    }
+
+    pub fn report_settlement(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        outcome: SettlementOutcome,
+        receipt: String,
+        actual_output: Option<U128>,
+    ) -> Payment {
+        self.with_company(&company_id, |company| {
+            company.report_settlement(payment_id, attempt_id, outcome, receipt, actual_output)
+        })
+    }
+
+    #[payable]
+    pub fn cancel_payment(&mut self, company_id: String, payment_id: String) {
+        self.with_company(&company_id, |company| company.cancel_payment(payment_id))
+    }
+
+    pub fn refresh_balance(&mut self, company_id: String) -> Promise {
+        self.with_company(&company_id, |company| company.refresh_balance())
+    }
+
+    #[private]
+    pub fn on_balance_sync(&mut self, company_id: String, epoch: U64) -> bool {
+        if !self.pool_covers_liability(&self.token_contract) {
+            return false;
         }
-        emit(
-            "withdrawal_result",
-            json!({"amount": amount, "success": success}),
-        );
-        success
+        self.with_company_emergency(&company_id, |company| company.on_balance_sync(epoch))
+    }
+
+    #[private]
+    pub fn on_deposit_sync(&mut self, company_id: String, epoch: U64) -> U128 {
+        if !self.pool_covers_liability(&self.token_contract) {
+            return U128(0);
+        }
+        self.with_company_emergency(&company_id, |company| company.on_deposit_sync(epoch))
+    }
+
+    #[payable]
+    pub fn withdraw_available(
+        &mut self,
+        company_id: String,
+        receiver_id: AccountId,
+        amount: U128,
+    ) -> Promise {
+        self.with_company(&company_id, |company| {
+            company.withdraw_available(receiver_id, amount)
+        })
+    }
+
+    pub fn get_retained_assets(&self, company_id: String) -> Vec<RetainedAsset> {
+        self.company(&company_id).get_retained_assets()
+    }
+
+    pub fn get_retained_asset(
+        &self,
+        company_id: String,
+        token_contract: AccountId,
+    ) -> Option<RetainedAsset> {
+        self.company(&company_id).get_retained_asset(token_contract)
+    }
+
+    #[payable]
+    pub fn set_retained_asset(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        asset_id: String,
+        symbol: String,
+        decimals: u8,
+        enabled: bool,
+    ) -> RetainedAsset {
+        self.with_company(&company_id, |company| {
+            company.set_retained_asset(token_contract, asset_id, symbol, decimals, enabled)
+        })
+    }
+
+    pub fn refresh_retained_balance(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+    ) -> Promise {
+        self.with_company(&company_id, |company| {
+            company.refresh_retained_balance(token_contract)
+        })
+    }
+
+    #[private]
+    pub fn on_retained_balance_sync(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        epoch: U64,
+    ) -> bool {
+        if !self.pool_covers_liability(&token_contract) {
+            return false;
+        }
+        self.with_company_emergency(&company_id, |company| {
+            company.on_retained_balance_sync(token_contract, epoch)
+        })
+    }
+
+    #[private]
+    pub fn on_retained_deposit_sync(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        epoch: U64,
+    ) -> U128 {
+        if !self.pool_covers_liability(&token_contract) {
+            return U128(0);
+        }
+        self.with_company_emergency(&company_id, |company| {
+            company.on_retained_deposit_sync(token_contract, epoch)
+        })
+    }
+
+    #[payable]
+    pub fn withdraw_retained_asset(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+        expected_epoch: U64,
+    ) -> Promise {
+        self.with_company(&company_id, |company| {
+            company.withdraw_retained_asset(token_contract, receiver_id, amount, expected_epoch)
+        })
+    }
+
+    #[private]
+    pub fn on_retained_withdraw_result(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        withdrawal_id: U64,
+    ) -> bool {
+        self.with_company_emergency(&company_id, |company| {
+            company.on_retained_withdraw_result(token_contract, withdrawal_id)
+        })
+    }
+
+    pub fn report_partial_settlement(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        expected_quote_hash: String,
+        actual_output: U128,
+        credited_amount: U128,
+        route_closed: bool,
+        receipt: String,
+    ) -> Payment {
+        self.with_company(&company_id, |company| {
+            company.report_partial_settlement(
+                payment_id,
+                attempt_id,
+                expected_quote_hash,
+                actual_output,
+                credited_amount,
+                route_closed,
+                receipt,
+            )
+        })
     }
 }
 
 impl Treasury {
-    fn finish_unsettled_payment(&mut self) {
-        self.unsettled_payments = self
-            .unsettled_payments
-            .checked_sub(1)
-            .expect("ACTIVE_PAYMENT_UNDERFLOW");
+    fn pool_covers_liability(&self, token_contract: &AccountId) -> bool {
+        near_sdk::env::promise_result_checked(0, 128)
+            .ok()
+            .and_then(|bytes| near_sdk::serde_json::from_slice::<U128>(&bytes).ok())
+            .is_some_and(|actual| actual.0 >= *self.liabilities.get(token_contract).unwrap_or(&0))
     }
 
-    fn is_approver(&self, account: &AccountId) -> bool {
-        account == &self.owner_id || self.approvers.contains(account)
+    fn assert_platform_owner(&self) {
+        require!(
+            env::predecessor_account_id() == self.owner_id,
+            "ONLY_PLATFORM_OWNER"
+        );
+        near_sdk::assert_one_yocto();
     }
-    fn required_approvals(&self, payment: &Payment) -> u8 {
-        let amount = add(payment.amount.0, payment.max_fee.0);
-        self.approval_tiers
-            .iter()
-            .find(|tier| amount <= tier.up_to.0)
-            .or_else(|| self.approval_tiers.last())
-            .expect("APPROVAL_POLICY_REQUIRED")
-            .required_approvals
+
+    fn assert_refund_reporter(&self) {
+        require!(
+            self.refund_reporter.as_ref() == Some(&env::predecessor_account_id()),
+            "ONLY_REFUND_REPORTER"
+        );
     }
-    fn approval_context_current(&self, payment: &Payment) -> bool {
-        payment.policy_version.0 == self.policy_version
-            && payment.expires_at_ms.0 > now_ms()
-            && payment.amount.0 <= self.per_payment_limit
-            && add(payment.amount.0, payment.max_fee.0) <= self.daily_limit
-            && payment.incurred_cost.0 <= payment.max_fee.0
-            && self
-                .recipients
-                .get(&payment.recipient_id)
-                .is_some_and(|recipient| {
-                    recipient.active && recipient.version == payment.recipient_version
-                })
+
+    fn assert_recovery_authority(&self, company_id: &String, succeeded: bool) {
+        near_sdk::assert_one_yocto();
+        let caller = env::predecessor_account_id();
+        require!(
+            self.refund_reporter.as_ref() == Some(&caller)
+                || (succeeded && self.company(company_id).owner_id == caller),
+            "VERIFIED_RECOVERY_REPORTER_REQUIRED"
+        );
     }
-    fn payment_approvals(&self, payment: &Payment) -> Vec<AccountId> {
-        if !self.approval_context_current(payment) {
-            return Vec::new();
+
+    fn company(&self, company_id: &String) -> &CompanyTreasury {
+        self.companies.get(company_id).expect("COMPANY_NOT_FOUND")
+    }
+
+    fn with_company<T>(
+        &mut self,
+        company_id: &String,
+        operation: impl FnOnce(&mut CompanyTreasury) -> T,
+    ) -> T {
+        self.run_company(company_id, false, operation)
+    }
+
+    fn with_company_emergency<T>(
+        &mut self,
+        company_id: &String,
+        operation: impl FnOnce(&mut CompanyTreasury) -> T,
+    ) -> T {
+        self.run_company(company_id, true, operation)
+    }
+
+    fn run_company<T>(
+        &mut self,
+        company_id: &String,
+        emergency: bool,
+        operation: impl FnOnce(&mut CompanyTreasury) -> T,
+    ) -> T {
+        let storage_before = env::storage_usage();
+        let company = self
+            .companies
+            .get_mut(company_id)
+            .expect("COMPANY_NOT_FOUND");
+        company.pool_epoch = self.pool_epoch;
+        let before = company.liabilities();
+        let result = operation(company);
+        company.flush();
+        let after = company.liabilities();
+        let mut changed = false;
+        for (token, previous) in &before {
+            let next = *after.get(token).unwrap_or(&0);
+            let total = *self.liabilities.get(token).unwrap_or(&0);
+            let adjusted = checked_add(
+                total.checked_sub(*previous).expect("LIABILITY_UNDERFLOW"),
+                next,
+            );
+            if total != adjusted {
+                changed = true;
+                self.liabilities.insert(token.clone(), adjusted);
+            }
         }
-        payment
-            .approvals
-            .iter()
-            .filter(|account| self.is_approver(account))
-            .cloned()
-            .collect()
+        for (token, next) in &after {
+            if !before.contains_key(token) && *next != 0 {
+                changed = true;
+                let total = *self.liabilities.get(token).unwrap_or(&0);
+                self.liabilities
+                    .insert(token.clone(), checked_add(total, *next));
+            }
+        }
+        if changed {
+            self.pool_epoch = self.pool_epoch.checked_add(1).expect("EPOCH_OVERFLOW");
+        }
+        self.flush();
+        let storage_after = env::storage_usage();
+        let company = self
+            .companies
+            .get_mut(company_id)
+            .expect("COMPANY_NOT_FOUND");
+        if storage_after >= storage_before {
+            company.storage_used = checked_add(
+                company.storage_used,
+                storage_cost(storage_after - storage_before),
+            );
+        } else {
+            company.storage_used = company
+                .storage_used
+                .saturating_sub(storage_cost(storage_before - storage_after));
+        }
+        let reserve = if emergency {
+            0
+        } else {
+            storage_cost(EMERGENCY_BYTES)
+        };
+        require!(
+            company.storage_used <= company.storage_credit.saturating_sub(reserve),
+            "COMPANY_STORAGE_TOPUP_REQUIRED"
+        );
+        result
     }
-    fn payment_terms_hash(&self, payment: &Payment) -> String {
-        hash_terms(
-            json!({"domain":"razor_payment_approval_v1","treasury":env::current_account_id(),"payment_id":payment.id,
-            "recipient_id":payment.recipient_id,"recipient_version":payment.recipient_version,"amount":payment.amount,"max_fee":payment.max_fee,
-            "expires_at_ms":payment.expires_at_ms,"not_before_ms":payment.not_before_ms,"reference":payment.reference,"policy_version":U64(self.policy_version),"required_approvals":self.required_approvals(payment)}),
-        )
+
+    fn flush(&mut self) {
+        self.companies.flush();
+        self.deposits.flush();
+        self.liabilities.flush();
+        self.refund_claims.flush();
     }
-    fn attempt_terms_hash(&self, payment: &Payment, attempt: &Attempt) -> String {
-        hash_terms(
-            json!({"domain":"razor_route_approval_v1","payment_terms_hash":self.payment_terms_hash(payment),"attempt_id":attempt.id,
-            "destination":attempt.destination,"route":attempt.route,"use_backup":attempt.use_backup,"policy_version":U64(self.policy_version)}),
-        )
-    }
-    fn approval_status(&self, payment: &Payment, attempt: Option<&Attempt>) -> ApprovalStatus {
-        let required = self.required_approvals(payment);
-        let payment_approvals = self.payment_approvals(payment);
-        let payment_ready = payment_approvals.len() >= required as usize;
-        let attempt_approvals: Vec<AccountId> = attempt
-            .filter(|attempt| attempt.approval_policy_version.0 == self.policy_version)
-            .map(|attempt| {
-                attempt
-                    .approvals
-                    .iter()
-                    .filter(|account| payment_approvals.contains(account))
-                    .cloned()
-                    .collect()
+}
+
+fn storage_cost(bytes: u64) -> u128 {
+    (bytes as u128)
+        .checked_mul(env::storage_byte_cost().as_yoctonear())
+        .expect("STORAGE_OVERFLOW")
+}
+
+fn checked_add(left: u128, right: u128) -> u128 {
+    left.checked_add(right).expect("AMOUNT_OVERFLOW")
+}
+
+fn validate_company_id(company_id: &str) {
+    let parts = company_id.split(':').collect::<Vec<_>>();
+    require!(
+        parts.len() == 2 && parts[0].len() == 36 && parts[1].len() == 16,
+        "INVALID_COMPANY_ID"
+    );
+    require!(
+        parts[0]
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
             })
-            .unwrap_or_default();
-        let attempt_ready = attempt.is_some_and(|attempt| {
-            attempt.status == AttemptStatus::Prepared && attempt.route.deadline_ms.0 > now_ms()
-        }) && attempt_approvals.len() >= required as usize;
-        let can_execute = !self.paused
-            && now_ms() >= payment.not_before_ms.0
-            && payment_ready
-            && attempt_ready
-            && matches!(
-                payment.status,
-                PaymentStatus::Approved | PaymentStatus::Retryable
-            )
-            && attempt.is_some_and(|attempt| {
-                payment
-                    .attempts
-                    .last()
-                    .is_some_and(|latest| latest.id == attempt.id)
-                    && attempt.route.input_amount.0 <= payment.reservation.0
-                    && attempt.route.input_amount.0 <= self.balance
-                    && add(
-                        *self.spent_by_day.get(&(now_ms() / DAY_MS)).unwrap_or(&0),
-                        attempt.route.input_amount.0,
-                    ) <= self.daily_limit
-                    && (!attempt.use_backup
-                        || self.backup_assets.get(&attempt.destination.network)
-                            == Some(&attempt.destination.asset_id))
-            });
-        ApprovalStatus {
-            policy_version: U64(self.policy_version),
-            approval_amount: U128(add(payment.amount.0, payment.max_fee.0)),
-            required_approvals: required,
-            payment_terms_hash: self.payment_terms_hash(payment),
-            payment_collected: payment_approvals.len() as u8,
-            payment_approvals,
-            payment_ready,
-            attempt_id: attempt.map(|attempt| attempt.id.clone()),
-            attempt_terms_hash: attempt.map(|attempt| self.attempt_terms_hash(payment, attempt)),
-            attempt_collected: attempt_approvals.len() as u8,
-            attempt_approvals,
-            attempt_ready,
-            can_execute,
-        }
-    }
-    fn assert_owner(&self) {
-        require!(env::predecessor_account_id() == self.owner_id, "ONLY_OWNER");
-        near_sdk::assert_one_yocto();
-    }
-    fn assert_approver(&self) {
-        let caller = env::predecessor_account_id();
-        require!(
-            caller == self.owner_id || self.approvers.contains(&caller),
-            "ONLY_APPROVER"
-        );
-        near_sdk::assert_one_yocto();
-    }
-    fn assert_executor(&self) {
-        let caller = env::predecessor_account_id();
-        require!(
-            caller == self.owner_id
-                || self.approvers.contains(&caller)
-                || self.executors.contains(&caller),
-            "ONLY_EXECUTOR"
-        );
-    }
-    fn assert_reporter(&self) {
-        let caller = env::predecessor_account_id();
-        require!(
-            caller == self.owner_id || self.settlement_reporter.as_ref() == Some(&caller),
-            "ONLY_SETTLEMENT_REPORTER"
-        );
-    }
-    fn assert_current(&self, payment: &Payment) {
-        require!(payment.expires_at_ms.0 > now_ms(), "PAYMENT_EXPIRED");
-        let recipient = self
-            .recipients
-            .get(&payment.recipient_id)
-            .expect("RECIPIENT_NOT_FOUND");
-        require!(
-            recipient.active && recipient.version == payment.recipient_version,
-            "RECIPIENT_CHANGED"
-        );
-    }
-    fn load_payment(&self, id: &str) -> Payment {
-        self.payments
-            .get(&id.to_string())
-            .cloned()
-            .expect("PAYMENT_NOT_FOUND")
-    }
-    fn bump_epoch(&mut self) {
-        self.balance_epoch = self.balance_epoch.checked_add(1).expect("EPOCH_OVERFLOW");
-    }
+            && parts[1]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+        "INVALID_COMPANY_ID"
+    );
 }
 
-fn last_attempt_mut<'a>(payment: &'a mut Payment, attempt_id: &str) -> &'a mut Attempt {
-    let attempt = payment.attempts.last_mut().expect("ATTEMPT_NOT_FOUND");
-    require!(attempt.id == attempt_id, "NOT_LATEST_ATTEMPT");
-    attempt
-}
-fn now_ms() -> u64 {
-    env::block_timestamp_ms()
-}
-fn add(a: u128, b: u128) -> u128 {
-    a.checked_add(b).expect("AMOUNT_OVERFLOW")
-}
-fn hash_terms(value: near_sdk::serde_json::Value) -> String {
-    env::sha256(&near_sdk::serde_json::to_vec(&value).expect("APPROVAL_SERIALIZATION_FAILED"))
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-fn validate_id(id: &str) {
+fn validate_deposit_id(deposit_id: &str) {
     require!(
-        !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control),
-        "INVALID_ID"
+        !deposit_id.is_empty()
+            && deposit_id.len() <= 128
+            && deposit_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "INVALID_DEPOSIT_ID"
     );
-}
-fn validate_destination(destination: &Destination) {
-    require!(
-        !destination.network.is_empty() && destination.network.len() <= 32,
-        "INVALID_NETWORK"
-    );
-    require!(
-        !destination.asset_id.is_empty() && destination.asset_id.len() <= 256,
-        "INVALID_ASSET"
-    );
-    require!(
-        !destination.address.is_empty()
-            && destination.address.len() <= 256
-            && !destination.address.chars().any(char::is_whitespace),
-        "INVALID_DESTINATION"
-    );
-}
-fn validate_receipt(receipt: &str) {
-    require!(
-        !receipt.is_empty() && receipt.len() <= 1024,
-        "RECEIPT_REQUIRED"
-    );
-}
-fn read_balance() -> Option<u128> {
-    env::promise_result_checked(0, 128)
-        .ok()
-        .and_then(|bytes| near_sdk::serde_json::from_slice::<U128>(&bytes).ok())
-        .map(|n| n.0)
-}
-fn emit(event: &str, data: near_sdk::serde_json::Value) {
-    env::log_str(&format!(
-        "EVENT_JSON:{}",
-        json!({"standard":"razor","version":"1.0.0","event":event,"data":[data]})
-    ));
 }
 
 #[cfg(test)]
-mod tests;
+mod shared_tests;

@@ -134,6 +134,8 @@ pub struct Payment {
 
 #[near(serializers = [json])]
 pub struct ConfigView {
+    pub architecture: String,
+    pub company_id: String,
     pub retained_assets_enabled: bool,
     pub max_retained_assets: u32,
     pub owner_id: AccountId,
