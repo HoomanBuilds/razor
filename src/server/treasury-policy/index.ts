@@ -6,15 +6,17 @@ import { getTreasury, setNetwork, syncTreasury } from "../payments";
 import { nativeUsdc, getSupportedTokens } from "../payments/intents";
 import { view, validNearAccount } from "../payments/near";
 import { BACKUP_NETWORKS } from "../payments/policy";
-import type { TreasuryConfig, WalletTransaction } from "../payments/types";
+import type { ApprovalTier, TreasuryConfig, WalletTransaction } from "../payments/types";
 import { atomic } from "../../lib/money";
 import { activity } from "../business/service";
+import { validateApprovalTiers } from "./approvals";
 
-interface Policy { owner_id: string; token_contract: string; paused: boolean; per_payment_limit: string; daily_limit: string; policy_version: string; settlement_reporter: string | null; approvers: string[]; executors: string[] }
+interface Policy { approval_tiers: ApprovalTier[]; approval_amount_basis: string; owner_id: string; token_contract: string; paused: boolean; per_payment_limit: string; daily_limit: string; policy_version: string; settlement_reporter: string | null; approvers: string[]; executors: string[] }
 const account = z.string().refine(validNearAccount, "Enter a valid NEAR account");
 const amount = z.string().refine((value) => { try { atomic(value); return true; } catch { return false; } });
 const changeInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("pause"), paused: z.boolean() }),
+  z.object({ action: z.literal("approvals"), tiers: z.array(z.object({ upTo: amount, requiredApprovals: z.number().int().min(1).max(8) })).min(1).max(8) }),
   z.object({ action: z.literal("limits"), perPaymentLimit: amount, dailyLimit: amount }),
   z.object({ action: z.literal("role"), accountId: account, role: z.enum(["approver", "executor"]), enabled: z.boolean() }),
   z.object({ action: z.literal("reporter"), accountId: account.nullable() }),
@@ -29,6 +31,7 @@ async function policy(access: AccessContext) {
   if (!config) return { configured: false as const, localPaused };
   const treasury = await syncTreasury(access);
   const current = await view<Policy>(config, "get_config");
+  if (current.approval_amount_basis !== "principal_plus_max_fee" || !Array.isArray(current.approval_tiers) || !current.approval_tiers.length) throw new ApiError(409, "This treasury needs the reviewed amount-based approval contract. Connect a newly deployed compatible treasury", "APPROVAL_POLICY_UPGRADE_REQUIRED");
   return { configured: true as const, config, current, treasury, localPaused };
 }
 
@@ -46,6 +49,11 @@ export async function preparePolicyChange(access: AccessContext, input: z.infer<
     case "limits":
       if (atomic(input.dailyLimit) < atomic(input.perPaymentLimit)) throw new ApiError(400, "Daily limit must cover the per-payment limit", "INVALID_LIMITS");
       actions.push(action(config.near_account_id, "set_policy", { per_payment_limit: input.perPaymentLimit, daily_limit: input.dailyLimit })); break;
+    case "approvals": {
+      const tiers = input.tiers.map((tier) => ({ up_to: tier.upTo, required_approvals: tier.requiredApprovals }));
+      validateApprovalTiers(tiers, current.daily_limit, new Set([current.owner_id, ...current.approvers]).size);
+      actions.push(action(config.near_account_id, "set_approval_policy", { tiers, expected_policy_version: current.policy_version })); break;
+    }
     case "role": actions.push(action(config.near_account_id, "set_role", { account_id: input.accountId, role: input.role, enabled: input.enabled })); break;
     case "reporter": actions.push(action(config.near_account_id, "set_settlement_reporter", { account_id: input.accountId })); break;
     case "backup": {
@@ -85,6 +93,7 @@ treasuryPolicyRoutes.post("/confirm", async (c) => {
   let matches = true;
   if (change.action === "pause") matches = current.paused === change.paused;
   if (change.action === "limits") matches = current.per_payment_limit === change.perPaymentLimit && current.daily_limit === change.dailyLimit;
+  if (change.action === "approvals") matches = JSON.stringify(current.approval_tiers) === JSON.stringify(change.tiers.map((tier) => ({ up_to: tier.upTo, required_approvals: tier.requiredApprovals })));
   if (change.action === "reporter") matches = current.settlement_reporter === change.accountId;
   if (change.action === "role") matches = (change.role === "approver" ? current.approvers : current.executors).includes(change.accountId) === change.enabled;
   if (change.action === "backup") {
