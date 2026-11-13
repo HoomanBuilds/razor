@@ -14,7 +14,7 @@ import {
   recipientWorkspaceRoutes,
 } from "./recipient-workspace";
 import { treasuryPolicyRoutes } from "./treasury-policy";
-import { fundingRequestRoutes, publicFundingRoutes } from "./funding-requests";
+import { fundingRequestRoutes, publicFundingRoutes, sourceFundingRoutes } from "./funding-requests";
 import { paymentManagementRoutes } from "./payment-management";
 import { financeRoutes } from "./assistant/finance";
 import { clientReserveRoutes } from "./client-reserves";
@@ -92,6 +92,7 @@ app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
 app.route("/organizations/:orgId/intake", companyInvoiceIntakeRoutes);
 app.route("/organizations/:orgId/treasury-policy", treasuryPolicyRoutes);
 app.route("/organizations/:orgId/funding-requests", fundingRequestRoutes);
+app.route("/organizations/:orgId/source-funding", sourceFundingRoutes);
 app.route("/organizations/:orgId/payment-management", paymentManagementRoutes);
 app.route("/organizations/:orgId/assistant/finance", financeRoutes);
 app.route("/organizations/:orgId/client-reserves", clientReserveRoutes);
