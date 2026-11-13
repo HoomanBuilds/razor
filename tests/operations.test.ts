@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getDb, row, rows } from "../src/server/db";
 import { PERMISSIONS, getAccess } from "../src/server/identity/session";
 import { approveBill, createBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
-import { createRecurring, listNotices, readNotice } from "../src/server/operations/service";
+import { createRecurring, listNotices, readNotice, setRecurring, saveMandate } from "../src/server/operations/service";
 import { tickOperations } from "../src/server/operations/worker";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -79,6 +79,30 @@ test("changed destination versions hold recurring work and partial source invoic
   assert.throws(() => createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: due, maxAmount: "10000000" }), /partial installments/);
 });
 
+test("a held recurring occurrence requires a new reviewed template instead of a stuck resume", async () => {
+  const { access, invoice, recipientId, due } = fixture();
+  const rule = createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: due, maxAmount: "10000000" });
+  getDb().prepare("UPDATE recipients SET version=version+1 WHERE id=?").run(recipientId);
+  await tickOperations({ organizationId: access.organizationId, maxJobs: 20 });
+  getDb().prepare("UPDATE recipients SET version=version-1 WHERE id=?").run(recipientId);
+  assert.throws(() => setRecurring(access, rule.id, true), /held occurrence/);
+  setRecurring(access, rule.id, false);
+  assert.throws(() => setRecurring(access, rule.id, true), /held occurrence/);
+  const replacement = createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: due, maxAmount: "10000000" });
+  assert.notEqual(replacement.id, rule.id);
+  await tickOperations({ organizationId: access.organizationId, maxJobs: 20 });
+  assert.equal(row<{ n: number }>("SELECT COUNT(*) AS n FROM recurring_occurrences WHERE rule_id=? AND status='drafted'", replacement.id)!.n, 1);
+  assert.equal(row<{ enabled: number }>("SELECT enabled FROM recurring_rules WHERE id=?", rule.id)!.enabled, 0);
+});
+
+test("executor bounds cannot be attached to another company's configured worker", () => {
+  const { access } = fixture();
+  const saved = [process.env.RAZOR_EXECUTOR_ACCOUNT_ID, process.env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID, process.env.RAZOR_EXECUTOR_NETWORK];
+  Object.assign(process.env, { RAZOR_EXECUTOR_ACCOUNT_ID: "worker.near", RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID: "other-treasury.near", RAZOR_EXECUTOR_NETWORK: "mainnet" });
+  try { assert.throws(() => saveMandate(access, { enabled: true, maxAmount: "10000000", expiresAt: new Date(Date.now()+3600000).toISOString() }), /dedicated NEAR executor/); }
+  finally { for (const [index, key] of ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_NETWORK"].entries()) { if(saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index]; } }
+});
+
 test("monthly payroll creates the next calendar entitlement and advances one durable cycle", async () => {
   const { access, recipientId } = fixture();
   const original = createPayrollRun(access, { reference: "monthly-source", periodStart: "2025-12-01", periodEnd: "2025-12-31", scheduledFor: "2026-01-01T09:00:00Z", items: [{ recipientId, amount: "1000000" }] });
@@ -91,4 +115,15 @@ test("monthly payroll creates the next calendar entitlement and advances one dur
   assert.equal(generated.status, "draft");
   assert.equal(row<{ next_run_at: string }>("SELECT next_run_at FROM recurring_rules WHERE id=?", rule.id)?.next_run_at, "2026-03-01T09:00:00.000Z");
   assert.equal(row<{ n: number }>("SELECT COUNT(*) AS n FROM recurring_occurrences WHERE rule_id=?", rule.id)?.n, 1);
+});
+
+test("recurring payroll preserves the approved net components and supplied explanation", async () => {
+  const { access, recipientId, due } = fixture();
+  const source = createPayrollRun(access, { reference: "component-template", periodStart: "2026-10-01", periodEnd: "2026-10-31", items: [{ recipientId, amount: "115", baseAmount: "100", bonusAmount: "20", adjustmentAmount: "-5", note: "Approved supplied correction", maxFee: "1" }] });
+  approvePayrollRun(access, source.id);
+  createRecurring(access, { kind: "payroll", entityId: source.id, intervalDays: 30, nextRunAt: due, maxAmount: "115" });
+  await tickOperations({ organizationId: access.organizationId, maxJobs: 20 });
+  const terms = row<{ base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string }>("SELECT t.* FROM payroll_item_terms t JOIN payroll_items i ON i.id=t.item_id JOIN payroll_runs r ON r.id=i.run_id WHERE r.organization_id=? AND r.id!=?", access.organizationId, source.id)!;
+  assert.equal(terms.base_amount, "100"); assert.equal(terms.bonus_amount, "20"); assert.equal(terms.adjustment_amount, "-5");
+  assert.ok(terms.note_ciphertext.startsWith("enc1:"));
 });

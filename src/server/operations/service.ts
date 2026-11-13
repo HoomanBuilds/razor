@@ -99,20 +99,27 @@ export function notify(
 }
 
 export function listNotices(access: AccessContext): Notice[] {
+  return noticePage(access, 1, 100).notices;
+}
+
+export function noticePage(access: AccessContext, page: number, pageSize: number, status: "all" | "unread" = "all") {
   requirePermission(access, "company:read");
-  return rows<Notice>(
-    `SELECT n.id,n.title,n.body,n.entity_id,n.required_permission,n.created_at,
-    COALESCE(r.read_at,CASE WHEN n.user_id IS NOT NULL THEN n.read_at ELSE NULL END) AS read_at
-    FROM notices n LEFT JOIN notice_receipts r ON r.notice_id=n.id AND r.user_id=?
-    WHERE n.organization_id=? AND (n.user_id IS NULL OR n.user_id=?) ORDER BY n.created_at DESC LIMIT 100`,
-    access.userId,
-    access.organizationId,
-    access.userId,
-  ).filter((notice) => access.permissions.includes(notice.required_permission));
+  validatePage(page, pageSize);
+  if (!["all", "unread"].includes(status)) throw new ApiError(422, "Choose a valid notice status", "INVALID_NOTICE_STATUS");
+  const readAt = "COALESCE(r.read_at,CASE WHEN n.user_id IS NOT NULL THEN n.read_at ELSE NULL END)";
+  const from = `FROM notices n LEFT JOIN notice_receipts r ON r.notice_id=n.id AND r.user_id=? WHERE n.organization_id=? AND (n.user_id IS NULL OR n.user_id=?) AND n.required_permission IN (${access.permissions.map(() => "?").join(",") || "NULL"})`;
+  const values = [access.userId, access.organizationId, access.userId, ...access.permissions];
+  return transaction(() => {
+    const counts = row<{ total: number; unread: number }>(`SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN ${readAt} IS NULL THEN 1 ELSE 0 END),0) AS unread ${from}`, ...values)!;
+    const total = status === "unread" ? counts.unread : counts.total;
+    const notices = rows<Notice>(`SELECT n.id,n.title,n.body,n.entity_id,n.required_permission,n.created_at,${readAt} AS read_at ${from} ${status === "unread" ? `AND ${readAt} IS NULL` : ""} ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`, ...values, pageSize, (page - 1) * pageSize);
+    return { notices, page, pageSize, total, unreadTotal: counts.unread, hasMore: page * pageSize < total };
+  });
 }
 export function readNotice(access: AccessContext, noticeId: string) {
-  const notice = listNotices(access).find((item) => item.id === noticeId);
-  if (!notice) throw new ApiError(404, "Notice not found", "NOTICE_NOT_FOUND");
+  requirePermission(access, "company:read");
+  const notice = row<{ required_permission: string }>("SELECT required_permission FROM notices WHERE id=? AND organization_id=? AND (user_id IS NULL OR user_id=?)", noticeId, access.organizationId, access.userId);
+  if (!notice || !access.permissions.includes(notice.required_permission)) throw new ApiError(404, "Notice not found", "NOTICE_NOT_FOUND");
   getDb()
     .prepare(
       "INSERT INTO notice_receipts(notice_id,user_id,read_at) VALUES(?,?,?) ON CONFLICT(notice_id,user_id) DO NOTHING",
@@ -127,6 +134,40 @@ export function listJobs(access: AccessContext) {
     "SELECT id,organization_id,job_key,kind,entity_id,status,run_at,attempts,failures,lease_expires_at,last_error,result,created_at,updated_at FROM operation_jobs WHERE organization_id=? ORDER BY updated_at DESC LIMIT 100",
     access.organizationId,
   );
+}
+
+function validatePage(page: number, pageSize: number) {
+  if (!Number.isSafeInteger(page) || page < 1 || page > 100000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new ApiError(422, "Choose a valid operations page and page size", "INVALID_PAGE");
+}
+
+function paged<T>(access: AccessContext, table: "operation_jobs" | "recurring_rules" | "bills" | "payroll_runs", fields: string, page: number, pageSize: number, filter: string, values: string[] = []) {
+  requirePermission(access, "payments:read");
+  validatePage(page, pageSize);
+  return transaction(() => {
+    const total = row<{ total: number }>(`SELECT COUNT(*) AS total FROM ${table} WHERE organization_id=? ${filter}`, access.organizationId, ...values)!.total;
+    const items = rows<T>(`SELECT ${fields} FROM ${table} WHERE organization_id=? ${filter} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, access.organizationId, ...values, pageSize, (page - 1) * pageSize);
+    return { items, page, pageSize, total, hasMore: page * pageSize < total };
+  });
+}
+
+export function jobPage(access: AccessContext, page: number, pageSize: number, status: "all" | "attention" | "pending" | "completed" = "all") {
+  const filters = { all: "", attention: "AND status IN ('blocked','failed')", pending: "AND status IN ('queued','running')", completed: "AND status='completed'" };
+  if (!Object.hasOwn(filters, status)) throw new ApiError(422, "Choose a valid work status", "INVALID_JOB_STATUS");
+  const { items, ...paging } = paged<Omit<OperationJob, "payload" | "lease_owner">>(access, "operation_jobs", "id,organization_id,job_key,kind,entity_id,status,run_at,attempts,failures,lease_expires_at,last_error,result,created_at,updated_at", page, pageSize, filters[status]);
+  return { jobs: items, ...paging };
+}
+
+export function recurringPage(access: AccessContext, page: number, pageSize: number, status: "all" | "active" | "paused" | "held" = "all") {
+  const filters = { all: "", active: "AND enabled=1", paused: "AND enabled=0 AND status='paused'", held: "AND status='held'" };
+  if (!Object.hasOwn(filters, status)) throw new ApiError(422, "Choose a valid template status", "INVALID_TEMPLATE_STATUS");
+  const { items, ...paging } = paged<RecurringRule>(access, "recurring_rules", "*", page, pageSize, filters[status]);
+  return { recurring: items.map(publicRule), ...paging };
+}
+
+export function templatePage(access: AccessContext, kind: "bill" | "payroll", page: number, pageSize: number) {
+  if (!["bill", "payroll"].includes(kind)) throw new ApiError(422, "Choose a valid template type", "INVALID_TEMPLATE_KIND");
+  const { items, ...paging } = paged<{ id: string; reference: string }>(access, kind === "bill" ? "bills" : "payroll_runs", "id,reference", page, pageSize, "AND status='approved'");
+  return { templates: items, ...paging };
 }
 export function retryJob(access: AccessContext, jobId: string) {
   manager(access);
@@ -251,9 +292,13 @@ export function captureTemplate(
       payment_fee: string;
       approved_at: string | null;
       payment_status: string;
+      base_amount: string | null;
+      bonus_amount: string | null;
+      adjustment_amount: string | null;
+      note_ciphertext: string | null;
     }>(
-      `SELECT i.recipient_id,i.amount,i.max_fee,p.recipient_version,p.amount AS payment_amount,p.max_fee AS payment_fee,p.approved_at,p.status AS payment_status FROM payroll_items i
-      JOIN payments p ON p.id=i.payment_id AND p.organization_id=? WHERE i.run_id=? ORDER BY i.recipient_id`,
+      `SELECT i.recipient_id,i.amount,i.max_fee,p.recipient_version,p.amount AS payment_amount,p.max_fee AS payment_fee,p.approved_at,p.status AS payment_status,t.base_amount,t.bonus_amount,t.adjustment_amount,COALESCE(t.note_ciphertext,i.note) AS note_ciphertext FROM payroll_items i
+      JOIN payments p ON p.id=i.payment_id AND p.organization_id=? LEFT JOIN payroll_item_terms t ON t.item_id=i.id WHERE i.run_id=? ORDER BY i.recipient_id`,
       organizationId,
       entityId,
     );
@@ -282,6 +327,8 @@ export function captureTemplate(
       amount: item.amount,
       maxFee: item.max_fee,
       recipientVersion: item.recipient_version,
+      ...(item.base_amount !== null ? { baseAmount: item.base_amount, bonusAmount: item.bonus_amount!, adjustmentAmount: item.adjustment_amount! } : {}),
+      ...(item.note_ciphertext ? { note: decrypt(item.note_ciphertext) } : {}),
     }));
     payroll = {
       periodStart: run.period_start,
@@ -452,6 +499,7 @@ export function setRecurring(
     );
   if (enabled) {
     requirePermission(access, "payments:prepare");
+    if (rule.status === "held" || row("SELECT rule_id FROM recurring_occurrences WHERE rule_id=? AND due_at=? AND status='held'", rule.id, rule.next_run_at)) throw new ApiError(409, "Review the held occurrence and create a new template. A held cycle cannot resume as an already completed job", "TEMPLATE_REVIEW_REQUIRED");
     const current = captureTemplate(
       access.organizationId,
       rule.kind,
@@ -486,7 +534,7 @@ export function setRecurring(
     .prepare(
       "UPDATE recurring_rules SET enabled=?,status=?,updated_at=? WHERE id=?",
     )
-    .run(Number(enabled), enabled ? "active" : "paused", iso(), ruleId);
+    .run(Number(enabled), enabled ? "active" : rule.status === "held" ? "held" : "paused", iso(), ruleId);
   return publicRule(
     row<RecurringRule>("SELECT * FROM recurring_rules WHERE id=?", ruleId)!,
   );
@@ -539,7 +587,7 @@ export function saveMandate(
       "The company owner manages execution mandates",
       "ONLY_COMPANY_OWNER",
     );
-  const worker = workerConfiguration(),
+  const worker = workerConfiguration(access.organizationId),
     cap = money(input.maxAmount),
     expiry = new Date(input.expiresAt);
   if (!worker.accountId || !validNearAccount(worker.accountId))
@@ -650,16 +698,17 @@ export function purgeRetention(access: AccessContext) {
 }
 export function overview(access: AccessContext) {
   requirePermission(access, "payments:read");
-  const notices = listNotices(access);
+  const notices = noticePage(access, 1, 100);
   return {
     paused: isPaused(access.organizationId),
     worker: workerConfiguration(access.organizationId),
     jobs: listJobs(access),
     recurring: listRecurring(access),
-    notices,
-    unread: notices.filter((notice) => !notice.read_at).length,
+    notices: notices.notices,
+    unread: notices.unreadTotal,
     mandate: getMandate(access),
     canManage: access.permissions.includes("company:manage"),
+    canManageMandate: access.permissions.includes("company:manage") && !!row("SELECT id FROM organizations WHERE id=? AND owner_id=?", access.organizationId, access.userId),
     templates: {
       bills: rows<{ id: string; reference: string; amount: string }>(
         "SELECT id,reference,amount FROM bills WHERE organization_id=? AND status='approved' ORDER BY created_at DESC LIMIT 100",
