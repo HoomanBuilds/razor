@@ -9,20 +9,53 @@ import { assistantRoutes } from "./assistant";
 import { onboardingRoutes } from "./treasury-onboarding";
 import { operationsRoutes } from "./operations";
 import { reconciliationRoutes } from "./reconciliation";
-import { companyInvoiceIntakeRoutes, recipientWorkspaceRoutes } from "./recipient-workspace";
+import {
+  companyInvoiceIntakeRoutes,
+  recipientWorkspaceRoutes,
+} from "./recipient-workspace";
 import { treasuryPolicyRoutes } from "./treasury-policy";
 import { fundingRequestRoutes, publicFundingRoutes } from "./funding-requests";
 import { paymentManagementRoutes } from "./payment-management";
 import { financeRoutes } from "./assistant/finance";
+import { clientReserveRoutes } from "./client-reserves";
 
 export const app = new Hono<AppEnv>().basePath("/api");
-app.use("*", bodyLimit({ maxSize: 1_048_576, onError: (c) => c.json({ error: "Submit a request smaller than 1 MB", code: "REQUEST_TOO_LARGE" }, 413) }));
+app.use(
+  "*",
+  bodyLimit({
+    maxSize: 1_048_576,
+    onError: (c) =>
+      c.json(
+        {
+          error: "Submit a request smaller than 1 MB",
+          code: "REQUEST_TOO_LARGE",
+        },
+        413,
+      ),
+  }),
+);
 app.onError((error, c) => {
-  if (error instanceof ApiError) return c.json({ error: error.message, code: error.code }, error.status as 400);
-  if (error instanceof ZodError) return c.json({ error: "Check the submitted fields", code: "VALIDATION_ERROR", fields: error.flatten() }, 400);
-  if (error instanceof SyntaxError) return c.json({ error: "Submit valid JSON", code: "INVALID_JSON" }, 400);
+  if (error instanceof ApiError)
+    return c.json(
+      { error: error.message, code: error.code },
+      error.status as 400,
+    );
+  if (error instanceof ZodError)
+    return c.json(
+      {
+        error: "Check the submitted fields",
+        code: "VALIDATION_ERROR",
+        fields: error.flatten(),
+      },
+      400,
+    );
+  if (error instanceof SyntaxError)
+    return c.json({ error: "Submit valid JSON", code: "INVALID_JSON" }, 400);
   console.error("Request failed", { name: error.name, message: error.message });
-  return c.json({ error: "The request could not be completed", code: "INTERNAL_ERROR" }, 500);
+  return c.json(
+    { error: "The request could not be completed", code: "INTERNAL_ERROR" },
+    500,
+  );
 });
 app.get("/health", (c) => c.json({ service: "float", status: "ok" }));
 app.route("/", identityRoutes);
@@ -31,7 +64,11 @@ app.use("/assets/*", requireUser);
 app.route("/assets", assetRoutes);
 app.route("/recipient-workspace", recipientWorkspaceRoutes);
 app.route("/funding-requests", publicFundingRoutes);
-app.use("/organizations/:orgId/*", requireUser, requireOrganization("company:read"));
+app.use(
+  "/organizations/:orgId/*",
+  requireUser,
+  requireOrganization("company:read"),
+);
 app.route("/organizations/:orgId", paymentsRoutes);
 app.route("/organizations/:orgId", businessRoutes);
 app.route("/organizations/:orgId/assistant", assistantRoutes);
@@ -43,4 +80,7 @@ app.route("/organizations/:orgId/treasury-policy", treasuryPolicyRoutes);
 app.route("/organizations/:orgId/funding-requests", fundingRequestRoutes);
 app.route("/organizations/:orgId/payment-management", paymentManagementRoutes);
 app.route("/organizations/:orgId/assistant/finance", financeRoutes);
-app.notFound((c) => c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404));
+app.route("/organizations/:orgId/client-reserves", clientReserveRoutes);
+app.notFound((c) =>
+  c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
+);
