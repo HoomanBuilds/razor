@@ -6,6 +6,7 @@ import { approvePayment, createPayment, getPayment } from "../payments";
 import { decrypt, encrypt } from "../identity/crypto";
 import { accountingExport } from "../reconciliation/export";
 import { liabilityPayments } from "../partial-settlement/model";
+import { assertNoActiveClearing } from "../clearing/locks";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
@@ -96,6 +97,7 @@ export function approveBill(access: AccessContext, id: string) {
   if (bill.requires_acceptance && !bill.milestone_accepted_at) throw new ApiError(409, "Accept the milestone with evidence before approving release", "MILESTONE_ACCEPTANCE_REQUIRED");
   if (!bill.payment_id) throw new ApiError(409, "Ask the preparer to finish this bill's payment draft", "PAYMENT_DRAFT_REQUIRED");
   return transaction((db) => {
+    assertNoActiveClearing(access.organizationId, bill.payment_id!);
     db.prepare("UPDATE bills SET status = 'approved', accepted_at = COALESCE(accepted_at,?), updated_at = ? WHERE id = ?")
       .run(new Date().toISOString(), new Date().toISOString(), id);
     const approved = approvePayment(access, bill.payment_id!);
@@ -108,6 +110,7 @@ export function disputeBill(access: AccessContext, id: string, reason: string) {
   requirePermission(access, "payments:approve");
   const bill = row<Bill>("SELECT * FROM bills WHERE id = ? AND organization_id = ?", id, access.organizationId);
   if (!bill) throw new ApiError(404, "Bill not found", "NOT_FOUND");
+  if (bill.payment_id) assertNoActiveClearing(access.organizationId, bill.payment_id);
   if (bill.payment_id && getPayment(access, bill.payment_id).status !== "draft") throw new ApiError(409, "Reconcile the approved payment before changing this bill", "PAYMENT_EXISTS");
   getDb().prepare("UPDATE bills SET status = 'disputed', dispute_reason = ?, updated_at = ? WHERE id = ?").run(encrypt(reason), new Date().toISOString(), id);
   if (bill.payment_id) getDb().prepare("UPDATE payments SET hold_reason = ? WHERE id = ?").run("This invoice is disputed", bill.payment_id);
@@ -137,7 +140,7 @@ export function listPayrollRuns(access: AccessContext) {
 
 export function createPayrollRun(access: AccessContext, input: {
   reference: string; periodStart: string; periodEnd: string; scheduledFor?: string;
-  items: { recipientId: string; amount: string; maxFee?: string; note?: string }[];
+  items: { recipientId: string; amount: string; maxFee?: string; note?: string; baseAmount?: string; bonusAmount?: string; adjustmentAmount?: string }[];
 }) {
   requirePermission(access, "payments:prepare");
   if (!input.items.length || input.items.length > 1000) throw new ApiError(400, "A pay run needs between 1 and 1,000 recipients", "INVALID_RUN");
@@ -145,15 +148,26 @@ export function createPayrollRun(access: AccessContext, input: {
   if (new Set(input.items.map((item) => item.recipientId)).size !== input.items.length) throw new ApiError(400, "A recipient appears more than once", "DUPLICATE_RECIPIENT");
   const old = row<PayrollRun>("SELECT * FROM payroll_runs WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);
   if (old) throw new ApiError(409, "This pay-run reference already exists", "DUPLICATE_RUN");
-  const items = input.items.map((item) => { recipient(access, item.recipientId); return { ...item, amount: amount(item.amount), maxFee: amount(item.maxFee ?? "1000000", true) }; });
+  const items = input.items.map((item) => {
+    recipient(access, item.recipientId);
+    const net = amount(item.amount), fee = amount(item.maxFee ?? "1000000", true), note = item.note?.trim();
+    const detailed = [item.baseAmount, item.bonusAmount, item.adjustmentAmount].some(value => value !== undefined);
+    if (!detailed) return { ...item, amount: net, maxFee: fee, note, terms: null };
+    const base = amount(item.baseAmount ?? net, true), bonus = amount(item.bonusAmount ?? "0", true), adjustment = item.adjustmentAmount ?? "0";
+    if (!/^-?\d{1,31}$/.test(adjustment) || BigInt(adjustment) < -(10n ** 30n) || BigInt(adjustment) > 10n ** 30n || BigInt(base) + BigInt(bonus) + BigInt(adjustment) !== BigInt(net)) throw new ApiError(422, "Net pay must equal its supplied base, bonus and signed adjustment", "PAYROLL_NET_MISMATCH");
+    if ((BigInt(bonus) !== 0n || BigInt(adjustment) !== 0n) && !note) throw new ApiError(422, "Explain the supplied bonus or net adjustment", "ADJUSTMENT_NOTE_REQUIRED");
+    return { ...item, amount: net, maxFee: fee, note, terms: { base, bonus, adjustment: BigInt(adjustment).toString() } };
+  });
   const id = randomUUID(), now = new Date().toISOString();
   transaction((db) => {
     db.prepare("INSERT INTO payroll_runs (id,organization_id,reference,period_start,period_end,scheduled_for,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
       .run(id, access.organizationId, input.reference, input.periodStart, input.periodEnd, input.scheduledFor ?? null, access.userId, now, now);
     for (const item of items) {
       const payment = createPayment(access, { recipientId: item.recipientId, reference: `payroll:${id}:${item.recipientId}`, amount: item.amount, maxFee: item.maxFee, kind: "payroll", scheduledFor: input.scheduledFor, metadata: { runId: id, displayReference: input.reference, periodStart: input.periodStart, periodEnd: input.periodEnd } });
+      const itemId = randomUUID();
       db.prepare("INSERT INTO payroll_items (id,run_id,recipient_id,amount,max_fee,note,payment_id) VALUES (?,?,?,?,?,?,?)")
-        .run(randomUUID(), id, item.recipientId, item.amount, item.maxFee, item.note ? encrypt(item.note) : null, payment.id);
+        .run(itemId, id, item.recipientId, item.amount, item.maxFee, item.note ? encrypt(item.note) : null, payment.id);
+      if (item.terms) db.prepare("INSERT INTO payroll_item_terms(item_id,base_amount,bonus_amount,adjustment_amount,note_ciphertext,version,updated_by,updated_at) VALUES(?,?,?,?,?,1,?,?)").run(itemId, item.terms.base, item.terms.bonus, item.terms.adjustment, item.note ? encrypt(item.note) : null, access.userId, now);
     }
   });
   activity(access, "payroll.created", id);
@@ -169,6 +183,7 @@ export function approvePayrollRun(access: AccessContext, id: string) {
       .run(access.userId, new Date().toISOString(), id);
     for (const item of run.items) {
       if (!item.payment_id) throw new ApiError(409, "Ask the preparer to finish this pay run's drafts", "PAYMENT_DRAFT_REQUIRED");
+      if (item.remainingLiability === "0") continue;
       approvePayment(access, item.payment_id);
     }
     activity(access, "payroll.approved", id);

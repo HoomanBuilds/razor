@@ -18,6 +18,7 @@ export interface Payment {
   organization_id: string;
   recipient_id: string;
   recipientName?: string;
+  activeClearingRound?: { id: string; status: string } | null;
   kind: string;
   reference: string;
   amount: string;

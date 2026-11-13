@@ -5,12 +5,14 @@ import { getDb, row, transaction } from "../src/server/db";
 import { createBill, approveBill, createPayrollRun, approvePayrollRun } from "../src/server/business/service";
 import { approvePayment, getPayment, revalidatePaymentRecipient } from "../src/server/payments";
 import { microUsd, usd } from "../src/lib/format";
-import { parsePayrollCsv } from "../src/lib/csv";
+import { parsePayrollCsv, parsePayrollDetailsCsv } from "../src/lib/csv";
 import type { AccessContext } from "../src/server/context";
 import { acceptBillMilestone, addBillInstallment, getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
 import { listPrivateEvidence, retainPrivateEvidence } from "../src/server/reconciliation/evidence";
 import { accountingExport } from "../src/server/reconciliation/export";
 import { captureTemplate } from "../src/server/operations/service";
+import { cancelManagedPayment, replaceCancelledPayment, payrollReview, approveReviewedPayrollRun } from "../src/server/payment-management/service";
+import { encrypt } from "../src/server/identity/crypto";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "a1".repeat(32);
@@ -63,6 +65,21 @@ test("USDC and payroll imports preserve precision and reject duplicate recipient
   assert.throws(() => parsePayrollCsv("email,amount\none@example.test,1\none@example.test,2", recipients), /more than once/);
 });
 
+test("payroll CSV preserves supplied components, costs and explanations through approval review", () => {
+  const { preparer, recipientId } = fixture(), recipients = [{ id: recipientId, email: "employee@example.test" }];
+  const parsed = parsePayrollDetailsCsv("email,base_amount,bonus_amount,adjustment_amount,note,max_fee\nemployee@example.test,1200.50,200,-50,Supplied monthly correction,0.025", recipients)[recipientId];
+  assert.deepEqual(parsed, { amount: "1350.5", baseAmount: "1200.5", bonusAmount: "200", adjustmentAmount: "-50", note: "Supplied monthly correction", maxFee: "0.025" });
+  const run = createPayrollRun(preparer, { reference: "detailed-csv", periodStart: "2026-11-01", periodEnd: "2026-11-30", items: [{ recipientId, amount: microUsd(parsed.amount), baseAmount: microUsd(parsed.baseAmount!, true), bonusAmount: microUsd(parsed.bonusAmount!, true), adjustmentAmount: `-${microUsd(parsed.adjustmentAmount!.slice(1), true)}`, maxFee: microUsd(parsed.maxFee!, true), note: parsed.note }] });
+  const review = payrollReview(preparer, run.id).items[0];
+  assert.equal(review.amount, "1350500000"); assert.equal(review.maxFee, "25000");
+  assert.equal(review.terms.baseAmount, "1200500000"); assert.equal(review.terms.bonusAmount, "200000000"); assert.equal(review.terms.adjustmentAmount, "-50000000"); assert.equal(review.terms.note, parsed.note);
+  assert.throws(() => parsePayrollDetailsCsv("email,base_amount,bonus_amount,amount,note\nemployee@example.test,100,10,100,Bonus", recipients), /Row 2: amount differs/);
+  assert.throws(() => parsePayrollDetailsCsv("email,amount,bonus\nemployee@example.test,100,10", recipients), /Row 2: provide base_amount/);
+  assert.throws(() => parsePayrollDetailsCsv("email,base_amount,adjustment_amount\nemployee@example.test,100,-100", recipients), /Row 2: enter a positive net/);
+  assert.throws(() => parsePayrollDetailsCsv("recipient_id,email,amount\n"+recipientId+",different@example.test,1", recipients), /same payee/);
+  assert.throws(() => createPayrollRun(preparer, { reference: "mismatch-components", periodStart: "2026-11-01", periodEnd: "2026-11-30", items: [{ recipientId, amount: "100", baseAmount: "100", bonusAmount: "20", note: "Supplied bonus" }] }), /Net pay must equal/);
+});
+
 test("milestone acceptance gates release and installments preserve the unpaid invoice liability", () => {
   const { preparer, approver, recipientId } = fixture();
   const bill = createBill(preparer, { recipientId, reference: "MILESTONE-1", title: "Build contract", amount: "1000000000" });
@@ -79,6 +96,35 @@ test("milestone acceptance gates release and installments preserve the unpaid in
   assert.equal(next.uncommitted, "0");
   assert.equal(next.installments.length, 2);
   assert.throws(() => approveBill(approver, bill.id), /Accept the milestone/);
+});
+
+test("resuming payroll reviews only unresolved employees after a paid profile is reassigned", async () => {
+  const { id, preparer, approver, recipientId } = fixture(), db = getDb(), savedAt = new Date().toISOString(), second = randomUUID(), other = randomUUID();
+  db.prepare("UPDATE recipients SET user_id=? WHERE id=?").run(id, recipientId);
+  db.prepare("INSERT INTO recipient_versions(recipient_id,version,profile_ciphertext,changed_by,created_at) VALUES(?,1,?,?,?)").run(recipientId, encrypt(JSON.stringify({ name: "Paid employee", user_id: id })), id, savedAt);
+  db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_asset,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,'Unpaid employee','employee','USDC','near','unpaid.near','confirmed',?,?,?)").run(second, id, savedAt, savedAt, savedAt);
+  const run = createPayrollRun(preparer, { reference: "resume-unpaid", periodStart: "2026-11-01", periodEnd: "2026-11-30", items: [{ recipientId, amount: "100" }, { recipientId: second, amount: "200" }] });
+  approvePayrollRun(approver, run.id);
+  const paid = run.items.find(item => item.recipient_id === recipientId)!.payment_id!, unpaid = run.items.find(item => item.recipient_id === second)!.payment_id!;
+  db.prepare("UPDATE payments SET status='paid',delivered_amount=amount WHERE id=?").run(paid);
+  db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,'Different person',?)").run(other, savedAt);
+  db.prepare("UPDATE recipients SET user_id=?,version=2 WHERE id=?").run(other, recipientId);
+  await cancelManagedPayment(approver, unpaid);
+  const replacement = await replaceCancelledPayment(preparer, unpaid, "Review the remaining unpaid obligation");
+  const result = approveReviewedPayrollRun(approver, run.id, payrollReview(approver, run.id).reviewToken);
+  assert.equal(result.status, "partially_paid");
+  assert.equal(getPayment(preparer, paid).status, "paid");
+  assert.equal(getPayment(preparer, replacement.payment.id).status, "approved_unfunded");
+  assert.equal(result.items.find(item => item.recipient_id === recipientId)!.remainingLiability, "0");
+});
+
+test("a replacement installment preserves its invoice due time", async () => {
+  const { preparer, approver, recipientId } = fixture(), dueDate = "2030-12-01T10:00:00.000Z";
+  const bill = createBill(preparer, { recipientId, reference: "scheduled-installment", title: "Future supplier payment", amount: "100", dueDate });
+  await cancelManagedPayment(approver, bill.payment_id!);
+  const next = addBillInstallment(preparer, bill.id, { amount: "40", maxFee: "1" });
+  assert.equal(getPayment(preparer, next.payment_id!).scheduled_for, dueDate);
+  assert.equal(next.remainingLiability, "100");
 });
 
 test("private settlement evidence is encrypted, scoped and committed without plaintext", () => {
