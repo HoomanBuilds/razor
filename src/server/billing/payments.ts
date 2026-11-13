@@ -5,7 +5,7 @@ import { encrypt, decrypt } from "../identity/crypto";
 import { csvCell } from "../reconciliation/export";
 import { listPublishedPlans, getPlanVersion } from "./catalog";
 import { getEntitlements } from "./entitlements";
-import { applyPurchase, getSubscriptionState, quotePurchase, requireBillingOwner, revokePurchase } from "./subscriptions";
+import { applyPurchase, dependentPurchaseInvoices, getSubscriptionState, quotePurchase, requireBillingOwner, revokePurchase } from "./subscriptions";
 import { billingCheckoutConfiguration, billingIssuer, billingQuoteHash, billingSettings, readBillingInvoice, readBillingRefund, signBillingOffer, offerSignatureMatches, verifyBillingContract, verifiedBillingTransaction, type BillingTarget, type BillingOffer } from "./chain";
 import type { BillingPlan, PurchaseTerms } from "./types";
 import type { BillingInvoice, BillingInvoiceDetail, BillingInvoicePage, BillingOverview } from "./payment-types";
@@ -43,9 +43,10 @@ export function invoicePage(access:AccessContext,page=1,pageSize=25):BillingInvo
 export async function invoiceDetail(access:AccessContext,id:string):Promise<BillingInvoiceDetail> {
   requireBillingOwner(access);const invoice=lookup(access.organizationId,id),checkout=await billingCheckoutConfiguration();
   const owned=!!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND network=? AND address=?",access.userId,invoice.network,invoice.payer_account),offer=latestOffer(invoice);
-  const matches=checkout.ready&&checkout.network===invoice.network&&checkout.billingContract===invoice.billing_contract&&checkout.tokenContract===invoice.token_contract&&offerSignatureMatches(offer.quote_json,offer.signature,checkout.issuerPublicKey);
-  const canSign=matches&&owned&&openStates.includes(invoice.status)&&Date.parse(offer.expires_at)>Date.now();
-  const message=invoice.status==="paid"?"Payment was verified on NEAR and subscription access was applied.":invoice.status==="credit_required"?invoice.credit_reason||"Payment is confirmed and held for refund review; do not pay this invoice again.":invoice.status==="refunded"?"The original payer's refund was verified on NEAR.":!owned?"The original verified payer wallet must be linked before signing. Read-only reconciliation remains available.":!matches?checkout.reason||"This invoice uses another billing deployment. Reconcile its original contract before creating another checkout.":Date.parse(offer.expires_at)<=Date.now()?"The signed offer expired. Refresh this same invoice before opening the wallet; do not create a replacement payment.":"Review the frozen company subscription terms. The contract accepts this invoice only once and returns duplicate or excess transfers.";
+  const matches=checkout.ready&&checkout.network===invoice.network&&checkout.billingContract===invoice.billing_contract&&checkout.tokenContract===invoice.token_contract&&billingSettings().codeHash===invoice.code_hash&&offerSignatureMatches(offer.quote_json,offer.signature,checkout.issuerPublicKey);
+  const currentTerms=getSubscriptionState(access.organizationId).revision===(JSON.parse(invoice.purchase_json) as PurchaseTerms).expectedRevision;
+  const canSign=matches&&owned&&currentTerms&&openStates.includes(invoice.status)&&Date.parse(offer.expires_at)>Date.now();
+  const message=invoice.status==="paid"?"Payment was verified on NEAR and subscription access was applied.":invoice.status==="credit_required"?invoice.credit_reason||"Payment is confirmed and held for refund review; do not pay this invoice again.":invoice.status==="refunded"?"The original payer's refund was verified on NEAR.":!currentTerms?"The company subscription changed after this invoice was prepared. Reconcile any original transfer, then close its unused expired offer before reviewing a new checkout.":!owned?"The original verified payer wallet must be linked before signing. Read-only reconciliation remains available.":!matches?checkout.reason||"This invoice uses another billing deployment. Reconcile its original contract before creating another checkout.":Date.parse(offer.expires_at)<=Date.now()?"The signed offer expired. Refresh this same invoice before opening the wallet; do not create a replacement payment.":"Review the frozen company subscription terms. The contract accepts this invoice only once and returns duplicate or excess transfers.";
   return {invoice:project(invoice),checkout,walletActions:canSign?[action(invoice)]:[],signerAccounts:owned?[invoice.payer_account]:[],network:invoice.network,canSign,message};
 }
 export async function createCheckout(access:AccessContext,input:{planVersionId:string;payerAccount:string;requestKey:string}):Promise<BillingInvoiceDetail> {
@@ -56,7 +57,7 @@ export async function createCheckout(access:AccessContext,input:{planVersionId:s
   if(repeated){if(repeated.request_hash!==requestHash)throw new ApiError(409,"The same checkout key was used with different terms","BILLING_CHECKOUT_CHANGED");return invoiceDetail(access,repeated.id);}
   const open=row<InvoiceRow>("SELECT * FROM billing_invoices WHERE organization_id=? AND status IN ('prepared','claimed','submitted','expired') ORDER BY created_at DESC LIMIT 1",access.organizationId);
   if(open)return invoiceDetail(access,open.id);
-  const billing=billingSettings();billingIssuer();verifiedPayer(access,input.payerAccount,billing.network);await verifyBillingContract(billing,true);
+  const billing=billingSettings();billingIssuer();encrypt("subscription-billing-storage-readiness");verifiedPayer(access,input.payerAccount,billing.network);await verifyBillingContract(billing,true);
   const purchase=quotePurchase(access.organizationId,input.planVersionId),plan=getPlanVersion(input.planVersionId),createdAt=now(),expiresAt=new Date(Math.min(Date.now()+86400000,purchase.kind==="upgrade"&&purchase.endsAt?Date.parse(purchase.endsAt):Number.MAX_SAFE_INTEGER)).toISOString(),id=randomUUID();
   const termsHash=hash(JSON.stringify({version:1,invoiceId:id,purchase,plan,payer:input.payerAccount,network:billing.network,billingContract:billing.billingContract,tokenContract:billing.tokenContract,codeHash:billing.codeHash}));
   const signed=signOffer(id,access.organizationId,plan.id,input.payerAccount,billing,purchase.amount,termsHash,createdAt,expiresAt);
@@ -78,13 +79,13 @@ function assertInvoiceChain(invoice:InvoiceRow,chain:NonNullable<Awaited<ReturnT
   return accepted;
 }
 export async function reconcileInvoice(access:AccessContext,id:string) {requireBillingOwner(access);await reconcileInvoiceForOperator(access.organizationId,id,access.userId);return invoiceDetail(access,id);}
-export async function reconcileInvoiceForOperator(organizationId:string,id:string,userId:string|null=null) {
-  const invoice=lookup(organizationId,id),verified=await readBillingInvoice(target(invoice),id),chain=verified.invoice;
+export async function reconcileInvoiceForOperator(organizationId:string,id:string,userId:string|null=null,blockHash?:string) {
+  const invoice=lookup(organizationId,id),verified=await readBillingInvoice(target(invoice),id,blockHash),chain=verified.invoice;
   if(!chain)return {invoice:project(invoice),observed:false};
   const accepted=assertInvoiceChain(invoice,chain);
   const localRefund=row<RefundRow>("SELECT * FROM billing_refund_requests WHERE invoice_id=? AND status IN ('requested','prepared','pending','failed') ORDER BY created_at DESC LIMIT 1",invoice.id);
   let remoteRefund:Awaited<ReturnType<typeof readBillingRefund>>["refund"]=null;
-  if(localRefund)try{remoteRefund=(await readBillingRefund(target(invoice),localRefund.id)).refund;}catch{}
+  if(localRefund)try{remoteRefund=(await readBillingRefund(target(invoice),localRefund.id,verified.blockHash)).refund;}catch{}
   if(remoteRefund&&localRefund&&(remoteRefund.id!==localRefund.id||remoteRefund.invoice_id!==invoice.id||remoteRefund.amount!==localRefund.amount||!["pending","completed","failed"].includes(remoteRefund.status)))throw new ApiError(409,"The recorded refund differs from this invoice request","BILLING_REFUND_MISMATCH");
   let sourceVerified=false;
   if(invoice.submitted_hash)try{sourceVerified=await verifiedBillingTransaction(target(invoice),invoice.submitted_hash,invoice.payer_account,accepted.quote_json,accepted.signature);}catch{}
@@ -160,7 +161,7 @@ export async function prepareRefundForOperator(refundId:string) {
   const previous=await readBillingRefund(target(invoice),refund.id);
   if(previous.refund?.status==="completed")return reconcileRefundForOperator(refund.id);
   if(previous.refund?.status==="pending")throw new ApiError(409,"The original refund is still pending. Reconcile it before signing another action.","BILLING_REFUND_PENDING");
-  if(row("WITH RECURSIVE dependent(id) AS (SELECT id FROM billing_periods WHERE organization_id=? AND source_invoice_id=? UNION ALL SELECT p.id FROM billing_periods p JOIN dependent d ON p.replaces_period_id=d.id) SELECT p.id FROM billing_periods p JOIN dependent d ON d.id=p.id WHERE p.source_invoice_id!=? AND p.revoked_at IS NULL AND p.ends_at>? LIMIT 1",refund.organization_id,invoice.id,invoice.id,now()))throw new ApiError(409,"Refund the dependent upgrade before its base subscription payment","BILLING_DEPENDENT_UPGRADE");
+  if(dependentPurchaseInvoices(refund.organization_id,invoice.id).length)throw new ApiError(409,"Refund the dependent upgrade before its base subscription payment","BILLING_DEPENDENT_UPGRADE");
   const remaining=BigInt(invoice.amount)-BigInt(verified.invoice.refunded_amount);
   if(BigInt(refund.amount)>remaining||verified.invoice.pending_refund)throw new ApiError(409,"The refund amount or original refund state changed","BILLING_REFUND_CHANGED");
   if(BigInt(verified.config.available)<BigInt(refund.amount))throw new ApiError(409,"The billing operator must top up its refund reserve before authorizing this refund","BILLING_REFUND_RESERVE_REQUIRED");
@@ -173,7 +174,7 @@ export async function reconcileRefundForOperator(refundId:string) {
   const invoice=lookup(refund.organization_id,refund.invoice_id),verified=await readBillingRefund(target(invoice),refund.id),chain=verified.refund;
   if(!chain)return {refundId,status:refund.status,observed:false};
   if(chain.id!==refund.id||chain.invoice_id!==invoice.id||chain.amount!==refund.amount||!["pending","completed","failed"].includes(chain.status))throw new ApiError(409,"The final refund differs from the approved original-payer request","BILLING_REFUND_MISMATCH");
-  const updated=await reconcileInvoiceForOperator(refund.organization_id,refund.invoice_id);
+  const updated=await reconcileInvoiceForOperator(refund.organization_id,refund.invoice_id,null,verified.blockHash);
   if(chain.status==="completed"&&BigInt(updated.invoice.refundedAmount)<BigInt(refund.amount))throw new ApiError(409,"The completed refund is not reflected in the final invoice state","BILLING_REFUND_MISMATCH");
   getDb().prepare("UPDATE billing_refund_requests SET status=?,proof_json=?,updated_at=? WHERE id=?").run(chain.status,JSON.stringify({blockHash:verified.blockHash,blockHeight:verified.blockHeight,refund:chain}),now(),refund.id);
   return {refundId,status:chain.status,observed:true};

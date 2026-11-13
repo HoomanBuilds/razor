@@ -5,6 +5,7 @@ import { ApiError } from "../context";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { validNearAccount } from "../payments/near";
 import { NATIVE_USDC } from "../../lib/native-usdc";
+import { decodeDataEncryptionKey } from "../identity/crypto";
 import type { BillingCheckoutSettings } from "./payment-types";
 
 export interface BillingOffer {version:1;invoice_id:string;company_id:string;plan_version_id:string;payer_id:string;contract_id:string;network:"mainnet"|"testnet";token_contract:string;amount:string;terms_hash:string;issued_at_ms:string;expires_at_ms:string}
@@ -45,10 +46,10 @@ async function view<T>(target:BillingTarget,method:string,args:object={},blockHa
   const result=await rpc<{result:number[];block_hash:string;block_height:number}>(target.network,"query",{request_type:"call_function",...(blockHash?{block_id:blockHash}:{finality:"final"}),account_id:target.billingContract,method_name:method,args_base64:Buffer.from(JSON.stringify(args)).toString("base64")});
   try{return {value:JSON.parse(Buffer.from(result.result).toString()) as T,blockHash:result.block_hash,blockHeight:result.block_height};}catch{throw new ApiError(502,"The billing contract returned invalid data","BILLING_RESPONSE_INVALID");}
 }
-export async function verifyBillingContract(target:BillingTarget,checkout=false) {
+export async function verifyBillingContract(target:BillingTarget,checkout=false,blockHash?:string) {
   const status=await rpc<{chain_id:string}>(target.network,"status",[]);
   if(status.chain_id!==target.network)throw new ApiError(503,"The billing RPC belongs to another network","BILLING_NETWORK_MISMATCH");
-  const account=await rpc<{code_hash:string;block_hash:string;block_height:number}>(target.network,"query",{request_type:"view_account",finality:"final",account_id:target.billingContract});
+  const account=await rpc<{code_hash:string;block_hash:string;block_height:number}>(target.network,"query",{request_type:"view_account",...(blockHash?{block_id:blockHash}:{finality:"final"}),account_id:target.billingContract});
   if(account.code_hash!==target.codeHash)throw new ApiError(503,"The billing contract code differs from the reviewed artifact","BILLING_CODE_MISMATCH");
   if(!account.block_hash||!Number.isSafeInteger(account.block_height))throw new ApiError(502,"The billing code response has no final block identity","BILLING_RESPONSE_INVALID");
   const config=(await view<BillingChainConfig>(target,"get_config",{},account.block_hash)).value;
@@ -59,13 +60,16 @@ export async function verifyBillingContract(target:BillingTarget,checkout=false)
     const token=await rpc<{result:number[]}>(target.network,"query",{request_type:"call_function",block_id:account.block_hash,account_id:target.tokenContract,method_name:"storage_balance_of",args_base64:Buffer.from(JSON.stringify({account_id:target.billingContract})).toString("base64")});
     let storage;try{storage=JSON.parse(Buffer.from(token.result).toString());}catch{}
     if(!storage||!/^\d+$/.test(storage.total)||BigInt(storage.total)===0n)throw new ApiError(503,"Register the billing contract's native USDC token storage before enabling collection","BILLING_TOKEN_STORAGE_REQUIRED");
+    const metadataResult=await rpc<{result:number[]}>(target.network,"query",{request_type:"call_function",block_id:account.block_hash,account_id:target.tokenContract,method_name:"ft_metadata",args_base64:"e30="});
+    let metadata;try{metadata=JSON.parse(Buffer.from(metadataResult.result).toString());}catch{}
+    if(metadata?.decimals!==6||typeof metadata.symbol!=="string")throw new ApiError(503,"Subscription billing requires the reviewed token to use six decimal places","BILLING_TOKEN_METADATA_MISMATCH");
   }
   return {config,blockHash:account.block_hash,blockHeight:account.block_height};
 }
 export async function billingCheckoutConfiguration():Promise<BillingCheckoutSettings> {
   const configuredNetwork=process.env.NEAR_NETWORK==="mainnet"?"mainnet":"testnet";
   try {
-    const target=billingSettings();billingIssuer();await verifyBillingContract(target,true);
+    const target=billingSettings();billingIssuer();if(process.env.NODE_ENV==="production")decodeDataEncryptionKey(process.env.DATA_ENCRYPTION_KEY||"");await verifyBillingContract(target,true);
     return {ready:true,network:target.network,billingContract:target.billingContract,tokenContract:target.tokenContract,issuerPublicKey:billingIssuer().publicKey,reason:null,testnet:target.network==="testnet"};
   }catch(error){if(!(error instanceof ApiError))throw error;return {ready:false,network:configuredNetwork,billingContract:process.env.RAZOR_BILLING_CONTRACT_ID||null,tokenContract:configuredNetwork==="mainnet"?NATIVE_USDC.near:process.env.RAZOR_BILLING_TESTNET_TOKEN_CONTRACT||null,issuerPublicKey:null,reason:error.message,code:error.code,testnet:configuredNetwork==="testnet"};}
 }
@@ -76,13 +80,13 @@ export function signBillingOffer(offer:BillingOffer) {
   const quoteJson=JSON.stringify(offer),issuer=billingIssuer();
   return {quoteJson,signature:base58.encode(ed25519.sign(new TextEncoder().encode(quoteJson),issuer.seed))};
 }
-export async function readBillingInvoice(target:BillingTarget,invoiceId:string) {
-  const verified=await verifyBillingContract(target);
+export async function readBillingInvoice(target:BillingTarget,invoiceId:string,blockHash?:string) {
+  const verified=await verifyBillingContract(target,false,blockHash);
   const invoice=await view<BillingChainInvoice|null>(target,"get_invoice",{invoice_id:invoiceId},verified.blockHash);
   return {...verified,invoice:invoice.value};
 }
-export async function readBillingRefund(target:BillingTarget,refundId:string) {
-  const verified=await verifyBillingContract(target);
+export async function readBillingRefund(target:BillingTarget,refundId:string,blockHash?:string) {
+  const verified=await verifyBillingContract(target,false,blockHash);
   const refund=await view<BillingChainRefund|null>(target,"get_refund",{refund_id:refundId},verified.blockHash);
   return {...verified,refund:refund.value};
 }
