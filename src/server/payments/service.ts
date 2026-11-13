@@ -6,7 +6,7 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { atomic as parseAtomic, usdToToken } from "../../lib/money";
 import { assertCanStartDeposit, assertSameQuote, checkStatus, getSupportedTokens, nativeUsdc, notifyDeposit, requestQuote, type QuoteResponse, type Token } from "./intents";
 import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
-import { contractCodeHash, validNearAccount, view } from "./near";
+import { contractCodeHash, deriveSharedCompanyId, isCompanyBinding, sharedFundingMessage, tokenReceiptIdentity, treasuryAction, validNearAccount, verifyTokenReceipt, view } from "./near";
 import { reviewedArtifactHash } from "../near-artifacts";
 import type { ApprovalStatus, ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
 import { retainPrivateEvidence } from "../reconciliation/evidence";
@@ -20,6 +20,7 @@ import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
 import { assertSameRecipientOwner, recordedRecipientName } from "./recipient-names";
 import { activeClearingRound, assertNoActiveClearing } from "../clearing/locks";
+import { recoveryAuthority } from "../reconciliation/authority";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -117,21 +118,31 @@ function configFor(access: AccessContext, requireMainnet = false): TreasuryConfi
   return config;
 }
 
-export async function configureTreasury(access: AccessContext, input: { nearAccountId: string; network: "mainnet" | "testnet"; tokenContract: string }) {
+export async function configureTreasury(access: AccessContext, input: { nearAccountId: string; network: "mainnet" | "testnet"; tokenContract: string; companyId?: string }) {
   requirePermission(access, "company:manage");
   if (!validNearAccount(input.nearAccountId) || !validNearAccount(input.tokenContract)) throw new ApiError(422, "Enter valid NEAR account IDs", "INVALID_ACCOUNT");
-  const config: TreasuryConfig = { organization_id: access.organizationId, near_account_id: input.nearAccountId, network: input.network, token_contract: input.tokenContract };
+  if (process.env.NEAR_TREASURY_ID && input.nearAccountId !== process.env.NEAR_TREASURY_ID) throw new ApiError(409, "Connect the configured shared Razor treasury", "TREASURY_ACCOUNT_MISMATCH");
+  const current = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
+  if (current && current.architecture !== "shared_v1") throw new ApiError(409, "Existing isolated funds need an explicit migration before changing treasury architecture", "TREASURY_CHANGE_REQUIRES_MIGRATION");
+  const owners = rows<{address: string}>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=?", access.userId, input.network);
+  const companyId = current?.company_id ?? input.companyId ?? (owners.length === 1 ? deriveSharedCompanyId(access.organizationId, owners[0].address) : null);
+  if (!isCompanyBinding(access.organizationId, companyId) || input.companyId && input.companyId !== companyId) throw new ApiError(409, "Select this company's verified onchain registration before connecting it", "TREASURY_COMPANY_MISMATCH");
+  const config: TreasuryConfig = { organization_id: access.organizationId, company_id: companyId, architecture: "shared_v1", near_account_id: input.nearAccountId, network: input.network, token_contract: input.tokenContract };
   if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "This account does not run the reviewed Razor treasury contract", "TREASURY_CODE_MISMATCH");
-  const contract = await view<{ token_contract: string; owner_id: string }>(config, "get_config");
+  const contract = await view<{ token_contract: string; owner_id: string; architecture: string; company_id: string }>(config, "get_config");
+  if (!contract || contract.architecture !== "shared_v1" || contract.company_id !== companyId || typeof contract.owner_id !== "string" || !validNearAccount(contract.owner_id) || !current && companyId !== deriveSharedCompanyId(access.organizationId, contract.owner_id)) throw new ApiError(409, "This contract does not contain the registered company treasury", "TREASURY_COMPANY_MISMATCH");
   if (contract.token_contract !== input.tokenContract) throw new ApiError(422, "The treasury contract uses another settlement token", "SETTLEMENT_TOKEN_MISMATCH");
   if (config.network === "mainnet" && config.token_contract !== "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1") throw new ApiError(422, "Live settlement requires native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
   const wallet = row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, contract.owner_id, config.network);
   if (!wallet) throw new ApiError(403, "Verify the NEAR wallet that owns this treasury before connecting it", "TREASURY_OWNER_UNVERIFIED");
-  const existing = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE network=? AND near_account_id=?", input.network, input.nearAccountId);
+  const existing = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE network=? AND near_account_id=? AND company_id=?", input.network, input.nearAccountId, companyId);
   if (existing && existing.organization_id !== access.organizationId) throw new ApiError(409, "This treasury is connected to another company", "TREASURY_ALREADY_CONNECTED");
-  const current = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
-  if (current && (current.near_account_id !== input.nearAccountId || current.network !== input.network || current.token_contract !== input.tokenContract)) throw new ApiError(409, "A connected company treasury cannot be replaced while its ledger is active", "TREASURY_CHANGE_REQUIRES_MIGRATION");
-  getDb().prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET near_account_id=excluded.near_account_id,network=excluded.network,token_contract=excluded.token_contract").run(access.organizationId, input.nearAccountId, input.network, input.tokenContract, now());
+  if (current && (current.company_id !== companyId || current.near_account_id !== input.nearAccountId || current.network !== input.network || current.token_contract !== input.tokenContract)) throw new ApiError(409, "A connected company treasury cannot be replaced while its ledger is active", "TREASURY_CHANGE_REQUIRES_MIGRATION");
+  transaction(() => {
+    const latest = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
+    if (latest && (latest.architecture !== "shared_v1" || latest.company_id !== companyId || latest.near_account_id !== input.nearAccountId || latest.network !== input.network || latest.token_contract !== input.tokenContract)) throw new ApiError(409, "The company treasury changed during verification. Review the existing ledger before reconnecting.", "TREASURY_CHANGE_REQUIRES_MIGRATION");
+    getDb().prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,architecture,company_id,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(organization_id) DO UPDATE SET near_account_id=excluded.near_account_id,network=excluded.network,token_contract=excluded.token_contract,architecture=excluded.architecture,company_id=excluded.company_id").run(access.organizationId, input.nearAccountId, input.network, input.tokenContract, "shared_v1", companyId, now());
+  });
   return { config, contract, treasury: await syncTreasury(access) };
 }
 
@@ -156,6 +167,7 @@ export async function prepareTreasurySetup(access: AccessContext) {
   const token = { ...config, near_account_id: config.token_contract };
   const registered = await view<{ total: string; available: string } | null>(token, "storage_balance_of", { account_id: config.near_account_id });
   const actions: WalletTransaction[] = [];
+  if (!registered && config.architecture === "shared_v1") throw new ApiError(503, "The shared treasury must be registered for native USDC once by its deployment operator before companies can fund it", "PLATFORM_STORAGE_REQUIRED");
   if (!registered) {
     const bounds = await view<{ min: string }>(token, "storage_balance_bounds");
     actions.push(action({ ...config, near_account_id: config.token_contract }, "storage_deposit", { account_id: config.near_account_id, registration_only: true }, atomic(bounds.min).toString(), "30000000000000"));
@@ -380,7 +392,7 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
 }
 
 function action(config: TreasuryConfig, methodName: string, args: unknown, deposit = "0", gas = "100000000000000"): WalletTransaction {
-  return { receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }] };
+  return treasuryAction(config, methodName, args, deposit, gas);
 }
 
 interface ApprovalPlan {
@@ -682,8 +694,31 @@ export async function prepareRefundConfirmation(access: AccessContext, attemptId
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
   if (chainAttempt?.status !== "refund_pending") throw new ApiError(409, "Report route closure and the pending refund on NEAR first", "REFUND_NOT_REPORTED");
-  const receipt = retainPrivateEvidence(access, attemptId, "refund", input.receipt);
-  return { attempt, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "confirm_refund", { payment_id: attempt.payment_id, attempt_id: attemptId, refund_amount: atomic(input.refundAmount, true).toString(), receipt })] };
+  let receipt: string;
+  let eligibleSigners: string[] | undefined;
+  if (config.architecture === "shared_v1") {
+    const authority = await recoveryAuthority(config, access.userId);
+    if (!authority.refundReporter) throw new ApiError(503, "Configure the shared treasury's verified refund reporter before attributing recovered cash", "REFUND_REPORTER_REQUIRED");
+    eligibleSigners = authority.refundAccounts;
+    if (atomic(input.refundAmount, true) > 0n) {
+      const reportedHashes = [...new Set(evidence.provider.swapDetails?.nearTxHashes ?? [])];
+      const suppliedHash = input.receipt.trim();
+      const transactionHash = reportedHashes.includes(suppliedHash) ? suppliedHash : reportedHashes.length === 1 ? reportedHashes[0] : undefined;
+      if (!transactionHash) throw new ApiError(422, "Enter the refund's NEAR transaction hash from this route's provider report", "REFUND_HASH_UNBOUND");
+      const proof = await verifyTokenReceipt(config, transactionHash, undefined, config.near_account_id, input.refundAmount);
+      receipt = tokenReceiptIdentity(proof);
+      transaction(() => {
+        for (const event of proof.events) {
+          const claimed = row<{ organization_id: string; attempt_id: string; commitment: string }>("SELECT organization_id,attempt_id,commitment FROM shared_refund_receipts WHERE network=? AND token_contract=? AND receipt_id=? AND log_index=? AND data_index=?", config.network, config.token_contract, event.receiptId, event.logIndex, event.dataIndex);
+          if (claimed && (claimed.organization_id !== access.organizationId || claimed.attempt_id !== attemptId || claimed.commitment !== receipt)) throw new ApiError(409, "This returned token receipt is already attributed to another recovery", "REFUND_RECEIPT_REPLAYED");
+          if (row("SELECT id FROM funding_credit_receipts WHERE network=? AND token_contract=? AND receipt_id=? AND log_index=? AND data_index=?", config.network, config.token_contract, event.receiptId, event.logIndex, event.dataIndex)) throw new ApiError(409, "This token receipt was already recognized as funding", "REFUND_RECEIPT_REPLAYED");
+          getDb().prepare("INSERT OR IGNORE INTO shared_refund_receipts(network,token_contract,receipt_id,log_index,data_index,organization_id,attempt_id,commitment,evidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(config.network, config.token_contract, event.receiptId, event.logIndex, event.dataIndex, access.organizationId, attemptId, receipt, JSON.stringify(proof), now());
+        }
+      });
+    } else receipt = `sha256:${createHash("sha256").update(JSON.stringify({ kind: "zero_refund", network: config.network, treasury: config.near_account_id, company: config.company_id, attempt: attemptId })).digest("hex")}`;
+  } else receipt = retainPrivateEvidence(access, attemptId, "refund", input.receipt);
+  if (eligibleSigners && !eligibleSigners.length) throw new ApiError(409, "The refund proof is recorded. The shared treasury's authorized platform reporter must review and sign this recovery.", "PLATFORM_RECOVERY_REQUIRED");
+  return { attempt, requiresReporterAttestation: true, requiresPlatformReporter: config.architecture === "shared_v1", eligibleSigners, refundTransactionHashes: evidence.provider.swapDetails?.nearTxHashes ?? [], evidenceCommitment: receipt, walletActions: [action(config, "confirm_refund", { payment_id: attempt.payment_id, attempt_id: attemptId, refund_amount: atomic(input.refundAmount, true).toString(), receipt })] };
 }
 
 export async function prepareFunding(access: AccessContext, input: { originAsset: string; amount: string; refundAddress: string; reference: string; paymentId?: string; exactOutput?: boolean; dry?: boolean }) {
@@ -708,11 +743,11 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   catch (error) { throw new ApiError(422, error instanceof DestinationError ? error.message : "Check the source-chain recovery address", "REFUND_ADDRESS_INVALID"); }
   const destination = nativeUsdc(tokens, "near");
   if (destination.contractAddress !== config.token_contract) throw new ApiError(409, "The funding settlement asset differs from the verified treasury token", "FUNDING_TARGET_CHANGED");
-  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: "razor:funding" });
+  const fundingId = id();
+  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) });
   if (input.dry) return { dry: true, quote };
   const currentConfig = await verifyCompanyFundingTarget(access);
   if (currentConfig.near_account_id !== config.near_account_id || currentConfig.token_contract !== config.token_contract || currentConfig.network !== config.network) throw new ApiError(409, "The company funding destination changed while requesting this quote", "FUNDING_TARGET_CHANGED");
-  const fundingId = id();
   getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(fundingId, access.organizationId, input.paymentId ?? null, input.reference, input.originAsset, quote.quote.amountIn, quote.quote.amountOut, json(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, "pending_deposit", now(), now());
   getDb().prepare("UPDATE funding_legs SET origin_network=?,origin_decimals=?,origin_symbol=? WHERE id=?").run(sourceToken.blockchain, sourceToken.decimals, sourceToken.symbol, fundingId);
   return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)!;
