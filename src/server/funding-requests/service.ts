@@ -153,11 +153,13 @@ export async function resumePublicQuote(token: string, idempotencyKey: string): 
   const quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND key_hash=? AND funding_id IS NOT NULL", request.id, hashToken(idempotencyKey));
   if (!quote) throw new ApiError(404, "This browser has no saved funding quote", "FUNDING_QUOTE_NOT_FOUND");
   const result = quoteResult(request, quote);
-  if (result.funding.status === "pending_deposit" && !result.funding.source_tx_hash && !["expired", "revoked", "fulfilled", "paused"].includes(result.request.status)) {
+  const requestOpen = !["expired", "revoked", "fulfilled", "paused"].includes(result.request.status);
+  const depositAllowed = requestOpen && result.funding.status === "pending_deposit" && !result.funding.source_tx_hash;
+  if (!result.funding.source_tx_hash && requestOpen) {
     try { await frozenTarget(request); }
     catch (error) { return { ...result, depositAllowed: false, depositBlockedReason: error instanceof ApiError ? error.message : "The company treasury could not be reverified. Check the existing leg before sending funds." }; }
   }
-  return result;
+  return { ...result, depositAllowed, ...(!depositAllowed ? { depositBlockedReason: "This leg is tracking an existing transfer or the request is closed. Do not send another deposit." } : {}) };
 }
 
 export async function preparePublicQuote(token: string, input: { originAsset: string; refundAddress: string; idempotencyKey: string }): Promise<PublicQuoteResult> {
