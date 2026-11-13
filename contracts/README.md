@@ -8,7 +8,11 @@
 ./contracts/build.sh
 ```
 
-Requires Rust 1.86 or newer and the installed `wasm32-unknown-unknown` target. The contracts pin near-sdk to 5.26.1. The script builds the treasury first, embeds that exact WASM into the factory, builds clearing and billing, and writes ignored artifacts to `.tools/wasm`. Builds run serially with one compiler job to limit memory. Set `CARGO_TARGET_DIR` to reuse a build cache. No binary needs to be committed.
+Requires Node 24.22.1 or later, Rust 1.86 or newer, the installed `wasm32-unknown-unknown` target and [Binaryen version 130](https://github.com/WebAssembly/binaryen/releases/tag/version_130). Put `wasm-opt` on PATH or set `WASM_OPT` to its executable. The contracts pin near-sdk to 5.26.1.
+
+The script builds and optimizes the treasury first, embeds those exact optimized bytes into the factory, then builds and optimizes factory, clearing and billing. Binaryen uses `-Oz`, strips debug/function names and producer metadata, and preserves the compiler's WebAssembly feature metadata. Factory memory packing is skipped so the embedded treasury remains byte-verifiable. Overflow checks, financial guards, serialized state and public methods remain intact.
+
+Artifacts are staged and validated before publication under ignored `.tools/wasm`. The manifest records the optimizer version and final deployment hashes. Use these optimized artifacts for deployment; raw Cargo target files have different sizes and hashes. The build shares the application compiler lock, uses one Cargo job and one optimizer thread, and applies the same available-memory guard. Set `CARGO_TARGET_DIR` to reuse a build cache. No binary needs to be committed.
 
 For focused checks:
 
@@ -17,7 +21,11 @@ CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manif
 RAZOR_TREASURY_WASM="$PWD/.tools/wasm/razor_treasury.wasm" CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/razor-factory/Cargo.toml --lib
 ```
 
+Run all four native suites through the shared memory/compilation guard with `bash contracts/check.sh`. Pass a baseline artifact directory as its optional argument to also run the actual-Wasm comparison.
+
 Tests run locally with NEAR's SDK. They do not deploy or spend funds.
+
+For changes to code generation or optimization, the optional [built Wasm compatibility tool](wasm-checks/README.md) compares real baseline and optimized modules using NEAR's local runtime. Its results supplement native unit checks and do not establish live mainnet execution.
 
 The dedicated [billing contract](razor-billing/README.md) collects optional software subscriptions separately from company funds. Its deployment is optional in the planner until paid checkout is enabled.
 

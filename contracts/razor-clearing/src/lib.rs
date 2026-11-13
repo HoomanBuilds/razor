@@ -67,6 +67,18 @@ struct Creation {
     token_contract: AccountId,
     status: String,
 }
+#[near(serializers = [json])]
+pub struct ClearingConfig {
+    pub factory_id: AccountId,
+    pub token_contract: AccountId,
+    pub paused: bool,
+    pub max_participants: u8,
+    pub max_obligations: u8,
+}
+#[derive(serde::Serialize)]
+struct AccountLookup<'a> {
+    account_id: &'a AccountId,
+}
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
 trait Callbacks {
@@ -105,8 +117,14 @@ impl Clearing {
             locks: IterableMap::new(b"l"),
         }
     }
-    pub fn get_config(&self) -> serde_json::Value {
-        serde_json::json!({"factory_id": self.factory_id, "token_contract": self.token_contract, "paused": self.paused, "max_participants": 8, "max_obligations": 32})
+    pub fn get_config(&self) -> ClearingConfig {
+        ClearingConfig {
+            factory_id: self.factory_id.clone(),
+            token_contract: self.token_contract.clone(),
+            paused: self.paused,
+            max_participants: 8,
+            max_obligations: 32,
+        }
     }
     pub fn get_round(&self, round_id: String) -> Option<Round> {
         self.rounds.get(&round_id).cloned()
@@ -149,7 +167,7 @@ impl Clearing {
         for party in &manifest.participants {
             let factory = Promise::new(self.factory_id.clone()).function_call(
                 "get_creation",
-                serde_json::to_vec(&serde_json::json!({"account_id": party.treasury_id})).unwrap(),
+                serde_json::to_vec(&AccountLookup { account_id: &party.treasury_id }).unwrap(),
                 NearToken::from_yoctonear(0),
                 Gas::from_tgas(4),
             );
@@ -462,10 +480,14 @@ fn result<T: near_sdk::serde::de::DeserializeOwned>(index: u64) -> Option<T> {
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
 fn digest(value: &str) -> String {
-    env::sha256(value.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let bytes = env::sha256(value.as_bytes());
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(DIGITS[(byte >> 4) as usize] as char);
+        output.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    output
 }
 fn obligation_key(manifest: &Manifest, edge: &Obligation) -> String {
     format!(

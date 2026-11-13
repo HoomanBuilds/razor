@@ -10,7 +10,8 @@ if (major < 24 || major === 24 && (minor < 22 || minor === 22 && patch < 1)) {
 }
 
 const [mode, ...args] = process.argv.slice(2);
-if (!["build", "dev", "typecheck"].includes(mode)) throw new Error("Choose build, dev or typecheck.");
+if (!["build", "dev", "typecheck", "contracts", "contracts-check"].includes(mode)) throw new Error("Choose build, dev, typecheck, contracts or contracts-check.");
+const contractMode = mode === "contracts" || mode === "contracts-check";
 
 function availableMb() {
   if (process.platform === "linux") {
@@ -47,13 +48,13 @@ for (let attempt = 0; attempt < 2; attempt++) {
 }
 
 const heapOptions = (process.env.NODE_OPTIONS ?? "").replace(/--max-old-space-size(?:=|\s+)\d+/g, "");
-const command = mode === "typecheck"
+const command = contractMode ? [resolve(mode === "contracts" ? "contracts/build.sh" : "contracts/check.sh"), ...args] : mode === "typecheck"
   ? [resolve("node_modules/typescript/bin/tsc"), "--noEmit", ...args]
   : [resolve("node_modules/next/dist/bin/next"), mode, "--webpack", ...args];
-const child = spawn(process.execPath, command, {
+const child = spawn(contractMode ? "bash" : process.execPath, command, {
   stdio: "inherit",
   detached: process.platform !== "win32",
-  env: { ...process.env, NODE_OPTIONS: `${heapOptions} --max-old-space-size=1536`.trim() },
+  env: { ...process.env, NODE_OPTIONS: `${heapOptions} --max-old-space-size=1536`.trim(), ...(contractMode ? { RAZOR_CONTRACT_BUILD_GUARDED: "1", CARGO_BUILD_JOBS: "1", BINARYEN_CORES: "1", RAYON_NUM_THREADS: "1" } : {}) },
 });
 try { setPriority(child.pid, 10); } catch {}
 let stopped = false, lowReadings = 0;

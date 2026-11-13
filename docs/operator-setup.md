@@ -17,7 +17,7 @@ A blocked result exits with status 1. Unsupported arguments exit with status 2. 
 
 ## Deploy reviewed contracts
 
-Build the four contracts serially with `bash contracts/build.sh`. Keep the WASMs and manifest under ignored `.tools/wasm/`. Choose your own distinct NEAR factory and clearing deployment accounts and an owner account. Optional paid subscription collection uses a separate billing deployment with a dedicated public issuer key; see [billing operations](billing-operations.md). Names in command arguments are operator choices, not published Razor deployments.
+Build the four contracts serially with `bash contracts/build.sh`, with Binaryen `wasm-opt` version 130 available. The script optimizes code before publication and embeds the optimized treasury in the factory. Keep the resulting WASMs and manifest under ignored `.tools/wasm/`; raw Cargo target outputs do not match their optimized code pins. Choose your own distinct NEAR factory and clearing deployment accounts and an owner account. Optional paid subscription collection uses a separate billing deployment with a dedicated public issuer key; see [billing operations](billing-operations.md). Names in command arguments are operator choices, not published Razor deployments.
 
 ```sh
 npm run prepare:deployment -- --network mainnet --factory YOUR_FACTORY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near

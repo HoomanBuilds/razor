@@ -1,0 +1,17 @@
+[package]
+name = "razor-wasm-checks"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+publish = false
+license = "MIT"
+
+[dependencies]
+near-vm-runner = "=0.35.1"
+near-parameters = "=0.35.1"
+near-primitives-core = "=0.35.1"
+serde_json = "=1.0.154"
+ed25519-dalek = "=2.2.0"
+bs58 = "=0.5.1"
+sha2 = "=0.10.9"
+wasmparser = "=0.236.1"
