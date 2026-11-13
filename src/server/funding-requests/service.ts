@@ -50,7 +50,7 @@ function progress(request: FundingRequestRecord) {
   return transaction(() => {
     const confirmed = verifiedAmount(request);
     for (const quote of rows<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND state='active'", request.id)) {
-      if (quote.funding_id && verifiedAmount(request, quote.funding_id) > 0n) getDb().prepare("UPDATE funding_request_quotes SET state='closed',updated_at=? WHERE id=?").run(now(), quote.id);
+      if (quote.funding_id && (verifiedAmount(request, quote.funding_id) > 0n || ["refunded_verified", "refunded_attested"].includes(legForQuote(quote).status))) getDb().prepare("UPDATE funding_request_quotes SET state='closed',updated_at=? WHERE id=?").run(now(), quote.id);
     }
     if (confirmed >= atomic(request.amount)) getDb().prepare("UPDATE funding_requests SET status='fulfilled',fulfilled_at=COALESCE(fulfilled_at,?),updated_at=? WHERE id=?").run(now(), now(), request.id);
     return { confirmed, remaining: confirmed >= atomic(request.amount) ? 0n : atomic(request.amount) - confirmed };
@@ -60,6 +60,7 @@ function state(request: FundingRequestRecord, confirmed: bigint) {
   if (confirmed >= atomic(request.amount)) return "fulfilled";
   if (request.revoked_at) return "revoked";
   if (Date.parse(request.expires_at) <= Date.now()) return "expired";
+  if (linkedPaymentClosed(request)) return "payment_closed";
   if (row<{ paused: number }>("SELECT paused FROM organizations WHERE id=?", request.organization_id)?.paused) return "paused";
   const active = activeQuote(request.id);
   const leg = active?.funding_id ? legForQuote(active) : null;
@@ -77,8 +78,14 @@ function publicView(request: FundingRequestRecord): PublicFundingRequest {
 }
 function assertOpen(request: FundingRequestRecord) {
   const current = publicView(request);
-  if (["fulfilled", "revoked", "expired", "paused"].includes(current.status) || request.fulfilled_at) throw new ApiError(409, `This funding request is ${current.status}`, "FUNDING_REQUEST_CLOSED");
+  if (["fulfilled", "revoked", "expired", "paused", "payment_closed"].includes(current.status) || request.fulfilled_at) throw new ApiError(409, `This funding request is ${current.status}`, "FUNDING_REQUEST_CLOSED");
   return current;
+}
+
+function linkedPaymentClosed(request: FundingRequestRecord) {
+  if (!request.payment_id) return false;
+  const payment = row<{ status: string }>("SELECT status FROM payments WHERE id=? AND organization_id=?", request.payment_id, request.organization_id);
+  return !payment || ["paid", "cancelled", "partially_paid"].includes(payment.status);
 }
 
 async function verifyTarget(config: TreasuryConfig, expectedOwner?: string) {
@@ -92,6 +99,7 @@ async function verifyTarget(config: TreasuryConfig, expectedOwner?: string) {
   return contract;
 }
 async function frozenTarget(request: FundingRequestRecord) {
+  if (linkedPaymentClosed(request)) throw new ApiError(409, "This linked obligation is closed. Continue tracking existing deposits without sending another", "FUNDING_REQUEST_CLOSED");
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", request.organization_id);
   if (!config || config.near_account_id !== request.treasury_account_id || config.network !== request.network || config.token_contract !== request.token_contract) throw new ApiError(409, "The verified funding destination changed", "FUNDING_TARGET_CHANGED");
   await verifyTarget(config, request.treasury_owner_id);
@@ -105,7 +113,7 @@ export async function createFundingRequest(access: AccessContext, input: { amoun
   const expiry = new Date(input.expiresAt);
   if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) throw new ApiError(422, "Choose a future funding request expiry", "FUNDING_EXPIRY_INVALID");
   if (!input.purpose.trim() || input.purpose.length > 500) throw new ApiError(422, "Describe the funding purpose in 1 to 500 characters", "FUNDING_PURPOSE_INVALID");
-  if (input.paymentId && !row("SELECT id FROM payments WHERE id=? AND organization_id=? AND status NOT IN ('paid','cancelled')", input.paymentId, access.organizationId)) throw new ApiError(404, "Choose an unpaid payment in this company", "PAYMENT_NOT_FOUND");
+  if (input.paymentId && !row("SELECT id FROM payments WHERE id=? AND organization_id=? AND status NOT IN ('paid','cancelled','partially_paid')", input.paymentId, access.organizationId)) throw new ApiError(404, "Choose an unpaid payment in this company", "PAYMENT_NOT_FOUND");
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   if (!config) throw new ApiError(409, "Connect the company treasury first", "TREASURY_SETUP_REQUIRED");
   const owner = await verifyTarget(config), token = newToken(), id = randomUUID(), createdAt = now();
@@ -146,14 +154,15 @@ function quoteResult(request: FundingRequestRecord, quote: RequestQuote): Public
   if (!quote.origin_token_json) throw new ApiError(409, "Funding instructions are not ready yet", "FUNDING_QUOTE_PENDING");
   const leg = legForQuote(quote);
   const funding: PublicFundingLeg = { id: leg.id, origin_asset: leg.origin_asset, amount_in: leg.amount_in, expected_output: leg.expected_output, deposit_address: leg.deposit_address, deposit_memo: leg.deposit_memo, quote: leg.quote, status: publicLegStatus(request, leg), source_tx_hash: leg.source_tx_hash };
-  return { funding, token: JSON.parse(quote.origin_token_json) as Token, request: publicView(request) };
+  const current = publicView(request), depositAllowed = ["open", "funding_in_progress", "awaiting_confirmation"].includes(current.status) && funding.status === "pending_deposit" && !funding.source_tx_hash;
+  return { funding, token: JSON.parse(quote.origin_token_json) as Token, request: current, depositAllowed, ...(!depositAllowed ? { depositBlockedReason: "This leg already started or its request or linked obligation is closed. Continue tracking existing funds without a new deposit." } : {}) };
 }
 export async function resumePublicQuote(token: string, idempotencyKey: string): Promise<PublicQuoteResult> {
   const request = requestForToken(token); validateKey(idempotencyKey);
   const quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND key_hash=? AND funding_id IS NOT NULL", request.id, hashToken(idempotencyKey));
   if (!quote) throw new ApiError(404, "This browser has no saved funding quote", "FUNDING_QUOTE_NOT_FOUND");
   const result = quoteResult(request, quote);
-  const requestOpen = !["expired", "revoked", "fulfilled", "paused"].includes(result.request.status);
+  const requestOpen = !["expired", "revoked", "fulfilled", "paused", "payment_closed"].includes(result.request.status);
   const depositAllowed = requestOpen && result.funding.status === "pending_deposit" && !result.funding.source_tx_hash;
   if (!result.funding.source_tx_hash && requestOpen) {
     try { await frozenTarget(request); }
@@ -208,6 +217,7 @@ export async function reconcilePublicFunding(token: string, input: { fundingId: 
   const request = requestForToken(token), quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND funding_id=?", request.id, input.fundingId);
   if (!quote) throw new ApiError(404, "Funding leg not found for this link", "FUNDING_QUOTE_NOT_FOUND");
   const funding = legForQuote(quote);
+  if (["refunded_verified", "refunded_attested"].includes(funding.status)) return { request: publicView(request), funding: { id: funding.id, status: funding.status }, confirmationRequired: false };
   if (input.sourceTxHash) {
     if (!input.idempotencyKey || hashToken(input.idempotencyKey) !== quote.key_hash) throw new ApiError(403, "Resume this browser's funding quote before recording its transfer", "FUNDING_QUOTE_PROOF_REQUIRED");
     if (!/^[A-Za-z0-9:_-]{8,160}$/.test(input.sourceTxHash)) throw new ApiError(422, "Enter a valid source transaction hash", "FUNDING_HASH_INVALID");

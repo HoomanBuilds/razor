@@ -51,7 +51,7 @@ export function FundingPage({ token }: { token: string }) {
     setRequest(result.request);
     if (quote) { const resumed = await api<PublicQuoteResult>("/funding-requests/resume", { token, idempotencyKey: quoteKey }); setQuote(resumed); }
   }
-  const closed = request ? ["fulfilled", "expired", "revoked", "paused"].includes(request.status) : false;
+  const closed = request ? ["fulfilled", "expired", "revoked", "paused", "payment_closed"].includes(request.status) : false;
   const choices = tokens.filter((asset) => `${asset.symbol} ${asset.blockchain}`.toLowerCase().includes(search.toLowerCase()));
   return <div className="grid gap-6">
     {loading && <Empty>Loading secure funding request...</Empty>}
