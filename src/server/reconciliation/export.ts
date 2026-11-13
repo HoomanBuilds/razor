@@ -1,6 +1,9 @@
 import { formatUnits } from "../../lib/money";
 import { requirePermission, type AccessContext } from "../context";
-import { rows } from "../db";
+import { recordedRecipientName } from "../payments/recipient-names";
+import { liabilityPayments } from "../partial-settlement/model";
+import { liabilityTotals } from "./liability";
+import { rows, transaction } from "../db";
 import { decrypt } from "../identity/crypto";
 import type {
   ChainPayment,
@@ -38,10 +41,19 @@ function usdc(value: string | undefined | null): string {
     : formatUnits(value);
 }
 
+function tokenQuantity(value:string|undefined|null,decimals:number|undefined|null) {
+  if(!value||decimals===null||decimals===undefined||!Number.isInteger(decimals)||decimals<0||decimals>38)return "";
+  try{return formatUnits(value,decimals);}catch{return "";}
+}
+
 type RecordRow = Record<string, unknown>;
 
 export function accountingExport(access: AccessContext): string {
   requirePermission(access, "reports:read");
+  return transaction(()=>accountingSnapshot(access));
+}
+
+function accountingSnapshot(access:AccessContext):string {
   const payments = rows<Payment>(
     "SELECT * FROM payments WHERE organization_id=? ORDER BY created_at,id",
     access.organizationId,
@@ -105,6 +117,10 @@ export function accountingExport(access: AccessContext): string {
       .map((item) => [item.payment_id, item]),
   );
   const billById = new Map(bills.map((bill) => [bill.id, bill]));
+  const installments=rows<{bill_id:string;payment_id:string}>("SELECT i.bill_id,i.payment_id FROM bill_installments i JOIN bills b ON b.id=i.bill_id JOIN payments p ON p.id=i.payment_id WHERE b.organization_id=? AND p.organization_id=? AND p.recipient_id=b.recipient_id ORDER BY p.created_at,p.id",access.organizationId,access.organizationId);
+  for(const installment of installments){const bill=billById.get(installment.bill_id);if(bill)billByPayment.set(installment.payment_id,bill);}
+  const successors=new Map(rows<{old_payment_id:string;new_payment_id:string}>("SELECT original_payment_id AS old_payment_id,remainder_payment_id AS new_payment_id FROM partial_remainders WHERE organization_id=? UNION ALL SELECT old_payment_id,new_payment_id FROM payment_replacements WHERE organization_id=?",access.organizationId,access.organizationId).map(value=>[value.old_payment_id,value.new_payment_id]));
+  const historicalNames=new Map(payments.map(payment=>[payment.id,recordedRecipientName(access.organizationId,payment)]));
   const runs = new Map(
     rows<{
       id: string;
@@ -136,7 +152,7 @@ export function accountingExport(access: AccessContext): string {
     return {
       payment_id: payment.id,
       recipient_id: payment.recipient_id,
-      recipient_name: names.get(payment.recipient_id),
+      recipient_name: historicalNames.get(payment.id),
       payment_kind: payment.kind,
       payment_reference: payment.reference,
       bill_id: bill?.id,
@@ -154,6 +170,7 @@ export function accountingExport(access: AccessContext): string {
     const netCost =
       BigInt(payment.total_spent) -
       BigInt(payment.delivered_amount);
+    const unpaid=BigInt(payment.amount)-BigInt(payment.delivered_amount),successor=successors.get(payment.id);
     records.push({
       ...common(payment),
       record_type: "obligation",
@@ -163,7 +180,10 @@ export function accountingExport(access: AccessContext): string {
       entitlement_usdc: usdc(payment.amount),
       entitlement_micro_usdc: payment.amount,
       delivered_entitlement_usdc: usdc(payment.delivered_amount),
-      remaining_entitlement_usdc: usdc((BigInt(payment.amount)-BigInt(payment.delivered_amount)).toString()),
+      remaining_entitlement_usdc: usdc((payment.status==="cancelled"||successor?0n:unpaid).toString()),
+      unpaid_recorded_entitlement_usdc:usdc(unpaid.toString()),
+      successor_payment_id:successor,
+      transferred_entitlement_usdc:successor?usdc(unpaid.toString()):"0",
       max_cost_usdc: usdc(payment.max_fee),
       max_cost_micro_usdc: payment.max_fee,
       recorded_source_spent_usdc: usdc(payment.total_spent),
@@ -173,7 +193,7 @@ export function accountingExport(access: AccessContext): string {
       verification:
         payment.status === "paid"
           ? "closed_by_NEAR_treasury_state; see_attempt_provenance"
-          : payment.status === "partially_paid" ? "terminal_partial_NEAR_reporter_attestation; remainder_requires_new_approval" : "unresolved_obligation",
+          : payment.status === "cancelled"?"retired_payment; see_invoice_or_payroll_liability_and_successor":payment.status === "partially_paid" ? successor?"terminal_partial_NEAR_reporter_attestation; remaining_entitlement_transferred_to_successor":"terminal_partial_NEAR_reporter_attestation; remainder_requires_new_approval" : "unresolved_obligation",
     });
   }
   for (const attempt of attempts) {
@@ -222,18 +242,19 @@ export function accountingExport(access: AccessContext): string {
       destination_network: attempt.destination_network,
       destination_address: attempt.destination_address,
       quoted_output_base_units: attempt.expected_output,
-      quoted_output:
-        decimals !== null && decimals !== undefined
-          ? formatUnits(attempt.expected_output, decimals)
-          : "",
+      quoted_output:tokenQuantity(attempt.expected_output,decimals),
+      destination_decimals:decimals,
       authorized_source_usdc: usdc(attempt.amount_in),
       authorized_source_micro_usdc: attempt.amount_in,
       source_debited_usdc: sent ? usdc(attempt.amount_in) : "",
       source_debited_micro_usdc: sent ? attempt.amount_in : "",
       provider_consumed_source_usdc: usdc(provider?.amountIn),
       provider_reported_output_base_units: provider?.amountOut,
+      provider_reported_output:tokenQuantity(provider?.amountOut,decimals),
       observed_output_base_units: attempt.observed_output,
+      observed_output:tokenQuantity(attempt.observed_output,decimals),
       attested_output_base_units: chainAttempt?.actual_output,
+      attested_output:tokenQuantity(chainAttempt?.actual_output,decimals),
       attested_entitlement_credit_usdc: usdc(chainAttempt?.credited_amount),
       provider_reported_refund_usdc: usdc(provider?.refundedAmount),
       verified_recovery_usdc: usdc(recovered),
@@ -336,14 +357,15 @@ export function accountingExport(access: AccessContext): string {
         "ledger_state_change; reservation_entries_are_not_transfers",
     });
   }
-  for (const bill of bills)
+  for (const bill of bills){
+    const related=installments.filter(item=>item.bill_id===bill.id).flatMap(item=>{const payment=paymentById.get(item.payment_id);return payment?[payment]:[];}),totals=liabilityTotals(bill.amount,related,bill.setoff_amount);
     records.push({
       ...common(bill.payment_id ? paymentById.get(bill.payment_id) : undefined),
       record_type: "invoice",
       record_id: bill.id,
       created_at: bill.created_at,
       recipient_id: bill.recipient_id,
-      recipient_name: names.get(bill.recipient_id),
+      recipient_name:related[0]?historicalNames.get(related[0].id):names.get(bill.recipient_id),
       status: bill.status,
       bill_id: bill.id,
       bill_reference: bill.reference,
@@ -356,16 +378,23 @@ export function accountingExport(access: AccessContext): string {
       setoff_micro_usdc: bill.setoff_amount,
       max_cost_usdc: usdc(bill.max_fee),
       max_cost_micro_usdc: bill.max_fee,
-      verification: "invoice_record; obligation_row_is_the_payment_liability",
+      delivered_entitlement_usdc:usdc(totals.delivered.toString()),
+      remaining_entitlement_usdc:usdc(totals.remaining.toString()),
+      unprepared_liability_usdc:usdc(totals.unprepared.toString()),
+      recorded_source_spent_usdc:usdc(totals.sourceSpent.toString()),
+      recorded_net_cost_usdc:usdc(totals.netCost.toString()),
+      verification: "invoice_liability_summary; installment_obligations_are_linked_records_not_additional_invoice_debt",
     });
-  for (const item of payroll)
+  }
+  for (const item of payroll){
+    const related=liabilityPayments(access.organizationId,item.payment_id),totals=liabilityTotals(item.amount,related);
     records.push({
       ...common(paymentById.get(item.payment_id)),
       record_type: "payroll_item",
       record_id: item.id,
       created_at: item.created_at,
       recipient_id: item.recipient_id,
-      recipient_name: names.get(item.recipient_id),
+      recipient_name:related[0]?historicalNames.get(related[0].id):names.get(item.recipient_id),
       status: item.status,
       payroll_run_id: item.run_id,
       payroll_reference: item.reference,
@@ -375,8 +404,14 @@ export function accountingExport(access: AccessContext): string {
       entitlement_micro_usdc: item.amount,
       max_cost_usdc: usdc(item.max_fee),
       max_cost_micro_usdc: item.max_fee,
-      verification: "payroll_item; obligation_row_is_the_payment_liability",
+      delivered_entitlement_usdc:usdc(totals.delivered.toString()),
+      remaining_entitlement_usdc:usdc(totals.remaining.toString()),
+      unprepared_liability_usdc:usdc(totals.unprepared.toString()),
+      recorded_source_spent_usdc:usdc(totals.sourceSpent.toString()),
+      recorded_net_cost_usdc:usdc(totals.netCost.toString()),
+      verification: "payroll_item_liability_summary; partial_and_replacement_obligations_are_linked_records",
     });
+  }
   for (const entry of clientReserveExportRows(access))
     records.push({
       ...common(
@@ -423,6 +458,7 @@ export function accountingExport(access: AccessContext): string {
     "destination_asset_id",
     "destination_network",
     "destination_address",
+    "destination_decimals",
     "quoted_output",
     "quoted_output_base_units",
     "authorized_source_usdc",
@@ -431,6 +467,7 @@ export function accountingExport(access: AccessContext): string {
     "source_debited_micro_usdc",
     "provider_consumed_source_usdc",
     "provider_reported_output_base_units",
+    "provider_reported_output",
     "provider_reported_refund_usdc",
     "recorded_source_spent_usdc",
     "recorded_source_spent_micro_usdc",
@@ -463,8 +500,14 @@ export function accountingExport(access: AccessContext): string {
     "verification",
     "delivered_entitlement_usdc",
     "remaining_entitlement_usdc",
+    "unpaid_recorded_entitlement_usdc",
+    "transferred_entitlement_usdc",
+    "successor_payment_id",
+    "unprepared_liability_usdc",
     "observed_output_base_units",
+    "observed_output",
     "attested_output_base_units",
+    "attested_output",
     "attested_entitlement_credit_usdc",
     "setoff_usdc",
     "setoff_micro_usdc",

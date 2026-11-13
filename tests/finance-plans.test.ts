@@ -4,7 +4,7 @@ import { ApiError, type AccessContext } from "../src/server/context";
 import { getDb, row } from "../src/server/db";
 import { encrypt } from "../src/server/identity/crypto";
 import { financeSourceFingerprint, planningInput, validateModelPlan, type PlanSource } from "../src/server/assistant/finance/plans";
-import { financeInsights, prepareFinancePlan, proposeFinancePlan } from "../src/server/assistant/finance/service";
+import { financeInsights, financePlanEvidence, prepareFinancePlan, proposeFinancePlan } from "../src/server/assistant/finance/service";
 import { sha256 } from "../src/server/assistant/verification";
 
 process.env.DATABASE_PATH=":memory:";
@@ -39,6 +39,7 @@ test("retained reviewed proposals preserve fixed fees, create drafts only and re
   const validated=validateModelPlan(output,source),payload={instruction:"Split the capped net budget between r1 and r2",source,sourceFingerprint:financeSourceFingerprint(source),allocations:validated.allocations,total:validated.total,feeBudget:"2000000",maximumCost:"5000000",explanation:validated.explanation,warnings:validated.warnings,verification:{ok:true,provider:"NEAR AI Cloud",signatureKind:"provider_tee",requestBound:true,responseBound:true,gatewayTlsBound:true,gpuEvidenceVerified:true},context:{availableUSDC:"100000000",lastSyncedAt:now}};
   const hash=sha256(JSON.stringify(payload));
   db.prepare("INSERT INTO finance_plans (id,organization_id,created_by,plan_hash,source_fingerprint,payload_ciphertext,evidence_ciphertext,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)").run("stored-review-fixture",access.organizationId,access.userId,hash,payload.sourceFingerprint,encrypt(JSON.stringify(payload)),encrypt(JSON.stringify({fixture:"Stored verification metadata for preparation checks; not a live inference"})),now,new Date(Date.now()+60000).toISOString());
+  assert.equal(sha256(JSON.stringify(financePlanEvidence(access,"stored-review-fixture").payload)),hash);
   assert.throws(()=>prepareFinancePlan({...access,permissions:["payments:approve"]},"stored-review-fixture",hash),(error)=>error instanceof ApiError&&error.status===403);
   const prepared=prepareFinancePlan(access,"stored-review-fixture",hash),retry=prepareFinancePlan(access,"stored-review-fixture",hash);
   assert.equal(prepared.run.id,retry.run.id);assert.equal(prepared.run.status,"draft");assert.equal(prepared.run.maxFees,"2000000");
@@ -46,4 +47,17 @@ test("retained reviewed proposals preserve fixed fees, create drafts only and re
   assert.equal(row<{count:number}>("SELECT count(*) AS count FROM payroll_runs")!.count,1);
   db.prepare("UPDATE recipients SET version=2 WHERE id='alice'").run();
   assert.throws(()=>prepareFinancePlan(access,"stored-review-fixture",hash),(error)=>error instanceof ApiError&&error.code==="FINANCE_SOURCE_CHANGED");
+});
+
+test("cash coverage includes client holds and unprepared invoice principal",()=>{
+  const id="coverage-with-client-hold";
+  db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,'Coverage',?,?,?)").run(id,access.userId,now,now);
+  db.prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,updated_at) VALUES(?,'50000000','7000000',?)").run(id,now);
+  db.prepare("INSERT INTO client_reserves(id,organization_id,request_key,creation_fingerprint,amount,purpose_ciphertext,created_by,created_at,updated_at) VALUES(?,?,'held','held','10000000',?,?,?,?)").run("coverage-client-hold",id,encrypt("Client principal"),access.userId,now,now);
+  db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_network,primary_address,created_at,updated_at) VALUES(?,?,'Supplier','business','near','supplier.near',?,?)").run(id,id,now,now);
+  db.prepare("INSERT INTO bills(id,organization_id,recipient_id,reference,title,amount,created_by,created_at,updated_at) VALUES(?,?,?,'Awaiting installment',?,'60000000',?,?,?)").run(id,id,id,encrypt("Remaining invoice"),access.userId,now,now);
+  const insights=financeInsights({...access,organizationId:id});
+  assert.equal(insights.cash.reserved,"17000000");assert.equal(insights.cash.clientReserved,"10000000");assert.equal(insights.cash.paymentReserved,"7000000");assert.equal(insights.cash.available,"33000000");
+  assert.equal(insights.coverage.unpreparedInvoiceUSDC,"60000000");assert.equal(insights.coverage.shortfallUSDC,"27000000");
+  assert.ok(insights.warnings.some(warning=>warning.code==="UNPREPARED_INVOICE_LIABILITY"));
 });

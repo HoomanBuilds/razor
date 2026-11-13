@@ -5,11 +5,12 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { reservePositions } from "../client-reserves/accounting";
 import { paymentBudget } from "../../lib/payment-budget";
 import type { FundingLeg, Payment } from "../payments/types";
+import { liabilityTotals } from "../reconciliation/liability";
 import { csvCell } from "../reconciliation/export";
 
 type Classification = "earned_revenue" | "client_deposit" | "internal_transfer";
 interface Entry { funding_id: string; project_reference_ciphertext: string; cost_center_reference_ciphertext: string | null; classification: Classification; evidence_ciphertext: string; version: number; updated_at: string }
-interface Bucket { reference: string; earnedReceipts: bigint; clientDeposits: bigint; internalTransfers: bigint; heldReceipts: bigint; settledPayments: bigint; sourceSpent: bigint; dischargedDebt: bigint; openBudget: bigint; unresolvedPayments: number }
+interface Bucket { reference: string; earnedReceipts: bigint; clientDeposits: bigint; internalTransfers: bigint; heldReceipts: bigint; settledPayments: bigint; sourceSpent: bigint; dischargedDebt: bigint; openBudget: bigint; unpreparedLiability:bigint; remainingLiability:bigint; unresolvedPayments: number }
 
 function verifiedCredit(organizationId: string, funding: FundingLeg) {
   const receipts = rows<{ amount: string }>("SELECT amount FROM funding_credit_receipts WHERE organization_id=? AND funding_id=?", organizationId, funding.id);
@@ -50,7 +51,7 @@ function projectReportSnapshot(access: AccessContext) {
   const held = clientRestrictions(access.organizationId);
   const projects = new Map<string, Bucket>(), costCenters = new Map<string, Bucket>();
   const bucket = (map: Map<string, Bucket>, reference: string) => {
-    if (!map.has(reference)) map.set(reference, { reference, earnedReceipts: 0n, clientDeposits: 0n, internalTransfers: 0n, heldReceipts: 0n, settledPayments: 0n, sourceSpent: 0n, dischargedDebt: 0n, openBudget: 0n, unresolvedPayments: 0 });
+    if (!map.has(reference)) map.set(reference, { reference, earnedReceipts: 0n, clientDeposits: 0n, internalTransfers: 0n, heldReceipts: 0n, settledPayments: 0n, sourceSpent: 0n, dischargedDebt: 0n, openBudget: 0n, unpreparedLiability:0n, remainingLiability:0n, unresolvedPayments: 0 });
     return map.get(reference)!;
   };
   const dimensions = (projectReference: string | null, costCenterReference: string | null) => [projectReference ? bucket(projects, projectReference) : null, costCenterReference ? bucket(costCenters, costCenterReference) : null].filter((value): value is Bucket => value !== null);
@@ -67,22 +68,24 @@ function projectReportSnapshot(access: AccessContext) {
     }
     return { id: leg.id, reference: leg.reference, verifiedCredit: credit.toString(), projectReference: reference, costCenterReference, classification: entry?.classification ?? null, version: entry?.version ?? 0, evidence: entry ? decrypt(entry.evidence_ciphertext) : null, heldForClient };
   });
-  for (const bill of rows<{ id: string; project_reference: string | null; cost_center_reference: string | null; setoff_amount:string }>("SELECT id,project_reference,cost_center_reference,setoff_amount FROM bills WHERE organization_id=? AND (project_reference IS NOT NULL OR cost_center_reference IS NOT NULL)", access.organizationId)) {
+  for (const bill of rows<{ id: string; project_reference: string | null; cost_center_reference: string | null; amount:string; setoff_amount:string }>("SELECT id,project_reference,cost_center_reference,amount,setoff_amount FROM bills WHERE organization_id=? AND (project_reference IS NOT NULL OR cost_center_reference IS NOT NULL)", access.organizationId)) {
     const values = dimensions(bill.project_reference ? decrypt(bill.project_reference) : null, bill.cost_center_reference ? decrypt(bill.cost_center_reference) : null);
     for (const value of values) value.dischargedDebt += BigInt(bill.setoff_amount);
     const payments = rows<Payment>("SELECT p.* FROM payments p JOIN bill_installments i ON i.payment_id=p.id WHERE i.bill_id=? AND p.organization_id=?", bill.id, access.organizationId);
+    const totals=liabilityTotals(bill.amount,payments,bill.setoff_amount);
+    for(const value of values){value.unpreparedLiability+=totals.unprepared;value.remainingLiability+=totals.remaining;}
     for (const value of values) for (const payment of payments) {
       value.sourceSpent += BigInt(payment.total_spent);
       if (["paid", "partially_paid"].includes(payment.status)) value.settledPayments += BigInt(payment.total_spent);
       else if (payment.status !== "cancelled") { value.openBudget += paymentBudget(payment).remaining; value.unresolvedPayments++; }
     }
   }
-  const serialize = (map: Map<string, Bucket>) => [...map.values()].sort((a, b) => a.reference.localeCompare(b.reference)).map(value => ({ ...value, earnedReceipts: value.earnedReceipts.toString(), clientDeposits: value.clientDeposits.toString(), internalTransfers: value.internalTransfers.toString(), heldReceipts: value.heldReceipts.toString(), settledPayments: value.settledPayments.toString(), sourceSpent: value.sourceSpent.toString(), dischargedDebt: value.dischargedDebt.toString(), openBudget: value.openBudget.toString(), cashResult: (value.earnedReceipts - value.sourceSpent).toString() }));
+  const serialize = (map: Map<string, Bucket>) => [...map.values()].sort((a, b) => a.reference.localeCompare(b.reference)).map(value => ({ ...value, earnedReceipts: value.earnedReceipts.toString(), clientDeposits: value.clientDeposits.toString(), internalTransfers: value.internalTransfers.toString(), heldReceipts: value.heldReceipts.toString(), settledPayments: value.settledPayments.toString(), sourceSpent: value.sourceSpent.toString(), dischargedDebt: value.dischargedDebt.toString(), openBudget: value.openBudget.toString(), unpreparedLiability:value.unpreparedLiability.toString(), remainingLiability:value.remainingLiability.toString(), cashResult: (value.earnedReceipts - value.sourceSpent).toString() }));
   return { projects: serialize(projects), costCenters: serialize(costCenters), funding, canClassify: access.permissions.includes("payments:approve"), unassignedClientHolds: held.unassigned };
 }
 
 export function projectExport(access: AccessContext) {
-  const headers = ["dimension", "reference", "earned_receipts_micro_usdc", "client_deposits_micro_usdc", "internal_transfers_micro_usdc", "receipts_held_for_client_review_micro_usdc", "settled_payment_cost_micro_usdc", "actual_source_spent_micro_usdc", "debt_discharged_without_cash_micro_usdc", "open_maximum_budget_micro_usdc", "classified_cash_result_micro_usdc", "unresolved_payment_count"];
+  const headers = ["dimension", "reference", "earned_receipts_micro_usdc", "client_deposits_micro_usdc", "internal_transfers_micro_usdc", "receipts_held_for_client_review_micro_usdc", "settled_payment_cost_micro_usdc", "actual_source_spent_micro_usdc", "debt_discharged_without_cash_micro_usdc", "open_maximum_budget_micro_usdc", "unprepared_net_liability_micro_usdc", "remaining_invoice_liability_micro_usdc", "classified_cash_result_micro_usdc", "unresolved_payment_count"];
   const report = projectReports(access);
-  return [headers, ...[["project", report.projects], ["cost_center", report.costCenters]].flatMap(([dimension, values]) => (values as typeof report.projects).map(item => [dimension, item.reference, item.earnedReceipts, item.clientDeposits, item.internalTransfers, item.heldReceipts, item.settledPayments, item.sourceSpent, item.dischargedDebt, item.openBudget, item.cashResult, item.unresolvedPayments]))].map(values => values.map(csvCell).join(",")).join("\r\n");
+  return [headers, ...[["project", report.projects], ["cost_center", report.costCenters]].flatMap(([dimension, values]) => (values as typeof report.projects).map(item => [dimension, item.reference, item.earnedReceipts, item.clientDeposits, item.internalTransfers, item.heldReceipts, item.settledPayments, item.sourceSpent, item.dischargedDebt, item.openBudget, item.unpreparedLiability, item.remainingLiability, item.cashResult, item.unresolvedPayments]))].map(values => values.map(csvCell).join(",")).join("\r\n");
 }

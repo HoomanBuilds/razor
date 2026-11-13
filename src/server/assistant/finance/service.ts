@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
 export { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
+import { liabilityTotals } from "../../reconciliation/liability";
 import { paymentBudget } from "../../../lib/payment-budget";
 import { ApiError, requirePermission, type AccessContext } from "../../context";
 import { getDb, row, rows, transaction } from "../../db";
@@ -38,15 +39,17 @@ export function financeInsights(access:AccessContext) {
     if(/^(bill|payroll):/.test(reference))reference=payment.kind==="payroll"?"Payroll payment":"Invoice payment";
     return {...summary,reference,remainingBudgetUSDC:cost.toString(),unreservedUSDC:needed.toString()};
   });
-  const available=BigInt(treasury.available),shortfall=unreserved>available?unreserved-available:0n;
+  const unpreparedInvoices=rows<{id:string;amount:string;setoff_amount:string}>("SELECT id,amount,setoff_amount FROM bills WHERE organization_id=?",access.organizationId).reduce((sum,bill)=>sum+liabilityTotals(bill.amount,rows<{amount:string;delivered_amount:string;total_spent:string;status:string}>("SELECT p.amount,p.delivered_amount,p.total_spent,p.status FROM payments p JOIN bill_installments i ON i.payment_id=p.id WHERE i.bill_id=? AND p.organization_id=?",bill.id,access.organizationId),bill.setoff_amount).unprepared,0n);
+  const available=BigInt(treasury.available),neededTotal=unreserved+unpreparedInvoices,shortfall=neededTotal>available?neededTotal-available:0n;
   const warnings:Array<Record<string,unknown>>=duplicateInvoiceWarnings(rows<{id:string;recipient_id:string;reference:string;amount:string;created_at:string}>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?",access.organizationId));
   for(const payment of open)if(payment.status==="partially_paid")warnings.push({code:"PARTIAL_REMAINDER_REQUIRED",message:"A terminal partial delivery left unpaid entitlement. Prepare a new remainder with current recipient terms and fresh approval; the original cannot retry.",paymentId:payment.id,remainingUSDC:(BigInt(payment.amount)-BigInt(payment.delivered_amount)).toString()});
   if(!treasury.lastSyncedAt||Date.now()-Date.parse(treasury.lastSyncedAt)>300000)warnings.unshift({code:"CASH_SNAPSHOT_STALE",message:"Cash coverage uses the last recorded NEAR treasury snapshot. Sync it before making funding decisions."});
-  if(shortfall>0n)warnings.unshift({code:"CASH_SHORTFALL",message:"Recorded available cash is below the unreserved remaining payment budgets. This includes draft proposals; no payment has been blocked or approved by this calculation.",amountUSDC:shortfall.toString()});
+  if(unpreparedInvoices>0n)warnings.unshift({code:"UNPREPARED_INVOICE_LIABILITY",message:"Invoice principal remains without an active installment or remainder. It is included in the coverage gap; future routing fees are not assumed.",amountUSDC:unpreparedInvoices.toString()});
+  if(shortfall>0n)warnings.unshift({code:"CASH_SHORTFALL",message:"Recorded available cash is below unreserved payment budgets and unprepared invoice principal. This includes draft proposals; no payment has been blocked or approved by this calculation.",amountUSDC:shortfall.toString()});
   for(const payment of open)if(BigInt(payment.total_spent)>BigInt(payment.amount)+BigInt(payment.max_fee))warnings.push({code:"BUDGET_OVERAGE",message:"Recorded payment spend exceeds its approved amount and fee budget. Review its receipts.",paymentId:payment.id});
   let privateAI:ReturnType<typeof getAssistantConfig>|{ready:false;reason:string;retentionDays:null};
   try{privateAI=getAssistantConfig();}catch(error){privateAI={ready:false,reason:error instanceof Error?error.message:"Private AI configuration needs attention",retentionDays:null};}
-  return {cash:{balance:treasury.balance,reserved:treasury.reserved,available:treasury.available,lastSyncedAt:treasury.lastSyncedAt},coverage:{upcomingUSDC:upcoming.toString(),unreservedUSDC:unreserved.toString(),draftUSDC:drafts.toString(),committedUSDC:committed.toString(),shortfallUSDC:shortfall.toString(),includesDrafts:true,awaitingReconciliationUSDC:awaitingReconciliation.toString()},upcoming:budgets.slice(0,100),held:budgets.filter(item=>/held|hold|recovery|unknown/.test(item.status)||item.hold_reason).slice(0,100),openCount:open.length,warnings,privateAI};
+  return {cash:{balance:treasury.balance,reserved:treasury.totalReserved,paymentReserved:treasury.paymentReserved,clientReserved:treasury.clientReserved,linkedFundingReserved:treasury.linkedFundingReserved,available:treasury.available,lastSyncedAt:treasury.lastSyncedAt},coverage:{upcomingUSDC:upcoming.toString(),unreservedUSDC:unreserved.toString(),unpreparedInvoiceUSDC:unpreparedInvoices.toString(),draftUSDC:drafts.toString(),committedUSDC:committed.toString(),shortfallUSDC:shortfall.toString(),includesDrafts:true,awaitingReconciliationUSDC:awaitingReconciliation.toString()},upcoming:budgets.slice(0,100),held:budgets.filter(item=>/held|hold|recovery|unknown/.test(item.status)||item.hold_reason).slice(0,100),openCount:open.length,warnings,privateAI};
 }
 
 function selectedRecipients(access:AccessContext,input:PlanningInput):SelectedRecipient[] {
@@ -76,7 +79,7 @@ export function financePlanEvidence(access:AccessContext,id:string) {
   const stored=row<StoredPlan>("SELECT * FROM finance_plans WHERE id=? AND organization_id=?",id,access.organizationId);
   if(!stored)throw new ApiError(404,"Finance proposal not found or retention expired","FINANCE_PLAN_NOT_FOUND");
   audit(access.userId,access.organizationId,"finance_plan.evidence_viewed",id);
-  return {id,hash:stored.plan_hash,sourceFingerprint:stored.source_fingerprint,evidence:JSON.parse(decrypt(stored.evidence_ciphertext)),expiresAt:stored.expires_at};
+  return {id,hash:stored.plan_hash,sourceFingerprint:stored.source_fingerprint,payload:JSON.parse(decrypt(stored.payload_ciphertext)),evidence:JSON.parse(decrypt(stored.evidence_ciphertext)),expiresAt:stored.expires_at};
 }
 
 export async function proposeFinancePlan(access:AccessContext,data:PlanningInput) {
@@ -86,7 +89,7 @@ export async function proposeFinancePlan(access:AccessContext,data:PlanningInput
   const source:PlanSource={reference:input.reference,periodStart:input.periodStart,periodEnd:input.periodEnd,maxTotal:parseUnits(input.maxTotal,6),maxFeePerPayment:parseUnits(input.maxFeePerPayment,6),selected};
   const feeBudget=(BigInt(source.maxFeePerPayment)*BigInt(selected.length)).toString();
   const coverage=financeInsights(access).coverage,context={availableUSDC:cash.available,lastSyncedAt:cash.lastSyncedAt,openUnreservedUSDC:coverage.unreservedUSDC};
-  const modelInput=JSON.stringify({instruction:input.instruction,context:{periodStart:source.periodStart,periodEnd:source.periodEnd,netEntitlementCapMicroUSDC:source.maxTotal,fixedHumanFeeBudgetMicroUSDC:feeBudget,cashSnapshotAvailableMicroUSDC:cash.available,cashSnapshotAt:cash.lastSyncedAt,existingUnreservedBudgetsMicroUSDC:coverage.unreservedUSDC,existingDraftBudgetsMicroUSDC:coverage.draftUSDC,recipients:selected.map(item=>({recipientId:item.opaqueId,capMicroUSDC:item.capMicroUSDC,priorPaidMicroUSDC:item.priorAmountMicroUSDC}))}});
+  const modelInput=JSON.stringify({instruction:input.instruction,context:{periodStart:source.periodStart,periodEnd:source.periodEnd,netEntitlementCapMicroUSDC:source.maxTotal,fixedHumanFeeBudgetMicroUSDC:feeBudget,cashSnapshotAvailableMicroUSDC:cash.available,cashSnapshotAt:cash.lastSyncedAt,existingUnreservedBudgetsMicroUSDC:coverage.unreservedUSDC,existingDraftBudgetsMicroUSDC:coverage.draftUSDC,unpreparedInvoicePrincipalMicroUSDC:coverage.unpreparedInvoiceUSDC,recipients:selected.map(item=>({recipientId:item.opaqueId,capMicroUSDC:item.capMicroUSDC,priorPaidMicroUSDC:item.priorAmountMicroUSDC}))}});
   if(config.retentionDays)encrypt("finance-plan-storage-readiness");
   activePlans.add(access.organizationId);
   try {

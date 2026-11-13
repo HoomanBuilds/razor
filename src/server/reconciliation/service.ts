@@ -1,6 +1,7 @@
 import { requirePermission, type AccessContext } from "../context";
 import { row, rows } from "../db";
 import type { FundingLeg, Payment, PayoutAttempt } from "../payments/types";
+import { recordedRecipientName } from "../payments/recipient-names";
 import { isDirectExecution } from "./direct";
 
 const REVIEW_PAYMENTS = "((p.status='partially_paid' AND NOT EXISTS(SELECT 1 FROM partial_remainders r WHERE r.original_payment_id=p.id)) OR (p.status NOT IN ('paid','cancelled','partially_paid') AND (p.status IN ('held','recovery_pending','in_flight','prepared','approved_unfunded') OR p.hold_reason IS NOT NULL OR EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.state IN ('unknown','reported_delivered','reported_partial')) OR EXISTS(SELECT 1 FROM partial_remainders r WHERE r.remainder_payment_id=p.id AND p.status='draft'))))";
@@ -22,7 +23,7 @@ export function reconciliationQueue(access: AccessContext, page = 1, pageSize = 
   const offset = (page - 1) * pageSize;
   const payments = rows<Payment>(`SELECT p.* FROM payments p WHERE p.organization_id=? AND ${REVIEW_PAYMENTS} ORDER BY p.created_at,p.id LIMIT ? OFFSET ?`, access.organizationId, pageSize, offset).map((payment) => {
     const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1", payment.id, access.organizationId) ?? null;
-    return { payment, attempt, provenance: paymentProvenance(attempt) };
+    return { payment:{...payment,recipientName:recordedRecipientName(access.organizationId,payment)}, attempt, provenance: paymentProvenance(attempt) };
   });
   const funding = rows<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested','closed_unsent','cancelled') ORDER BY created_at,id LIMIT ? OFFSET ?", access.organizationId, pageSize, offset).map((leg) => ({ funding: leg, provenance: leg.provider_status === "SUCCESS" ? "provider_report_only" : "unresolved_funding" }));
   const review = rows<{ amount: string; delivered_amount: string }>(`SELECT p.amount,p.delivered_amount FROM payments p WHERE p.organization_id=? AND ${REVIEW_PAYMENTS}`, access.organizationId);
