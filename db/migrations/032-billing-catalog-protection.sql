@@ -1,0 +1,2 @@
+CREATE TRIGGER billing_plan_delete_protected BEFORE DELETE ON billing_plan_versions
+BEGIN SELECT RAISE(ABORT,'BILLING_PLAN_IMMUTABLE'); END;
