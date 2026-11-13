@@ -104,7 +104,7 @@ test("resolved funding leaves reconciliation and existing jobs complete without 
   db.prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES('fund-role','fund-org','Owner',?,1,?)").run(JSON.stringify(["company:read","payments:read","payments:prepare"]), created);
   db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES('fund-org','fund-owner','fund-role',?)").run(created);
   const insert = db.prepare("INSERT INTO funding_legs(id,organization_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,'fund-org',?,'asset','1','1','{}','deposit.near','treasury.near',?,?,?)");
-  for (const status of ["confirmed", "refunded_verified", "closed_unsent", "cancelled", "recovery_pending", "refunded"]) insert.run(`status-${status}`, status, status, created, created);
+  for (const status of ["confirmed", "refunded_verified", "refunded_attested", "closed_unsent", "cancelled", "recovery_pending", "refunded"]) insert.run(`status-${status}`, status, status, created, created);
   const access = { userId: "fund-owner", organizationId: "fund-org", permissions: ["payments:read"] };
   const review = reconciliationQueue(access);
   assert.deepEqual(review.funding.map(item => item.funding.status).sort(), ["recovery_pending", "refunded"]);

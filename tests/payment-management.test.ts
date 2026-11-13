@@ -126,3 +126,13 @@ test("invoice approval reviews include matching local warnings and invalidate wh
   assert.notEqual(current.reviewToken, initial.reviewToken);
   assert.throws(() => approveBillBatch(access, [a.id], initial.reviewToken), /changed after review/);
 });
+
+
+test("invoice intake rejects reused source documents and changed reference terms before payment", () => {
+  const reference = `document-guard-${next()}`, documentHash = `document-${next()}`;
+  const input = { recipientId: "recipient", reference, title: "Documented services", amount: "4200000", documentHash };
+  const first = createBill(access, input);
+  assert.equal(createBill(access, input).id, first.id);
+  assert.throws(() => createBill(access, { ...input, amount: "4300000" }), /different terms/);
+  assert.throws(() => createBill(access, { ...input, reference: `${reference}-copy` }), /document is already registered/);
+});

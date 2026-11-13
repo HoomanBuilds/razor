@@ -109,7 +109,7 @@ export function enqueueOperations(organizationId?: string) {
           );
       }
       for (const funding of rows<{ id: string }>(
-        "SELECT id FROM funding_legs WHERE organization_id=? AND status NOT IN ('confirmed','refunded_verified','closed_unsent','cancelled')",
+        "SELECT id FROM funding_legs WHERE organization_id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested','closed_unsent','cancelled')",
         organization.id,
       ))
         enqueue(
@@ -401,7 +401,7 @@ async function processJob(job: OperationJob): Promise<JobResult> {
   }
   if (job.kind === "reconcile_funding") {
     const before = row<{ status: string }>("SELECT status FROM funding_legs WHERE id=? AND organization_id=?", job.entity_id, job.organization_id);
-    if (before && ["confirmed", "refunded_verified", "closed_unsent", "cancelled"].includes(before.status)) return { status: "completed", detail: { fundingId: job.entity_id, status: before.status } };
+    if (before && ["confirmed", "refunded_verified", "refunded_attested", "closed_unsent", "cancelled"].includes(before.status)) return { status: "completed", detail: { fundingId: job.entity_id, status: before.status } };
     const result = await reconcileFunding(access, job.entity_id);
     const funding = row<{ status: string }>(
       "SELECT status FROM funding_legs WHERE id=? AND organization_id=?",
@@ -411,7 +411,7 @@ async function processJob(job: OperationJob): Promise<JobResult> {
     return {
       status:
         funding &&
-        ["confirmed", "refunded_verified", "closed_unsent", "cancelled"].includes(
+        ["confirmed", "refunded_verified", "refunded_attested", "closed_unsent", "cancelled"].includes(
           funding.status,
         )
           ? "completed"
