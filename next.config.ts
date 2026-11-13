@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   serverExternalPackages: ["@nearai/inference-sdk", "@phala/dcap-qvl"],
   experimental: {
+    optimizePackageImports: ["viem/chains"],
     cpus: 1,
     workerThreads: false,
     webpackBuildWorker: false,
