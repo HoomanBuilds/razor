@@ -3,6 +3,14 @@ use near_sdk::{
     json_types::{U64, U128},
     near,
 };
+use std::collections::BTreeSet;
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct ApprovalTier {
+    pub up_to: U128,
+    pub required_approvals: u8,
+}
 
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +63,7 @@ pub enum PaymentStatus {
     Held,
     Paid,
     Cancelled,
+    AwaitingApprovals,
 }
 
 #[near(serializers = [borsh, json])]
@@ -90,6 +99,8 @@ pub struct Attempt {
     pub destination: Destination,
     pub route: Route,
     pub authorized: bool,
+    pub approvals: BTreeSet<AccountId>,
+    pub approval_policy_version: U64,
     pub status: AttemptStatus,
     pub sent_day: U64,
     pub refund_amount: U128,
@@ -107,9 +118,11 @@ pub struct Payment {
     pub incurred_cost: U128,
     pub reservation: U128,
     pub expires_at_ms: U64,
+    pub not_before_ms: U64,
     pub reference: String,
     pub proposer: AccountId,
     pub approver: Option<AccountId>,
+    pub approvals: BTreeSet<AccountId>,
     pub policy_version: U64,
     pub status: PaymentStatus,
     pub attempts: Vec<Attempt>,
@@ -127,6 +140,25 @@ pub struct ConfigView {
     pub executor_trust_daily_budget: U128,
     pub approvers: Vec<AccountId>,
     pub executors: Vec<AccountId>,
+    pub approval_tiers: Vec<ApprovalTier>,
+    pub approval_amount_basis: String,
+}
+
+#[near(serializers = [json])]
+pub struct ApprovalStatus {
+    pub policy_version: U64,
+    pub approval_amount: U128,
+    pub required_approvals: u8,
+    pub payment_terms_hash: String,
+    pub payment_approvals: Vec<AccountId>,
+    pub payment_collected: u8,
+    pub payment_ready: bool,
+    pub attempt_id: Option<String>,
+    pub attempt_terms_hash: Option<String>,
+    pub attempt_approvals: Vec<AccountId>,
+    pub attempt_collected: u8,
+    pub attempt_ready: bool,
+    pub can_execute: bool,
 }
 
 #[near(serializers = [json])]

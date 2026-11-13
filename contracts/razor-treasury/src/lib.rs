@@ -16,6 +16,9 @@ const GAS_TRANSFER: Gas = Gas::from_tgas(20);
 const GAS_CALLBACK: Gas = Gas::from_tgas(15);
 const GAS_BALANCE: Gas = Gas::from_tgas(5);
 const MAX_ATTEMPTS: usize = 10;
+const MAX_APPROVAL_TIERS: usize = 8;
+const MAX_REQUIRED_APPROVALS: u8 = 8;
+const MAX_APPROVERS: usize = 16;
 
 #[ext_contract(ext_ft)]
 #[allow(dead_code)]
@@ -43,6 +46,7 @@ pub struct Treasury {
     per_payment_limit: u128,
     daily_limit: u128,
     policy_version: u64,
+    approval_tiers: Vec<ApprovalTier>,
     approvers: BTreeSet<AccountId>,
     executors: BTreeSet<AccountId>,
     settlement_reporter: Option<AccountId>,
@@ -84,6 +88,10 @@ impl Treasury {
             per_payment_limit: per_payment_limit.0,
             daily_limit: daily_limit.0,
             policy_version: 1,
+            approval_tiers: vec![ApprovalTier {
+                up_to: daily_limit,
+                required_approvals: 1,
+            }],
             approvers: BTreeSet::new(),
             executors: BTreeSet::new(),
             settlement_reporter: None,
@@ -112,6 +120,8 @@ impl Treasury {
             executor_trust_daily_budget: U128(0),
             approvers: self.approvers.iter().cloned().collect(),
             executors: self.executors.iter().cloned().collect(),
+            approval_tiers: self.approval_tiers.clone(),
+            approval_amount_basis: "principal_plus_max_fee".into(),
         }
     }
 
@@ -139,6 +149,24 @@ impl Treasury {
                 .find(|attempt| attempt.id == attempt_id)
                 .cloned()
         })
+    }
+    pub fn get_approval_status(
+        &self,
+        payment_id: String,
+        attempt_id: Option<String>,
+    ) -> ApprovalStatus {
+        let payment = self.load_payment(&payment_id);
+        let attempt = attempt_id
+            .as_ref()
+            .and_then(|id| payment.attempts.iter().find(|attempt| &attempt.id == id))
+            .or_else(|| {
+                if attempt_id.is_none() {
+                    payment.attempts.last()
+                } else {
+                    None
+                }
+            });
+        self.approval_status(&payment, attempt)
     }
     pub fn get_obligation(&self, reference: String) -> Option<String> {
         self.obligations.get(&reference).cloned()
@@ -174,6 +202,11 @@ impl Treasury {
         );
         self.per_payment_limit = per_payment_limit.0;
         self.daily_limit = daily_limit.0;
+        if let Some(tier) = self.approval_tiers.last_mut() {
+            if tier.up_to.0 < daily_limit.0 {
+                tier.up_to = daily_limit;
+            }
+        }
         self.policy_version = self
             .policy_version
             .checked_add(1)
@@ -181,6 +214,57 @@ impl Treasury {
         emit(
             "policy_changed",
             json!({"version": U64(self.policy_version)}),
+        );
+    }
+
+    #[payable]
+    pub fn set_approval_policy(&mut self, tiers: Vec<ApprovalTier>, expected_policy_version: U64) {
+        self.assert_owner();
+        require!(
+            expected_policy_version.0 == self.policy_version,
+            "POLICY_CHANGED"
+        );
+        require!(
+            !tiers.is_empty() && tiers.len() <= MAX_APPROVAL_TIERS,
+            "INVALID_APPROVAL_TIERS"
+        );
+        let eligible = self
+            .approvers
+            .iter()
+            .filter(|account| *account != &self.owner_id)
+            .count()
+            + 1;
+        let mut previous_amount = 0u128;
+        let mut previous_required = 1u8;
+        for tier in &tiers {
+            require!(
+                tier.up_to.0 > previous_amount,
+                "APPROVAL_TIERS_NOT_ASCENDING"
+            );
+            require!(
+                tier.required_approvals >= previous_required
+                    && tier.required_approvals <= MAX_REQUIRED_APPROVALS,
+                "INVALID_APPROVAL_QUORUM"
+            );
+            require!(
+                tier.required_approvals as usize <= eligible,
+                "INSUFFICIENT_APPROVER_ACCOUNTS"
+            );
+            previous_amount = tier.up_to.0;
+            previous_required = tier.required_approvals;
+        }
+        require!(
+            previous_amount >= self.daily_limit,
+            "APPROVAL_TIERS_MUST_COVER_DAILY_LIMIT"
+        );
+        self.approval_tiers = tiers;
+        self.policy_version = self
+            .policy_version
+            .checked_add(1)
+            .expect("VERSION_OVERFLOW");
+        emit(
+            "approval_policy_changed",
+            json!({"policy_version": U64(self.policy_version), "tiers": self.approval_tiers, "amount_basis": "principal_plus_max_fee"}),
         );
     }
 
@@ -196,14 +280,23 @@ impl Treasury {
             "executor" => &mut self.executors,
             _ => env::panic_str("INVALID_ROLE"),
         };
-        if enabled {
-            set.insert(account_id.clone());
+        if role == "approver" && enabled && !set.contains(&account_id) {
+            require!(set.len() < MAX_APPROVERS, "APPROVER_LIMIT");
+        }
+        let changed = if enabled {
+            set.insert(account_id.clone())
         } else {
-            set.remove(&account_id);
+            set.remove(&account_id)
+        };
+        if role == "approver" && changed {
+            self.policy_version = self
+                .policy_version
+                .checked_add(1)
+                .expect("VERSION_OVERFLOW");
         }
         emit(
             "role_changed",
-            json!({"account_id": account_id, "role": role, "enabled": enabled}),
+            json!({"account_id": account_id, "role": role, "enabled": enabled, "policy_version": U64(self.policy_version)}),
         );
     }
 
@@ -320,6 +413,7 @@ impl Treasury {
         max_fee: U128,
         expires_at_ms: U64,
         reference: String,
+        not_before_ms: Option<U64>,
     ) -> Payment {
         self.assert_executor();
         require!(!self.paused, "PAUSED");
@@ -337,6 +431,8 @@ impl Treasury {
         let total = add(amount.0, max_fee.0);
         require!(total <= self.daily_limit, "DAILY_LIMIT");
         require!(expires_at_ms.0 > now_ms(), "PAYMENT_EXPIRED");
+        let not_before_ms = not_before_ms.unwrap_or(U64(0));
+        require!(not_before_ms.0 < expires_at_ms.0, "INVALID_SCHEDULE");
         let recipient = self
             .recipients
             .get(&recipient_id)
@@ -351,9 +447,11 @@ impl Treasury {
             incurred_cost: U128(0),
             reservation: U128(0),
             expires_at_ms,
+            not_before_ms,
             reference: reference.clone(),
             proposer: env::predecessor_account_id(),
             approver: None,
+            approvals: BTreeSet::new(),
             policy_version: U64(self.policy_version),
             status: PaymentStatus::Proposed,
             attempts: Vec::new(),
@@ -368,7 +466,12 @@ impl Treasury {
     }
 
     #[payable]
-    pub fn approve_payment(&mut self, payment_id: String) -> Payment {
+    pub fn approve_payment(
+        &mut self,
+        payment_id: String,
+        expected_policy_version: U64,
+        expected_terms_hash: String,
+    ) -> Payment {
         self.assert_approver();
         require!(!self.paused, "PAUSED");
         let mut payment = self.load_payment(&payment_id);
@@ -376,6 +479,7 @@ impl Treasury {
             matches!(
                 payment.status,
                 PaymentStatus::Proposed
+                    | PaymentStatus::AwaitingApprovals
                     | PaymentStatus::Held
                     | PaymentStatus::Approved
                     | PaymentStatus::Retryable
@@ -384,22 +488,52 @@ impl Treasury {
         );
         self.assert_current(&payment);
         require!(
+            expected_policy_version.0 == self.policy_version,
+            "POLICY_CHANGED"
+        );
+        require!(
+            expected_terms_hash == self.payment_terms_hash(&payment),
+            "APPROVAL_TERMS_CHANGED"
+        );
+        require!(
             payment.incurred_cost.0 <= payment.max_fee.0,
             "FEE_LIMIT_EXHAUSTED"
         );
-        let reservation = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
-        let new_reserved = add(self.reserved - payment.reservation.0, reservation);
-        require!(self.balance >= new_reserved, "INSUFFICIENT_CONFIRMED_FUNDS");
         require!(payment.amount.0 <= self.per_payment_limit, "PAYMENT_LIMIT");
-        self.reserved = new_reserved;
-        payment.reservation = U128(reservation);
+        require!(
+            add(payment.amount.0, payment.max_fee.0) <= self.daily_limit,
+            "DAILY_LIMIT"
+        );
+        if payment.policy_version.0 != self.policy_version {
+            payment.approvals.clear();
+            for attempt in &mut payment.attempts {
+                if attempt.status == AttemptStatus::Prepared {
+                    attempt.approvals.clear();
+                    attempt.authorized = false;
+                    attempt.approval_policy_version = U64(self.policy_version);
+                }
+            }
+        }
         payment.policy_version = U64(self.policy_version);
-        payment.approver = Some(env::predecessor_account_id());
-        payment.status = PaymentStatus::Approved;
+        let caller = env::predecessor_account_id();
+        payment.approvals.insert(caller.clone());
+        payment.approver = Some(caller.clone());
+        let required = self.required_approvals(&payment);
+        let collected = self.payment_approvals(&payment).len();
+        if collected >= required as usize {
+            let reservation = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
+            let new_reserved = add(self.reserved - payment.reservation.0, reservation);
+            require!(self.balance >= new_reserved, "INSUFFICIENT_CONFIRMED_FUNDS");
+            self.reserved = new_reserved;
+            payment.reservation = U128(reservation);
+            payment.status = PaymentStatus::Approved;
+        } else {
+            payment.status = PaymentStatus::AwaitingApprovals;
+        }
         self.payments.insert(payment_id.clone(), payment.clone());
         emit(
             "payment_approved",
-            json!({"payment_id": payment_id, "reservation": payment.reservation}),
+            json!({"payment_id": payment_id, "reservation": payment.reservation, "approver": caller, "required_approvals": required, "collected_approvals": collected, "policy_version": expected_policy_version, "terms_hash": expected_terms_hash}),
         );
         payment
     }
@@ -419,7 +553,10 @@ impl Treasury {
         require!(
             matches!(
                 payment.status,
-                PaymentStatus::Approved | PaymentStatus::Retryable
+                PaymentStatus::Proposed
+                    | PaymentStatus::AwaitingApprovals
+                    | PaymentStatus::Approved
+                    | PaymentStatus::Retryable
             ),
             "PAYMENT_NOT_READY"
         );
@@ -443,6 +580,18 @@ impl Treasury {
                 "PRIOR_ATTEMPT_NOT_CLOSED"
             );
         }
+        require!(
+            payment.incurred_cost.0 <= payment.max_fee.0,
+            "FEE_LIMIT_EXHAUSTED"
+        );
+        require!(
+            payment.amount.0 <= self.per_payment_limit
+                && add(payment.amount.0, payment.max_fee.0) <= self.daily_limit,
+            "PAYMENT_LIMIT"
+        );
+        let reservation = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
+        let new_reserved = add(self.reserved - payment.reservation.0, reservation);
+        require!(self.balance >= new_reserved, "INSUFFICIENT_CONFIRMED_FUNDS");
         let recipient = self
             .recipients
             .get(&payment.recipient_id)
@@ -459,7 +608,11 @@ impl Treasury {
             recipient.primary.clone()
         };
         require!(
-            route.input_amount.0 > 0 && route.input_amount.0 <= payment.reservation.0,
+            route.input_amount.0 > 0
+                && route.input_amount.0
+                    <= add(payment.amount.0, payment.max_fee.0)
+                        .checked_sub(payment.incurred_cost.0)
+                        .expect("FEE_LIMIT_EXHAUSTED"),
             "COST_LIMIT"
         );
         require!(route.output_amount.0 > 0, "OUTPUT_AMOUNT_REQUIRED");
@@ -474,6 +627,12 @@ impl Treasury {
             route.deadline_ms.0 > now_ms() && route.deadline_ms.0 <= payment.expires_at_ms.0,
             "INVALID_QUOTE_DEADLINE"
         );
+        if payment.not_before_ms.0 > now_ms() {
+            require!(
+                route.deadline_ms.0 >= payment.not_before_ms.0.saturating_add(60_000),
+                "SCHEDULE_OUTLIVES_ROUTE"
+            );
+        }
         require!(
             route.source_receiver != env::current_account_id(),
             "INVALID_SOURCE_RECEIVER"
@@ -507,12 +666,16 @@ impl Treasury {
                 "QUOTE_HASH_REQUIRED"
             );
         }
+        self.reserved = new_reserved;
+        payment.reservation = U128(reservation);
         payment.attempts.push(Attempt {
             id: attempt_id.clone(),
             use_backup,
             destination,
             route,
             authorized: false,
+            approvals: BTreeSet::new(),
+            approval_policy_version: U64(self.policy_version),
             status: AttemptStatus::Prepared,
             sent_day: U64(0),
             refund_amount: U128(0),
@@ -527,7 +690,13 @@ impl Treasury {
     }
 
     #[payable]
-    pub fn authorize_attempt(&mut self, payment_id: String, attempt_id: String) -> Payment {
+    pub fn authorize_attempt(
+        &mut self,
+        payment_id: String,
+        attempt_id: String,
+        expected_policy_version: U64,
+        expected_terms_hash: String,
+    ) -> Payment {
         self.assert_approver();
         require!(!self.paused, "PAUSED");
         let mut payment = self.load_payment(&payment_id);
@@ -535,21 +704,56 @@ impl Treasury {
         require!(
             matches!(
                 payment.status,
-                PaymentStatus::Approved | PaymentStatus::Retryable
+                PaymentStatus::AwaitingApprovals
+                    | PaymentStatus::Approved
+                    | PaymentStatus::Retryable
             ),
             "PAYMENT_NOT_READY"
+        );
+        require!(
+            expected_policy_version.0 == self.policy_version
+                && payment.policy_version.0 == self.policy_version,
+            "POLICY_CHANGED"
+        );
+        let status = self.approval_status(&payment, payment.attempts.last());
+        require!(
+            status.attempt_id.as_deref() == Some(attempt_id.as_str())
+                && status.attempt_terms_hash.as_deref() == Some(expected_terms_hash.as_str()),
+            "APPROVAL_TERMS_CHANGED"
+        );
+        let caller = env::predecessor_account_id();
+        require!(
+            self.payment_approvals(&payment).contains(&caller),
+            "PAYMENT_APPROVAL_REQUIRED"
         );
         let attempt = last_attempt_mut(&mut payment, &attempt_id);
         require!(
             attempt.status == AttemptStatus::Prepared,
             "ATTEMPT_NOT_PREPARED"
         );
+        if attempt.use_backup {
+            require!(
+                self.backup_assets.get(&attempt.destination.network)
+                    == Some(&attempt.destination.asset_id),
+                "BACKUP_USDC_NOT_CONFIGURED"
+            );
+        }
         require!(attempt.route.deadline_ms.0 > now_ms(), "QUOTE_EXPIRED");
-        attempt.authorized = true;
+        if attempt.approval_policy_version.0 != self.policy_version {
+            attempt.approvals.clear();
+        }
+        attempt.approval_policy_version = U64(self.policy_version);
+        attempt.approvals.insert(caller.clone());
+        let status = self.approval_status(&payment, payment.attempts.last());
+        payment
+            .attempts
+            .last_mut()
+            .expect("ATTEMPT_NOT_FOUND")
+            .authorized = status.attempt_ready;
         self.payments.insert(payment_id.clone(), payment.clone());
         emit(
             "attempt_authorized",
-            json!({"payment_id": payment_id, "attempt_id": attempt_id}),
+            json!({"payment_id": payment_id, "attempt_id": attempt_id, "approver": caller, "required_approvals": status.required_approvals, "collected_approvals": status.attempt_collected, "policy_version": expected_policy_version, "terms_hash": expected_terms_hash}),
         );
         payment
     }
@@ -560,7 +764,10 @@ impl Treasury {
         require!(
             matches!(
                 payment.status,
-                PaymentStatus::Approved | PaymentStatus::Retryable
+                PaymentStatus::Proposed
+                    | PaymentStatus::AwaitingApprovals
+                    | PaymentStatus::Approved
+                    | PaymentStatus::Retryable
             ),
             "PAYMENT_NOT_READY"
         );
@@ -595,6 +802,12 @@ impl Treasury {
         require!(
             payment.policy_version.0 == self.policy_version,
             "POLICY_CHANGED"
+        );
+        require!(now_ms() >= payment.not_before_ms.0, "PAYMENT_NOT_DUE");
+        require!(
+            self.approval_status(&payment, payment.attempts.last())
+                .can_execute,
+            "APPROVAL_QUORUM_NOT_MET"
         );
         let amount_limit = payment.reservation.0;
         let attempt = last_attempt_mut(&mut payment, &attempt_id);
@@ -877,6 +1090,7 @@ impl Treasury {
             matches!(
                 payment.status,
                 PaymentStatus::Proposed
+                    | PaymentStatus::AwaitingApprovals
                     | PaymentStatus::Approved
                     | PaymentStatus::Retryable
                     | PaymentStatus::Held
@@ -998,6 +1212,112 @@ impl Treasury {
 }
 
 impl Treasury {
+    fn is_approver(&self, account: &AccountId) -> bool {
+        account == &self.owner_id || self.approvers.contains(account)
+    }
+    fn required_approvals(&self, payment: &Payment) -> u8 {
+        let amount = add(payment.amount.0, payment.max_fee.0);
+        self.approval_tiers
+            .iter()
+            .find(|tier| amount <= tier.up_to.0)
+            .or_else(|| self.approval_tiers.last())
+            .expect("APPROVAL_POLICY_REQUIRED")
+            .required_approvals
+    }
+    fn approval_context_current(&self, payment: &Payment) -> bool {
+        payment.policy_version.0 == self.policy_version
+            && payment.expires_at_ms.0 > now_ms()
+            && payment.amount.0 <= self.per_payment_limit
+            && add(payment.amount.0, payment.max_fee.0) <= self.daily_limit
+            && payment.incurred_cost.0 <= payment.max_fee.0
+            && self
+                .recipients
+                .get(&payment.recipient_id)
+                .is_some_and(|recipient| {
+                    recipient.active && recipient.version == payment.recipient_version
+                })
+    }
+    fn payment_approvals(&self, payment: &Payment) -> Vec<AccountId> {
+        if !self.approval_context_current(payment) {
+            return Vec::new();
+        }
+        payment
+            .approvals
+            .iter()
+            .filter(|account| self.is_approver(account))
+            .cloned()
+            .collect()
+    }
+    fn payment_terms_hash(&self, payment: &Payment) -> String {
+        hash_terms(
+            json!({"domain":"razor_payment_approval_v1","treasury":env::current_account_id(),"payment_id":payment.id,
+            "recipient_id":payment.recipient_id,"recipient_version":payment.recipient_version,"amount":payment.amount,"max_fee":payment.max_fee,
+            "expires_at_ms":payment.expires_at_ms,"not_before_ms":payment.not_before_ms,"reference":payment.reference,"policy_version":U64(self.policy_version),"required_approvals":self.required_approvals(payment)}),
+        )
+    }
+    fn attempt_terms_hash(&self, payment: &Payment, attempt: &Attempt) -> String {
+        hash_terms(
+            json!({"domain":"razor_route_approval_v1","payment_terms_hash":self.payment_terms_hash(payment),"attempt_id":attempt.id,
+            "destination":attempt.destination,"route":attempt.route,"use_backup":attempt.use_backup,"policy_version":U64(self.policy_version)}),
+        )
+    }
+    fn approval_status(&self, payment: &Payment, attempt: Option<&Attempt>) -> ApprovalStatus {
+        let required = self.required_approvals(payment);
+        let payment_approvals = self.payment_approvals(payment);
+        let payment_ready = payment_approvals.len() >= required as usize;
+        let attempt_approvals: Vec<AccountId> = attempt
+            .filter(|attempt| attempt.approval_policy_version.0 == self.policy_version)
+            .map(|attempt| {
+                attempt
+                    .approvals
+                    .iter()
+                    .filter(|account| payment_approvals.contains(account))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let attempt_ready = attempt.is_some_and(|attempt| {
+            attempt.status == AttemptStatus::Prepared && attempt.route.deadline_ms.0 > now_ms()
+        }) && attempt_approvals.len() >= required as usize;
+        let can_execute = !self.paused
+            && now_ms() >= payment.not_before_ms.0
+            && payment_ready
+            && attempt_ready
+            && matches!(
+                payment.status,
+                PaymentStatus::Approved | PaymentStatus::Retryable
+            )
+            && attempt.is_some_and(|attempt| {
+                payment
+                    .attempts
+                    .last()
+                    .is_some_and(|latest| latest.id == attempt.id)
+                    && attempt.route.input_amount.0 <= payment.reservation.0
+                    && attempt.route.input_amount.0 <= self.balance
+                    && add(
+                        *self.spent_by_day.get(&(now_ms() / DAY_MS)).unwrap_or(&0),
+                        attempt.route.input_amount.0,
+                    ) <= self.daily_limit
+                    && (!attempt.use_backup
+                        || self.backup_assets.get(&attempt.destination.network)
+                            == Some(&attempt.destination.asset_id))
+            });
+        ApprovalStatus {
+            policy_version: U64(self.policy_version),
+            approval_amount: U128(add(payment.amount.0, payment.max_fee.0)),
+            required_approvals: required,
+            payment_terms_hash: self.payment_terms_hash(payment),
+            payment_collected: payment_approvals.len() as u8,
+            payment_approvals,
+            payment_ready,
+            attempt_id: attempt.map(|attempt| attempt.id.clone()),
+            attempt_terms_hash: attempt.map(|attempt| self.attempt_terms_hash(payment, attempt)),
+            attempt_collected: attempt_approvals.len() as u8,
+            attempt_approvals,
+            attempt_ready,
+            can_execute,
+        }
+    }
     fn assert_owner(&self) {
         require!(env::predecessor_account_id() == self.owner_id, "ONLY_OWNER");
         near_sdk::assert_one_yocto();
@@ -1058,6 +1378,12 @@ fn now_ms() -> u64 {
 }
 fn add(a: u128, b: u128) -> u128 {
     a.checked_add(b).expect("AMOUNT_OVERFLOW")
+}
+fn hash_terms(value: near_sdk::serde_json::Value) -> String {
+    env::sha256(&near_sdk::serde_json::to_vec(&value).expect("APPROVAL_SERIALIZATION_FAILED"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 fn validate_id(id: &str) {
     require!(

@@ -74,10 +74,30 @@ fn setup(direct: bool) -> Treasury {
         U128(10),
         U64(NOW + 86_400_000),
         "invoice-1".into(),
+        None,
     );
     call("owner.testnet", 1);
-    treasury.approve_payment("payment".into());
+    approve(&mut treasury);
     treasury
+}
+
+fn approve(treasury: &mut Treasury) -> Payment {
+    let status = treasury.get_approval_status("payment".into(), None);
+    treasury.approve_payment(
+        "payment".into(),
+        status.policy_version,
+        status.payment_terms_hash,
+    )
+}
+
+fn authorize(treasury: &mut Treasury, id: &str) -> Payment {
+    let status = treasury.get_approval_status("payment".into(), Some(id.into()));
+    treasury.authorize_attempt(
+        "payment".into(),
+        id.into(),
+        status.policy_version,
+        status.attempt_terms_hash.unwrap(),
+    )
 }
 
 fn prepare(treasury: &mut Treasury, id: &str, direct: bool, amount: u128) {
@@ -105,7 +125,7 @@ fn prepare(treasury: &mut Treasury, id: &str, direct: bool, amount: u128) {
         },
     );
     call("owner.testnet", 1);
-    treasury.authorize_attempt("payment".into(), id.into());
+    authorize(treasury, id);
 }
 
 fn execute(treasury: &mut Treasury, id: &str) {
@@ -117,12 +137,7 @@ fn execute(treasury: &mut Treasury, id: &str) {
 fn executor_cannot_approve_or_redirect_authorized_route() {
     let mut treasury = setup(false);
     call("agent.testnet", 1);
-    assert!(
-        catch_unwind(AssertUnwindSafe(
-            || treasury.approve_payment("payment".into())
-        ))
-        .is_err()
-    );
+    assert!(catch_unwind(AssertUnwindSafe(|| approve(&mut treasury))).is_err());
     prepare(&mut treasury, "attempt-1", false, 102);
     call("agent.testnet", 0);
     assert!(
@@ -323,9 +338,15 @@ fn disabled_backup_cannot_execute_after_policy_reapproval() {
         U128(10),
         U64(NOW + 86_400_000),
         "invoice-2".into(),
+        None,
     );
     call("owner.testnet", 1);
-    treasury.approve_payment("payment-2".into());
+    let approval = treasury.get_approval_status("payment-2".into(), None);
+    treasury.approve_payment(
+        "payment-2".into(),
+        approval.policy_version,
+        approval.payment_terms_hash,
+    );
     call("agent.testnet", 0);
     treasury.create_attempt(
         "payment-2".into(),
@@ -342,9 +363,20 @@ fn disabled_backup_cannot_execute_after_policy_reapproval() {
         },
     );
     call("owner.testnet", 1);
-    treasury.authorize_attempt("payment-2".into(), "backup-attempt".into());
+    let approval = treasury.get_approval_status("payment-2".into(), Some("backup-attempt".into()));
+    treasury.authorize_attempt(
+        "payment-2".into(),
+        "backup-attempt".into(),
+        approval.policy_version,
+        approval.attempt_terms_hash.unwrap(),
+    );
     treasury.set_backup_asset("near".into(), None);
-    treasury.approve_payment("payment-2".into());
+    let approval = treasury.get_approval_status("payment-2".into(), None);
+    treasury.approve_payment(
+        "payment-2".into(),
+        approval.policy_version,
+        approval.payment_terms_hash,
+    );
     call("agent.testnet", 0);
     assert!(
         catch_unwind(AssertUnwindSafe(
@@ -354,4 +386,228 @@ fn disabled_backup_cannot_execute_after_policy_reapproval() {
     );
     assert_eq!(treasury.get_balance().in_flight, U128(0));
     assert_eq!(treasury.get_balance().reserved, U128(110));
+}
+
+fn two_wallet_policy(treasury: &mut Treasury) {
+    call("owner.testnet", 1);
+    treasury.set_role(account("finance.testnet"), "approver".into(), true);
+    treasury.set_approval_policy(
+        vec![
+            ApprovalTier {
+                up_to: U128(100),
+                required_approvals: 1,
+            },
+            ApprovalTier {
+                up_to: U128(1_000),
+                required_approvals: 2,
+            },
+        ],
+        U64(treasury.policy_version),
+    );
+}
+
+#[test]
+fn total_cost_tiers_require_distinct_current_wallets_for_exact_route() {
+    let mut treasury = setup(false);
+    two_wallet_policy(&mut treasury);
+    call("owner.testnet", 1);
+    approve(&mut treasury);
+    assert_eq!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .required_approvals,
+        2
+    );
+    prepare(&mut treasury, "attempt-1", false, 102);
+    call("owner.testnet", 1);
+    approve(&mut treasury);
+    authorize(&mut treasury, "attempt-1");
+    let status = treasury.get_approval_status("payment".into(), None);
+    assert_eq!(status.payment_collected, 1);
+    assert_eq!(status.attempt_collected, 1);
+    assert!(!status.can_execute);
+    call("agent.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.execute_payment("payment".into(), "attempt-1".into())
+        ))
+        .is_err()
+    );
+    call("finance.testnet", 1);
+    approve(&mut treasury);
+    assert!(
+        !treasury
+            .get_approval_status("payment".into(), None)
+            .can_execute
+    );
+    authorize(&mut treasury, "attempt-1");
+    assert!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .can_execute
+    );
+    assert_eq!(treasury.get_balance().reserved, U128(110));
+    execute(&mut treasury, "attempt-1");
+    assert_eq!(treasury.get_balance().balance, U128(898));
+}
+
+#[test]
+fn changed_policy_and_revoked_then_regranted_role_cannot_revive_votes() {
+    let mut treasury = setup(false);
+    two_wallet_policy(&mut treasury);
+    call("owner.testnet", 1);
+    approve(&mut treasury);
+    prepare(&mut treasury, "attempt-1", false, 102);
+    call("finance.testnet", 1);
+    approve(&mut treasury);
+    authorize(&mut treasury, "attempt-1");
+    let previous = treasury.get_approval_status("payment".into(), None);
+    assert!(previous.can_execute);
+    call("owner.testnet", 1);
+    treasury.set_role(account("finance.testnet"), "approver".into(), false);
+    treasury.set_role(account("finance.testnet"), "approver".into(), true);
+    let status = treasury.get_approval_status("payment".into(), None);
+    assert_eq!(status.payment_collected, 0);
+    assert_eq!(status.attempt_collected, 0);
+    assert!(!status.can_execute);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.approve_payment(
+            "payment".into(),
+            previous.policy_version,
+            previous.payment_terms_hash
+        )))
+        .is_err()
+    );
+    approve(&mut treasury);
+    authorize(&mut treasury, "attempt-1");
+    assert_eq!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .attempt_collected,
+        1
+    );
+    call("finance.testnet", 1);
+    approve(&mut treasury);
+    authorize(&mut treasury, "attempt-1");
+    assert!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .can_execute
+    );
+    call("agent.testnet", 0);
+    treasury.discard_attempt("payment".into(), "attempt-1".into());
+    prepare(&mut treasury, "attempt-2", false, 103);
+    let status = treasury.get_approval_status("payment".into(), None);
+    assert_eq!(status.attempt_collected, 1);
+    assert!(!status.can_execute);
+}
+
+#[test]
+fn prepared_route_reserves_funds_before_quorum_and_schedule_blocks_early_send() {
+    let mut treasury = setup(true);
+    call("owner.testnet", 1);
+    treasury.cancel_payment("payment".into());
+    two_wallet_policy(&mut treasury);
+    call("agent.testnet", 0);
+    treasury.propose_payment(
+        "scheduled".into(),
+        "recipient".into(),
+        U128(100),
+        U128(10),
+        U64(NOW + 86_400_000),
+        "scheduled-ref".into(),
+        Some(U64(NOW + 60_000)),
+    );
+    treasury.create_attempt(
+        "scheduled".into(),
+        "scheduled-route".into(),
+        false,
+        Route {
+            kind: RouteKind::Direct,
+            source_receiver: account("employee.testnet"),
+            input_amount: U128(100),
+            output_amount: U128(100),
+            quote_id: String::new(),
+            quote_hash: String::new(),
+            deadline_ms: U64(NOW + 120_000),
+        },
+    );
+    assert_eq!(treasury.get_balance().reserved, U128(110));
+    for caller in ["owner.testnet", "finance.testnet"] {
+        call(caller, 1);
+        let status = treasury.get_approval_status("scheduled".into(), None);
+        treasury.approve_payment(
+            "scheduled".into(),
+            status.policy_version,
+            status.payment_terms_hash,
+        );
+        let status = treasury.get_approval_status("scheduled".into(), None);
+        treasury.authorize_attempt(
+            "scheduled".into(),
+            "scheduled-route".into(),
+            status.policy_version,
+            status.attempt_terms_hash.unwrap(),
+        );
+    }
+    let status = treasury.get_approval_status("scheduled".into(), None);
+    assert!(status.payment_ready && status.attempt_ready);
+    assert!(!status.can_execute);
+    call("agent.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.execute_payment("scheduled".into(), "scheduled-route".into())
+        ))
+        .is_err()
+    );
+    let mut due = context("agent.testnet", 0);
+    due.block_timestamp((NOW + 60_000) * 1_000_000);
+    testing_env!(due.build());
+    assert!(
+        treasury
+            .get_approval_status("scheduled".into(), None)
+            .can_execute
+    );
+    drop(treasury.execute_payment("scheduled".into(), "scheduled-route".into()));
+    assert_eq!(treasury.get_balance().balance, U128(900));
+}
+
+#[test]
+fn invalid_tier_shapes_and_changed_hash_are_rejected() {
+    let mut treasury = setup(false);
+    call("owner.testnet", 1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_approval_policy(
+            vec![ApprovalTier {
+                up_to: U128(1_000),
+                required_approvals: 2
+            }],
+            U64(treasury.policy_version)
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_approval_policy(
+            vec![ApprovalTier {
+                up_to: U128(999),
+                required_approvals: 1
+            }],
+            U64(treasury.policy_version)
+        )))
+        .is_err()
+    );
+    let status = treasury.get_approval_status("payment".into(), None);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.approve_payment(
+            "payment".into(),
+            status.policy_version,
+            "0".repeat(64)
+        )))
+        .is_err()
+    );
+    assert_eq!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .payment_collected,
+        1
+    );
 }
