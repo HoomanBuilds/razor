@@ -37,6 +37,7 @@ import { ClientReservesPanel } from "./client-reserves";
 import { NotificationInbox } from "../notifications/inbox";
 import { ProjectReportsPanel } from "./project-reports";
 import { TreasuryRecoveryPanel } from "./treasury-recovery";
+import { RetainedAssetsPanel } from "./retained-assets";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
@@ -386,6 +387,7 @@ function CompanyWorkspace({
       ) : section === "treasury" ? (
         <div className="grid gap-6">
           <Treasury />
+          <RetainedAssetsPanel />
           <ClientReservesPanel />
           <FundingRequestsPanel />
         </div>
