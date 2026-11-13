@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, RequestError } from "@/lib/api";
 import { formatUnits, parseUnits } from "@/lib/money";
 import { usd } from "@/lib/format";
-import { authenticateWallet, connectNearWallet, getNearConnector } from "@/components/auth/wallets";
-import type { NearWalletAction } from "@/lib/near-actions";
+import { authenticateWallet } from "@/components/auth/wallets";
+import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
 import { useWorkspace } from "./context";
 import { OwnerWalletOnboarding } from "@/components/account/owner-wallet-onboarding";
 import { useAction, useResource } from "./hooks";
@@ -49,16 +49,11 @@ export function TreasuryCreation() {
     if(!quoted||!acknowledged||pending)return;
     const terms=input(),prepared=await api<QuoteResult&{walletActions:NearWalletAction[]}>(`${base}/onboarding/prepare`,{...terms,quoteHash:quoted.quote.hash});
     if(prepared.quote.hash!==quoted.quote.hash)throw new RequestError("Review a fresh registration quote before signing.",409,"CREATION_QUOTE_CHANGED");
-    const connector=await getNearConnector();
-    if(connector.network!==prepared.quote.network)throw new RequestError("Reconnect your wallet on the configured NEAR network before signing.",409,"WALLET_NETWORK_MISMATCH");
-    const {wallet,accounts}=await connectNearWallet();
-    if(!accounts.some(account=>account.accountId===terms.ownerAccount))throw new RequestError("Connect the verified NEAR wallet selected as company owner.",403,"OWNER_WALLET_MISMATCH");
-    const receipts=await wallet.signAndSendTransactions({transactions:prepared.walletActions.map(action=>({...action,signerId:terms.ownerAccount})),network:prepared.quote.network}),last=receipts.at(-1);
-    if(!last)throw new RequestError("No wallet receipt was returned. Check registration status before trying again.",409,"RECEIPT_REQUIRED");
-    setTxHash(last.transaction.hash);
-    if(receipts.some(receipt=>typeof receipt.status==="object"&&"Failure" in receipt.status))throw new RequestError("Registration failed. Your company has not been connected. Review the wallet receipt and check status before retrying.",409,"REGISTRATION_ACTION_FAILED");
+    const hash=await signNearActions(prepared.walletActions,prepared.quote.network,[terms.ownerAccount]);
+    if(!hash)throw new RequestError("No wallet receipt was returned. Check registration status before trying again.",409,"RECEIPT_REQUIRED");
+    setTxHash(hash);
     setPending(true);pollCount.current=0;
-    try{localStorage.setItem(rememberKey,JSON.stringify({ownerAccount:terms.ownerAccount,txHash:last.transaction.hash}));}catch{}
+    try{localStorage.setItem(rememberKey,JSON.stringify({ownerAccount:terms.ownerAccount,txHash:hash}));}catch{}
     await refreshRegistration(terms.ownerAccount);
   }
   const recorded=result?.creation || quoted?.creation,canRegister=Boolean(config?.ready&&ownerAccount&&quoted&&acknowledged&&!recorded&&!pending);
