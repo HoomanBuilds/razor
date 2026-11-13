@@ -305,7 +305,7 @@ impl CompanyTreasury {
         PromiseOrValue::Value(U128(0))
     }
 
-    fn finish_retained_withdrawal(
+    pub(crate) fn finish_retained_withdrawal(
         &mut self,
         token_contract: AccountId,
         withdrawal_id: U64,

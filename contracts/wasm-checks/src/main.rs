@@ -687,7 +687,17 @@ fn check_shared_treasury(directory: &Path) -> Value {
         "ft_on_transfer",
         funding(&b, "deposit-one", "1000000"),
         0,
-        Some("DEPOSIT_ID_REUSED"),
+        None,
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        TOKEN,
+        "ft_on_transfer",
+        funding(&a, "deposit-one", "1"),
+        0,
+        None,
         None,
     );
     actual_call(
@@ -716,7 +726,7 @@ fn check_shared_treasury(directory: &Path) -> Value {
             &mut calls,
             "bob.near",
             "get_deposit",
-            json!({"company_id":b,"deposit_id":"deposit-one"}),
+            json!({"company_id":b,"deposit_id":"deposit-one","credit_id":"1"}),
             0,
             None,
             None
@@ -729,14 +739,14 @@ fn check_shared_treasury(directory: &Path) -> Value {
             &mut calls,
             "alice.near",
             "get_deposit",
-            json!({"company_id":a,"deposit_id":"deposit-one"}),
+            json!({"company_id":a,"deposit_id":"deposit-one","credit_id":"1"}),
             0,
             None,
             None
         )["amount"],
         "1000000"
     );
-    for (company, amount) in [(&a, "1000000"), (&b, "2000000")] {
+    for (company, amount) in [(&a, "1000001"), (&b, "3000000")] {
         assert_eq!(
             actual_call(
                 &mut instance,
@@ -803,7 +813,7 @@ fn check_shared_treasury(directory: &Path) -> Value {
             None,
             None
         )["balance"],
-        "1000000"
+        "1000001"
     );
     assert_eq!(
         actual_call(
@@ -816,9 +826,29 @@ fn check_shared_treasury(directory: &Path) -> Value {
             None,
             None
         )["balance"],
-        "2000000"
+        "3000000"
     );
-    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_replay_protected":true,"withdrawal_callback_replay_protected":true})
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "stranger.near",
+        "on_source_recovery_verified",
+        json!({"company_id":a,"payment_id":"payment","attempt_id":"attempt","receipt":"untrusted","epoch":"0","pool_epoch":"0"}),
+        0,
+        Some("private"),
+        Some(Ok(b"\"999999999\"".to_vec())),
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "stranger.near",
+        "on_retained_recovery_verified",
+        json!({"company_id":a,"token_contract":"wrapped.near","withdrawal_id":"1","receipt":"untrusted","epoch":"0","pool_epoch":"0"}),
+        0,
+        Some("private"),
+        Some(Ok(b"\"999999999\"".to_vec())),
+    );
+    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true})
 }
 
 fn check_shared_clearing(directory: &Path) -> Value {

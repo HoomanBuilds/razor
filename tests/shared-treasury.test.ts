@@ -7,7 +7,7 @@ import type { TreasuryConfig } from "../src/server/payments/types";
 import { assertSameQuote, type QuoteResponse } from "../src/server/payments/intents";
 
 const config: TreasuryConfig = { organization_id: "one", company_id: deriveSharedCompanyId("one", "owner.near"), architecture: "shared_v1", near_account_id: "shared.near", network: "mainnet", token_contract: NATIVE_USDC.near };
-const deposit = { company_id: config.company_id!, deposit_id: "deposit-one", token_contract: config.token_contract, sender_id: "intents.near", amount: "1000000", kind: "funding" as const, credited_at_ms: "1" };
+const deposit = { credit_id: "2", company_id: config.company_id!, deposit_id: "deposit-one", token_contract: config.token_contract, sender_id: "intents.near", amount: "1000000", kind: "funding" as const, credited_at_ms: "1" };
 const log = (standard: string, event: string, data: unknown) => `EVENT_JSON:${JSON.stringify({ standard, version: "1.0.0", event, data: [data] })}`;
 function result(): FinalTransaction {
   return { final_execution_status: "FINAL", status: { SuccessValue: "" }, transaction: { hash: "tx", signer_id: "solver.near" }, receipts_outcome: [
@@ -51,6 +51,8 @@ test("funding requires the same final transaction to prove exact company credit 
   assert.throws(() => inspectSharedDeposit(missing, config, proof));
   const disconnected = result(); disconnected.receipts_outcome![0].outcome.status = { SuccessValue: "" };
   assert.throws(() => inspectSharedDeposit(disconnected, config, proof));
+  const unnumbered = result(); unnumbered.receipts_outcome![1].outcome.logs = [log("razor", "deposit_credited", { ...deposit, credit_id: "0" })];
+  assert.throws(() => inspectSharedDeposit(unnumbered, config, proof));
   assert.throws(() => inspectSharedDeposit({ ...transaction, final_execution_status: "EXECUTED_OPTIMISTIC" }, config, proof));
   assert.throws(() => inspectSharedDeposit(transaction, config, { ...proof, events: [] }));
   assert.throws(() => inspectSharedDeposit(transaction, config, { ...proof, amount: "999999" }));
@@ -60,15 +62,36 @@ test("funding requires the same final transaction to prove exact company credit 
 test("a final credit event must also exist unchanged in the company's shared deposit ledger", async () => {
   const transaction = result(), proof = inspectTokenReceipt(transaction, config, "tx", "solver.near", config.near_account_id, deposit.amount), original = globalThis.fetch;
   let stored: unknown = deposit;
+  const lookups: Record<string, unknown>[] = [];
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(init!.body as string);
+    if (request.method !== "EXPERIMENTAL_tx_status") lookups.push(JSON.parse(Buffer.from(request.params.args_base64, "base64").toString()));
     return Response.json({ result: request.method === "EXPERIMENTAL_tx_status" ? transaction : { result: [...Buffer.from(JSON.stringify(stored))] } });
   };
   try {
     assert.deepEqual(await verifySharedDeposit(config, proof, deposit.deposit_id), deposit);
+    assert.equal(lookups[0].credit_id, deposit.credit_id);
+    stored = { ...deposit, credit_id: "3" };
+    await assert.rejects(() => verifySharedDeposit(config, proof, deposit.deposit_id));
     stored = { ...deposit, company_id: "foreign-company" };
     await assert.rejects(() => verifySharedDeposit(config, proof, deposit.deposit_id));
     stored = null;
     await assert.rejects(() => verifySharedDeposit(config, proof, deposit.deposit_id));
+  } finally { globalThis.fetch = original; }
+});
+
+test("later transfers sharing a public tag cannot replace a final immutable credit proof", async () => {
+  const transaction = result(), proof = inspectTokenReceipt(transaction, config, "tx", "solver.near", config.near_account_id, deposit.amount), original = globalThis.fetch;
+  let latest = { ...deposit, credit_id: "1", amount: "1" };
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(init!.body as string);
+    if (request.method === "EXPERIMENTAL_tx_status") return Response.json({ result: transaction });
+    const lookup = JSON.parse(Buffer.from(request.params.args_base64, "base64").toString());
+    return Response.json({ result: { result: [...Buffer.from(JSON.stringify(lookup.credit_id === deposit.credit_id ? deposit : latest))] } });
+  };
+  try {
+    assert.deepEqual(await verifySharedDeposit(config, proof, deposit.deposit_id), deposit);
+    latest = { ...deposit, credit_id: "3", amount: "2" };
+    assert.deepEqual(await verifySharedDeposit(config, proof, deposit.deposit_id), deposit);
   } finally { globalThis.fetch = original; }
 });

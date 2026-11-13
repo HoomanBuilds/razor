@@ -15,9 +15,33 @@ use near_sdk::{
 const REGISTRATION_BYTES: u64 = 8_192;
 const EMERGENCY_BYTES: u64 = 1_024;
 
+#[ext_contract(ext_pool_token)]
+#[allow(dead_code)]
+trait PoolToken {
+    fn ft_balance_of(&self, account_id: AccountId) -> U128;
+}
+
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
 trait Callbacks {
+    fn on_source_recovery_verified(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        receipt: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool;
+    fn on_retained_recovery_verified(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        withdrawal_id: U64,
+        receipt: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool;
     fn on_transfer_result(
         &mut self,
         company_id: String,
@@ -86,6 +110,7 @@ pub struct StorageView {
 #[near(serializers = [borsh, json])]
 #[derive(Clone)]
 pub struct DepositCredit {
+    pub credit_id: U64,
     pub company_id: String,
     pub deposit_id: String,
     pub token_contract: AccountId,
@@ -120,8 +145,10 @@ pub struct Treasury {
     paused: bool,
     refund_reporter: Option<AccountId>,
     pool_epoch: u64,
+    next_credit_id: u64,
     companies: LookupMap<String, CompanyTreasury>,
-    deposits: LookupMap<String, DepositCredit>,
+    deposits: LookupMap<u64, DepositCredit>,
+    latest_deposits: LookupMap<String, U64>,
     liabilities: LookupMap<AccountId, u128>,
     refund_claims: LookupMap<String, RefundClaim>,
 }
@@ -144,8 +171,10 @@ impl Treasury {
             paused: false,
             refund_reporter: None,
             pool_epoch: 0,
+            next_credit_id: 0,
             companies: LookupMap::new(b"C"),
             deposits: LookupMap::new(b"D"),
+            latest_deposits: LookupMap::new(b"J"),
             liabilities: LookupMap::new(b"L"),
             refund_claims: LookupMap::new(b"F"),
         }
@@ -274,10 +303,20 @@ impl Treasury {
         self.get_storage(company_id)
     }
 
-    pub fn get_deposit(&self, company_id: String, deposit_id: String) -> Option<DepositCredit> {
+    pub fn get_deposit(
+        &self,
+        company_id: String,
+        deposit_id: String,
+        credit_id: Option<U64>,
+    ) -> Option<DepositCredit> {
+        let credit_id = credit_id.or_else(|| {
+            self.latest_deposits
+                .get(&format!("{company_id}:{deposit_id}"))
+                .copied()
+        })?;
         self.deposits
-            .get(&deposit_id)
-            .filter(|credit| credit.company_id == company_id)
+            .get(&credit_id.0)
+            .filter(|credit| credit.company_id == company_id && credit.deposit_id == deposit_id)
             .cloned()
     }
 
@@ -297,17 +336,18 @@ impl Treasury {
         validate_company_id(&message.company_id);
         validate_deposit_id(&message.deposit_id);
         require!(amount.0 > 0, "DEPOSIT_AMOUNT_REQUIRED");
-        require!(
-            !self.deposits.contains_key(&message.deposit_id),
-            "DEPOSIT_ID_REUSED"
-        );
         let token_contract = env::predecessor_account_id();
         require!(
             (message.kind == "funding" && token_contract == self.token_contract)
                 || (message.kind == "retained" && token_contract != self.token_contract),
             "DEPOSIT_KIND_TOKEN_MISMATCH"
         );
+        self.next_credit_id = self
+            .next_credit_id
+            .checked_add(1)
+            .expect("CREDIT_ID_OVERFLOW");
         let credit = DepositCredit {
+            credit_id: U64(self.next_credit_id),
             company_id: message.company_id.clone(),
             deposit_id: message.deposit_id.clone(),
             token_contract,
@@ -317,8 +357,11 @@ impl Treasury {
             credited_at_ms: U64(env::block_timestamp_ms()),
         };
         self.company(&message.company_id);
-        self.deposits
-            .insert(message.deposit_id.clone(), credit.clone());
+        self.deposits.insert(credit.credit_id.0, credit.clone());
+        self.latest_deposits.insert(
+            format!("{}:{}", message.company_id, message.deposit_id),
+            credit.credit_id,
+        );
         let accepted = self.with_company(&message.company_id, |company| {
             company.ft_on_transfer(
                 sender_id,
@@ -407,10 +450,60 @@ impl Treasury {
         attempt_id: String,
         succeeded: bool,
         receipt: String,
-    ) -> bool {
+    ) -> PromiseOrValue<bool> {
         self.assert_recovery_authority(&company_id, succeeded);
-        self.with_company(&company_id, |company| {
-            company.recover_source_transfer(payment_id, attempt_id, succeeded, receipt)
+        if succeeded {
+            return PromiseOrValue::Value(self.with_company(&company_id, |company| {
+                company.recover_source_transfer(payment_id, attempt_id, true, receipt)
+            }));
+        }
+        require!(
+            !receipt.is_empty() && receipt.len() <= 1024,
+            "RECEIPT_REQUIRED"
+        );
+        let epoch = U64(self.company(&company_id).balance_epoch);
+        require!(
+            self.source_recovery_current(&company_id, &payment_id, &attempt_id, epoch),
+            "SOURCE_ALREADY_RESOLVED"
+        );
+        PromiseOrValue::Promise(
+            ext_pool_token::ext(self.token_contract.clone())
+                .with_static_gas(Gas::from_tgas(5))
+                .ft_balance_of(env::current_account_id())
+                .then(
+                    ext_self::ext(env::current_account_id())
+                        .with_static_gas(Gas::from_tgas(30))
+                        .on_source_recovery_verified(
+                            company_id,
+                            payment_id,
+                            attempt_id,
+                            receipt,
+                            epoch,
+                            U64(self.pool_epoch),
+                        ),
+                ),
+        )
+    }
+
+    #[private]
+    pub fn on_source_recovery_verified(
+        &mut self,
+        company_id: String,
+        payment_id: String,
+        attempt_id: String,
+        receipt: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool {
+        if pool_epoch.0 != self.pool_epoch
+            || !self.source_recovery_current(&company_id, &payment_id, &attempt_id, epoch)
+            || !self.pool_covers_liability(&self.token_contract)
+        {
+            return false;
+        }
+        self.with_company_emergency(&company_id, |company| {
+            company.recover_source_transfer(payment_id, attempt_id, false, receipt);
+            true
         })
     }
 
@@ -424,8 +517,75 @@ impl Treasury {
         receipt: String,
     ) -> Promise {
         self.assert_recovery_authority(&company_id, succeeded);
-        self.with_company(&company_id, |company| {
-            company.recover_retained_withdrawal(token_contract, withdrawal_id, succeeded, receipt)
+        if succeeded {
+            return self.with_company(&company_id, |company| {
+                company.recover_retained_withdrawal(token_contract, withdrawal_id, true, receipt)
+            });
+        }
+        require!(
+            !receipt.is_empty() && receipt.len() <= 2000,
+            "RECEIPT_REQUIRED"
+        );
+        let epoch = self
+            .company(&company_id)
+            .get_retained_asset(token_contract.clone())
+            .expect("RETAINED_ASSET_NOT_FOUND")
+            .balance_epoch;
+        require!(
+            self.retained_recovery_current(&company_id, &token_contract, withdrawal_id, epoch),
+            "RETAINED_RECOVERY_NOT_REQUIRED"
+        );
+        ext_pool_token::ext(token_contract.clone())
+            .with_static_gas(Gas::from_tgas(5))
+            .ft_balance_of(env::current_account_id())
+            .then(
+                ext_self::ext(env::current_account_id())
+                    .with_static_gas(Gas::from_tgas(30))
+                    .on_retained_recovery_verified(
+                        company_id,
+                        token_contract,
+                        withdrawal_id,
+                        receipt,
+                        epoch,
+                        U64(self.pool_epoch),
+                    ),
+            )
+    }
+
+    #[private]
+    pub fn on_retained_recovery_verified(
+        &mut self,
+        company_id: String,
+        token_contract: AccountId,
+        withdrawal_id: U64,
+        receipt: String,
+        epoch: U64,
+        pool_epoch: U64,
+    ) -> bool {
+        if pool_epoch.0 != self.pool_epoch
+            || !self.retained_recovery_current(&company_id, &token_contract, withdrawal_id, epoch)
+            || !self.pool_covers_liability(&token_contract)
+        {
+            return false;
+        }
+        self.with_company_emergency(&company_id, |company| {
+            if !company.finish_retained_withdrawal(
+                token_contract.clone(),
+                withdrawal_id,
+                false,
+                Some(receipt),
+            ) {
+                return false;
+            }
+            let current_epoch = company
+                .get_retained_asset(token_contract.clone())
+                .expect("RETAINED_ASSET_NOT_FOUND")
+                .balance_epoch;
+            require!(
+                company.on_retained_balance_sync(token_contract, current_epoch),
+                "RECOVERY_BALANCE_SYNC_FAILED"
+            );
+            true
         })
     }
 
@@ -851,6 +1011,42 @@ impl Treasury {
 }
 
 impl Treasury {
+    fn source_recovery_current(
+        &self,
+        company_id: &String,
+        payment_id: &String,
+        attempt_id: &String,
+        epoch: U64,
+    ) -> bool {
+        let company = self.company(company_id);
+        company.balance_epoch == epoch.0
+            && company
+                .payments
+                .get(payment_id)
+                .and_then(|payment| payment.attempts.last())
+                .is_some_and(|attempt| {
+                    attempt.id == *attempt_id && attempt.status == AttemptStatus::Sending
+                })
+    }
+
+    fn retained_recovery_current(
+        &self,
+        company_id: &String,
+        token_contract: &AccountId,
+        withdrawal_id: U64,
+        epoch: U64,
+    ) -> bool {
+        self.company(company_id)
+            .get_retained_asset(token_contract.clone())
+            .is_some_and(|asset| {
+                asset.balance_epoch == epoch
+                    && asset.withdrawal.is_some_and(|withdrawal| {
+                        withdrawal.id == withdrawal_id
+                            && withdrawal.status == RetainedWithdrawalStatus::Pending
+                    })
+            })
+    }
+
     fn pool_covers_liability(&self, token_contract: &AccountId) -> bool {
         near_sdk::env::promise_result_checked(0, 128)
             .ok()
@@ -874,13 +1070,20 @@ impl Treasury {
     }
 
     fn assert_recovery_authority(&self, company_id: &String, succeeded: bool) {
-        near_sdk::assert_one_yocto();
         let caller = env::predecessor_account_id();
+        let reporter = self.refund_reporter.as_ref() == Some(&caller);
         require!(
-            self.refund_reporter.as_ref() == Some(&caller)
-                || (succeeded && self.company(company_id).owner_id == caller),
+            reporter || (succeeded && self.company(company_id).owner_id == caller),
             "VERIFIED_RECOVERY_REPORTER_REQUIRED"
         );
+        if reporter {
+            require!(
+                env::attached_deposit().as_yoctonear() <= 1,
+                "RECOVERY_DEPOSIT_MUST_BE_ZERO_OR_ONE"
+            );
+        } else {
+            near_sdk::assert_one_yocto();
+        }
     }
 
     fn company(&self, company_id: &String) -> &CompanyTreasury {
@@ -974,6 +1177,7 @@ impl Treasury {
     fn flush(&mut self) {
         self.companies.flush();
         self.deposits.flush();
+        self.latest_deposits.flush();
         self.liabilities.flush();
         self.refund_claims.flush();
     }

@@ -115,12 +115,12 @@ fn exact_deposit_allocation_and_policy_authority_are_company_isolated() {
     );
     assert!(
         treasury
-            .get_deposit(b.clone(), "deposit-a".into())
+            .get_deposit(b.clone(), "deposit-a".into(), None)
             .is_none()
     );
     assert_eq!(
         treasury
-            .get_deposit(a.clone(), "deposit-a".into())
+            .get_deposit(a.clone(), "deposit-a".into(), None)
             .unwrap()
             .amount,
         U128(100)
@@ -150,18 +150,23 @@ fn exact_deposit_allocation_and_policy_authority_are_company_isolated() {
 }
 
 #[test]
-fn deposit_identifiers_are_globally_unique_and_untagged_messages_are_rejected() {
+fn deposit_tags_are_company_scoped_and_untagged_messages_are_rejected() {
     let (mut treasury, a, b) = setup();
     deposit(&mut treasury, &a, "same-id", 100);
-    call("usdc.testnet", 0);
+    deposit(&mut treasury, &b, "same-id", 50);
+    let first = treasury
+        .get_deposit(a.clone(), "same-id".into(), None)
+        .unwrap();
+    let second = treasury
+        .get_deposit(b.clone(), "same-id".into(), None)
+        .unwrap();
+    assert_ne!(first.credit_id, second.credit_id);
     assert!(
-        catch_unwind(AssertUnwindSafe(|| treasury.ft_on_transfer(
-            account("depositor.testnet"),
-            U128(100),
-            json!({"company_id":b,"deposit_id":"same-id","kind":"funding"}).to_string()
-        )))
-        .is_err()
+        treasury
+            .get_deposit(b.clone(), "same-id".into(), Some(first.credit_id))
+            .is_none()
     );
+    call("usdc.testnet", 0);
     for msg in [
         "".to_string(),
         "razor:retain".to_string(),
@@ -176,7 +181,73 @@ fn deposit_identifiers_are_globally_unique_and_untagged_messages_are_rejected() 
             .is_err()
         );
     }
-    assert_eq!(treasury.get_balance(b).balance, U128(0));
+    assert_eq!(treasury.get_balance(b).balance, U128(50));
+}
+
+#[test]
+fn credit_identifier_overflow_cannot_wrap_or_increase_company_balance() {
+    let (mut treasury, a, _) = setup();
+    treasury.next_credit_id = u64::MAX;
+    call("usdc.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.ft_on_transfer(
+            account("depositor.testnet"),
+            U128(10),
+            json!({"company_id":a,"deposit_id":"overflow","kind":"funding"}).to_string(),
+        )))
+        .is_err()
+    );
+    assert_eq!(treasury.next_credit_id, u64::MAX);
+    assert_eq!(treasury.get_balance(a).balance, U128(0));
+}
+
+#[test]
+fn copied_deposit_tags_before_and_after_funding_cannot_replace_immutable_credits() {
+    let (mut treasury, a, b) = setup();
+    deposit(&mut treasury, &a, "public-tag", 1);
+    let dust = treasury
+        .get_deposit(a.clone(), "public-tag".into(), None)
+        .unwrap();
+    deposit(&mut treasury, &a, "public-tag", 100);
+    let intended = treasury
+        .get_deposit(a.clone(), "public-tag".into(), None)
+        .unwrap();
+    deposit(&mut treasury, &a, "public-tag", 2);
+    let later = treasury
+        .get_deposit(a.clone(), "public-tag".into(), None)
+        .unwrap();
+    assert!(dust.credit_id.0 < intended.credit_id.0 && intended.credit_id.0 < later.credit_id.0);
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(103));
+    assert_eq!(
+        treasury
+            .get_deposit(a.clone(), "public-tag".into(), Some(intended.credit_id))
+            .unwrap()
+            .amount,
+        U128(100)
+    );
+    assert_eq!(
+        treasury
+            .get_deposit(a.clone(), "public-tag".into(), Some(dust.credit_id))
+            .unwrap()
+            .amount,
+        U128(1)
+    );
+    assert!(
+        treasury
+            .get_deposit(a.clone(), "other-tag".into(), Some(intended.credit_id))
+            .is_none()
+    );
+    deposit(&mut treasury, &b, "public-tag", 70);
+    assert_eq!(treasury.get_balance(b.clone()).balance, U128(70));
+    assert!(
+        treasury
+            .get_deposit(b, "public-tag".into(), Some(intended.credit_id))
+            .is_none()
+    );
+    assert_eq!(
+        treasury.get_pool_liability(account("usdc.testnet")),
+        U128(173)
+    );
 }
 
 #[test]
@@ -261,6 +332,163 @@ fn company_owner_and_platform_owner_cannot_self_attest_pooled_refunds() {
 }
 
 #[test]
+fn restricted_reporter_recovery_accepts_zero_deposit_without_relaxing_owner_authority() {
+    let (mut treasury, a, _) = setup();
+    call("platform.testnet", 1);
+    treasury.set_refund_reporter(Some(account("reporter.testnet")));
+    for deposit in [0, 1] {
+        call("reporter.testnet", deposit);
+        treasury.assert_recovery_authority(&a, false);
+        treasury.assert_recovery_authority(&a, true);
+    }
+    call("reporter.testnet", 2);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.assert_recovery_authority(&a, false)
+        ))
+        .is_err()
+    );
+    call("alice.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.assert_recovery_authority(&a, true)
+        ))
+        .is_err()
+    );
+    call("mallory.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.assert_recovery_authority(&a, true)
+        ))
+        .is_err()
+    );
+    call("alice.testnet", 1);
+    treasury.assert_recovery_authority(&a, true);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.assert_recovery_authority(&a, false)
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn failed_retained_recovery_restores_only_after_current_global_coverage() {
+    let (mut treasury, a, b) = setup();
+    for (id, owner, amount) in [(&a, "alice.testnet", 50), (&b, "bob.testnet", 70)] {
+        call(owner, 1);
+        treasury.set_retained_asset(
+            id.clone(),
+            account("wrapped.testnet"),
+            "nep141:wrapped.testnet".into(),
+            "WRAP".into(),
+            8,
+            true,
+        );
+        call("wrapped.testnet", 0);
+        drop(treasury.ft_on_transfer(
+            account("depositor.testnet"),
+            U128(amount),
+            json!({"company_id":id,"deposit_id":"retained","kind":"retained"}).to_string(),
+        ));
+    }
+    let asset_epoch = treasury
+        .get_retained_asset(a.clone(), account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    call("alice.testnet", 1);
+    drop(treasury.withdraw_retained_asset(
+        a.clone(),
+        account("wrapped.testnet"),
+        account("alice.testnet"),
+        U128(20),
+        asset_epoch,
+    ));
+    enable_reporter(&mut treasury);
+    call("reporter.testnet", 0);
+    drop(treasury.recover_retained_withdrawal(
+        a.clone(),
+        account("wrapped.testnet"),
+        U64(1),
+        false,
+        "final-failed-receipt".into(),
+    ));
+    let epoch = treasury
+        .get_retained_asset(a.clone(), account("wrapped.testnet"))
+        .unwrap()
+        .balance_epoch;
+    let pool = U64(treasury.pool_epoch);
+    assert_eq!(
+        treasury
+            .get_retained_asset(a.clone(), account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(30)
+    );
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(100)).unwrap(),
+    ));
+    assert!(!treasury.on_retained_recovery_verified(
+        a.clone(),
+        account("wrapped.testnet"),
+        U64(1),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(
+        treasury
+            .get_retained_asset(a.clone(), account("wrapped.testnet"))
+            .unwrap()
+            .in_flight,
+        U128(20)
+    );
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(120)).unwrap(),
+    ));
+    assert!(!treasury.on_retained_recovery_verified(
+        a.clone(),
+        account("wrapped.testnet"),
+        U64(2),
+        "wrong-withdrawal".into(),
+        epoch,
+        pool
+    ));
+    assert!(treasury.on_retained_recovery_verified(
+        a.clone(),
+        account("wrapped.testnet"),
+        U64(1),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    let recovered = treasury
+        .get_retained_asset(a.clone(), account("wrapped.testnet"))
+        .unwrap();
+    assert_eq!(recovered.balance, U128(50));
+    assert_eq!(recovered.in_flight, U128(0));
+    assert_eq!(
+        recovered.withdrawal.unwrap().status,
+        RetainedWithdrawalStatus::Failed
+    );
+    assert_eq!(
+        treasury
+            .get_retained_asset(b, account("wrapped.testnet"))
+            .unwrap()
+            .balance,
+        U128(70)
+    );
+    assert!(!treasury.on_retained_recovery_verified(
+        a,
+        account("wrapped.testnet"),
+        U64(1),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+}
+
+#[test]
 fn storage_topups_increase_only_storage_credit() {
     let (mut treasury, a, _) = setup();
     let before = treasury.get_storage(a.clone());
@@ -273,7 +501,7 @@ fn storage_topups_increase_only_storage_credit() {
     assert!(catch_unwind(AssertUnwindSafe(|| treasury.add_storage(a))).is_err());
 }
 
-fn prepare_refund(treasury: &mut Treasury, company_id: &str, owner: &str) {
+fn prepare_sending(treasury: &mut Treasury, company_id: &str, owner: &str) {
     call(owner, 1);
     treasury.set_recipient(
         company_id.into(),
@@ -334,6 +562,10 @@ fn prepare_refund(treasury: &mut Treasury, company_id: &str, owner: &str) {
     );
     call(owner, 0);
     drop(treasury.execute_payment(company_id.into(), "payment".into(), "attempt".into()));
+}
+
+fn prepare_refund(treasury: &mut Treasury, company_id: &str, owner: &str) {
+    prepare_sending(treasury, company_id, owner);
     callback(PromiseResult::Successful(vec![]));
     assert!(treasury.on_transfer_result(company_id.into(), "payment".into(), "attempt".into()));
     call(owner, 0);
@@ -350,6 +582,138 @@ fn prepare_refund(treasury: &mut Treasury, company_id: &str, owner: &str) {
 fn enable_reporter(treasury: &mut Treasury) {
     call("platform.testnet", 1);
     treasury.set_refund_reporter(Some(account("reporter.testnet")));
+}
+
+fn start_source_recovery(treasury: &mut Treasury, company_id: &str) -> (U64, U64) {
+    call("reporter.testnet", 0);
+    assert!(matches!(
+        treasury.recover_source_transfer(
+            company_id.into(),
+            "payment".into(),
+            "attempt".into(),
+            false,
+            "final-failed-receipt".into()
+        ),
+        PromiseOrValue::Promise(_)
+    ));
+    (
+        U64(treasury.company(&company_id.to_string()).balance_epoch),
+        U64(treasury.pool_epoch),
+    )
+}
+
+#[test]
+fn failed_source_recovery_checks_solvency_before_restoring_credit_and_rejects_replay() {
+    let (mut treasury, a, b) = setup();
+    deposit(&mut treasury, &a, "a", 1_000);
+    deposit(&mut treasury, &b, "b", 500);
+    prepare_sending(&mut treasury, &a, "alice.testnet");
+    enable_reporter(&mut treasury);
+    let (epoch, pool) = start_source_recovery(&mut treasury, &a);
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(898));
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(1_398)).unwrap(),
+    ));
+    assert!(!treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a.clone()).in_flight, U128(102));
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(1_500)).unwrap(),
+    ));
+    assert!(treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(1_000));
+    assert_eq!(treasury.get_balance(a.clone()).in_flight, U128(0));
+    assert_eq!(treasury.get_balance(b).balance, U128(500));
+    assert!(!treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a).balance, U128(1_000));
+}
+
+#[test]
+fn another_company_credit_invalidates_a_pending_failed_source_recovery_probe() {
+    let (mut treasury, a, b) = setup();
+    deposit(&mut treasury, &a, "a", 1_000);
+    deposit(&mut treasury, &b, "b", 500);
+    prepare_sending(&mut treasury, &a, "alice.testnet");
+    enable_reporter(&mut treasury);
+    let (epoch, pool) = start_source_recovery(&mut treasury, &a);
+    deposit(&mut treasury, &b, "later", 50);
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(1_550)).unwrap(),
+    ));
+    assert!(!treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(898));
+    let (epoch, pool) = start_source_recovery(&mut treasury, &a);
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(1_550)).unwrap(),
+    ));
+    assert!(treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a).balance, U128(1_000));
+    assert_eq!(treasury.get_balance(b).balance, U128(550));
+}
+
+#[test]
+fn an_original_source_callback_cannot_be_overridden_by_pending_manual_recovery() {
+    let (mut treasury, a, b) = setup();
+    deposit(&mut treasury, &a, "a", 1_000);
+    deposit(&mut treasury, &b, "b", 500);
+    prepare_sending(&mut treasury, &a, "alice.testnet");
+    enable_reporter(&mut treasury);
+    let (epoch, pool) = start_source_recovery(&mut treasury, &a);
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result(a.clone(), "payment".into(), "attempt".into()));
+    callback(PromiseResult::Successful(
+        near_sdk::serde_json::to_vec(&U128(1_500)).unwrap(),
+    ));
+    assert!(!treasury.on_source_recovery_verified(
+        a.clone(),
+        "payment".into(),
+        "attempt".into(),
+        "final-failed-receipt".into(),
+        epoch,
+        pool
+    ));
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(898));
+    assert_eq!(
+        treasury
+            .get_attempt(a, "payment".into(), "attempt".into())
+            .unwrap()
+            .status,
+        AttemptStatus::SourceSent
+    );
 }
 
 fn start_refund(treasury: &mut Treasury, company_id: &str, receipt: &str) -> (U64, U64) {
