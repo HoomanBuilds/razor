@@ -86,6 +86,7 @@ export interface TokenReceiptProof {
 }
 
 export interface SharedDepositCredit {
+  credit_id: string;
   company_id: string;
   deposit_id: string;
   token_contract: string;
@@ -137,7 +138,7 @@ export function inspectSharedDeposit(result: FinalTransaction, config: TreasuryC
       if (!event || event.standard !== "razor" || event.event !== "deposit_credited" || !Array.isArray(event.data)) continue;
       for (const credit of event.data) {
         if (!credit || typeof credit !== "object") continue;
-        if (credit.company_id === companyId && typeof credit.deposit_id === "string" && (!depositId || credit.deposit_id === depositId) && credit.token_contract === proof.tokenContract && credit.amount === proof.amount && credit.kind === kind && typeof credit.credited_at_ms === "string" && proof.events.every(transfer => transfer.sender === credit.sender_id)) credits.push(credit);
+        if (typeof credit.credit_id === "string" && /^[1-9]\d*$/.test(credit.credit_id) && credit.company_id === companyId && typeof credit.deposit_id === "string" && (!depositId || credit.deposit_id === depositId) && credit.token_contract === proof.tokenContract && credit.amount === proof.amount && credit.kind === kind && typeof credit.credited_at_ms === "string" && proof.events.every(transfer => transfer.sender === credit.sender_id)) credits.push(credit);
       }
     }
   }
@@ -148,8 +149,8 @@ export function inspectSharedDeposit(result: FinalTransaction, config: TreasuryC
 export async function verifySharedDeposit(config: TreasuryConfig, proof: TokenReceiptProof, depositId?: string, kind: "funding" | "retained" = "funding"): Promise<SharedDepositCredit> {
   const result = await nearTransactionStatus(config, proof.transactionHash, proof.senderAccountId);
   const credit = inspectSharedDeposit(result, config, proof, depositId, kind);
-  const stored = await view<SharedDepositCredit | null>(config, "get_deposit", { deposit_id: credit.deposit_id });
-  if (!stored || (["company_id", "deposit_id", "token_contract", "sender_id", "amount", "kind", "credited_at_ms"] as const).some(key => stored[key] !== credit[key])) throw new ApiError(409, "The shared treasury ledger does not match the final deposit credit", "SHARED_DEPOSIT_UNVERIFIED");
+  const stored = await view<SharedDepositCredit | null>(config, "get_deposit", { deposit_id: credit.deposit_id, credit_id: credit.credit_id });
+  if (!stored || (["credit_id", "company_id", "deposit_id", "token_contract", "sender_id", "amount", "kind", "credited_at_ms"] as const).some(key => stored[key] !== credit[key])) throw new ApiError(409, "The shared treasury ledger does not match the final deposit credit", "SHARED_DEPOSIT_UNVERIFIED");
   return credit;
 }
 
