@@ -3,6 +3,7 @@ export interface RecipientSnapshot {
   primary_asset: string;
   primary_network: string;
   primary_address: string;
+  primary_memo?: string | null;
   backup_network: string | null;
   backup_address: string | null;
   fallback_consent: number;
@@ -45,6 +46,7 @@ export interface PayoutAttempt {
   destination_asset: string;
   destination_network: string;
   destination_address: string;
+  destination_memo?: string | null;
   destination_decimals?: number | null;
   destination_symbol?: string | null;
   expected_output: string;

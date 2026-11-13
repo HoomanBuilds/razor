@@ -10,6 +10,7 @@ import type { ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapsho
 import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
 import { clientReserveTotals } from "../client-reserves/accounting";
+import { DestinationError, normalizeDestination } from "../../lib/recipient-destination";
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -158,7 +159,7 @@ export function createPayment(access: AccessContext, input: CreatePaymentInput):
     }
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id = ? AND organization_id = ?", input.recipientId, access.organizationId);
     if (!recipient) throw new ApiError(404, "Recipient not found", "RECIPIENT_NOT_FOUND");
-    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
+    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, primary_memo: recipient.primary_memo ?? null, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
     const paymentId = id();
     getDb().prepare("INSERT INTO payments(id,organization_id,recipient_id,kind,reference,amount,max_fee,status,scheduled_for,recipient_version,recipient_snapshot,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(paymentId, access.organizationId, input.recipientId, input.kind ?? "payment", input.reference, amount, maxFee, "draft", input.scheduledFor ?? null, recipient.version, json(snapshot), json(input.metadata ?? {}), now(), now());
     return getPayment(access, paymentId);
@@ -172,7 +173,7 @@ export function revalidatePaymentRecipient(access: AccessContext, paymentId: str
     if (payment.status !== "draft" || payment.approved_at || listAttempts(access, paymentId).length) throw new ApiError(409, "Cancel the approved obligation and prepare a new one before changing its recipient terms", "FRESH_APPROVAL_REQUIRED");
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id=? AND organization_id=? AND archived=0", payment.recipient_id, access.organizationId);
     if (!recipient) throw new ApiError(409, "Choose an active recipient", "RECIPIENT_UNAVAILABLE");
-    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
+    const snapshot = { id: recipient.id, primary_asset: recipient.primary_asset, primary_network: recipient.primary_network, primary_address: recipient.primary_address, primary_memo: recipient.primary_memo ?? null, backup_network: recipient.backup_network, backup_address: recipient.backup_address, fallback_consent: recipient.fallback_consent, version: recipient.version, preference_status: recipient.preference_status, confirmed_at: recipient.confirmed_at, archived: recipient.archived };
     getDb().prepare("UPDATE payments SET recipient_version=?,recipient_snapshot=?,updated_at=? WHERE id=?").run(recipient.version, json(snapshot), now(), paymentId);
     return getPayment(access, paymentId);
   });
@@ -248,6 +249,12 @@ function resolveAsset(tokens: Token[], recipient: RecipientSnapshot, backup: boo
   return token;
 }
 
+function validatePayoutDestination(network: string, address: string, memo?: string | null) {
+  try {
+    if (normalizeDestination(network, address, memo).address !== address) throw new ApiError(409, "The recipient must reconfirm the complete encoded receiving address before payment", "DESTINATION_RECONFIRM_REQUIRED");
+  } catch (error) { if (error instanceof DestinationError) throw new ApiError(422, error.message, error.code); throw error; }
+}
+
 export async function preparePaymentQuote(access: AccessContext, paymentId: string, input: { useBackup?: boolean; dry?: boolean } = {}) {
   requirePermission(access, "payments:execute");
   assertRunning(access);
@@ -268,16 +275,20 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
   if (input.useBackup && recipient.primary_network === destination.blockchain && (recipient.primary_asset === destination.assetId || recipient.primary_asset === "USDC")) throw new ApiError(409, "A native-USDC backup must use a different receiving network", "BACKUP_NETWORK_DUPLICATE");
   const address = input.useBackup ? recipient.backup_address! : recipient.primary_address;
   if (!address) throw new ApiError(422, "Confirm the receiving destination first", "DESTINATION_REQUIRED");
+  validatePayoutDestination(destination.blockchain, address, input.useBackup ? null : recipient.primary_memo);
   const outputFor = (token: Token) => {
     try { return usdToToken(payment.amount, token.symbol === "USDC" ? "1" : token.price ?? "0", token.decimals); } catch { throw new ApiError(422, "A usable valuation is unavailable for the preferred payout asset", "TOKEN_VALUATION_UNAVAILABLE"); }
   };
   const output = outputFor(destination);
-  const makeQuote = (token: Token, receivingAddress: string, dry: boolean) => requestQuote({ dry, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: token.assetId, amount: outputFor(token), recipient: receivingAddress, recipientType: "DESTINATION_CHAIN", refundTo: config.near_account_id, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString() });
+  const makeQuote = (token: Token, receivingAddress: string, dry: boolean, memo?: string | null) => {
+    validatePayoutDestination(token.blockchain, receivingAddress, memo);
+    return requestQuote({ dry, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: token.assetId, amount: outputFor(token), recipient: receivingAddress, recipientType: "DESTINATION_CHAIN", refundTo: config.near_account_id, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 5 * 60_000).toISOString() });
+  };
   if (input.useBackup && !attempts.some(hasProvenPrimaryFailure)) {
     let primaryAvailable = false;
     try {
       const primary = resolveAsset(tokens, recipient, false);
-      if (primary.blockchain !== "near" || primary.assetId !== origin.assetId) await makeQuote(primary, recipient.primary_address, true);
+      if (primary.blockchain !== "near" || primary.assetId !== origin.assetId) await makeQuote(primary, recipient.primary_address, true, recipient.primary_memo);
       primaryAvailable = true;
     } catch (error) {
       if (!(error instanceof ApiError) || !["PRIMARY_UNAVAILABLE", "USDC_UNAVAILABLE", "USDC_NETWORK_UNSUPPORTED", "ROUTE_UNAVAILABLE"].includes(error.code)) throw error;
@@ -285,7 +296,7 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
     if (primaryAvailable) throw new ApiError(409, "The preferred payout route is available. Use the preferred destination first", "PRIMARY_AVAILABLE");
   }
   const direct = destination.blockchain === "near" && destination.assetId === origin.assetId;
-  const quote: ExecutionRecord = direct ? { kind: "direct", network: "near", assetId: destination.assetId, recipient: address, amountIn: payment.amount, amountOut: payment.amount, deadline: new Date(Date.now() + 5 * 60_000).toISOString(), authorization: "NEAR treasury approval" } satisfies DirectExecution : await makeQuote(destination, address, !!input.dry);
+  const quote: ExecutionRecord = direct ? { kind: "direct", network: "near", assetId: destination.assetId, recipient: address, amountIn: payment.amount, amountOut: payment.amount, deadline: new Date(Date.now() + 5 * 60_000).toISOString(), authorization: "NEAR treasury approval" } satisfies DirectExecution : await makeQuote(destination, address, !!input.dry, input.useBackup ? null : recipient.primary_memo);
   const terms = executionTerms(quote);
   checkBudget(payment, terms.amountIn);
   if (input.dry) return { quote, dry: true, valuation: destination.symbol === "USDC" ? null : { price: destination.price, priceUpdatedAt: destination.priceUpdatedAt, entitlement: payment.amount } };
@@ -300,7 +311,7 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
     if (latest.reserved_amount === "0") throw new ApiError(409, "This payment no longer has reserved funds", "PAYMENT_UNFUNDED");
     checkBudget(latest, terms.amountIn);
     getDb().prepare("INSERT INTO payout_attempts(id,payment_id,organization_id,route,state,quote,destination_asset,destination_network,destination_address,expected_output,amount_in,deposit_address,deposit_memo,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(attemptId, paymentId, access.organizationId, input.useBackup ? "backup" : "primary", "prepared", json(quote), destination.assetId, destination.blockchain, address, output, terms.amountIn, terms.sourceReceiver, isDirectExecution(quote) ? null : quote.quote.depositMemo ?? null, now(), now());
-    getDb().prepare("UPDATE payout_attempts SET destination_decimals=?,destination_symbol=? WHERE id=?").run(destination.decimals, destination.symbol, attemptId);
+    getDb().prepare("UPDATE payout_attempts SET destination_decimals=?,destination_symbol=?,destination_memo=? WHERE id=?").run(destination.decimals, destination.symbol, input.useBackup ? null : recipient.primary_memo ?? null, attemptId);
     getDb().prepare("UPDATE payments SET status='prepared',hold_reason=NULL,updated_at=? WHERE id=?").run(now(), paymentId);
   });
   return { attempt: getAttempt(access, attemptId), walletActions, dry: false };

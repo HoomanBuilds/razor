@@ -21,8 +21,8 @@ recipientWorkspaceRoutes.post("/profiles/:id/confirm",async c=>{
   const input=await validateProfile(PreferenceInput.parse(await c.req.json()));
   if(input.fallbackConsent&&(!input.backupNetwork||!input.backupAddress))throw new ApiError(400,"Choose a complete backup route before consenting to USDC fallback","BACKUP_INCOMPLETE");
   transaction(db=>{
-    const now=new Date().toISOString(),updated=db.prepare("UPDATE recipients SET primary_asset=?,primary_network=?,primary_address=?,backup_network=?,backup_address=?,fallback_consent=?,preference_status='confirmed',confirmed_at=?,version=version+1,updated_at=? WHERE id=? AND user_id=? AND version=? AND archived=0")
-      .run(input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,userId,input.expectedVersion);
+    const now=new Date().toISOString(),updated=db.prepare("UPDATE recipients SET primary_asset=?,primary_network=?,primary_address=?,primary_memo=?,backup_network=?,backup_address=?,fallback_consent=?,preference_status='confirmed',confirmed_at=?,version=version+1,updated_at=? WHERE id=? AND user_id=? AND version=? AND archived=0")
+      .run(input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,userId,input.expectedVersion);
     if(!updated.changes)throw new ApiError(409,"Your preferences changed. Refresh before confirming.","RECIPIENT_VERSION_CHANGED");
     saveVersion(getRecipient(recipient.organization_id,recipient.id),userId);
     audit(userId,recipient.organization_id,"recipient.preferences_confirmed",recipient.id,{version:input.expectedVersion+1,fallbackConsent:input.fallbackConsent});

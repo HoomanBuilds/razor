@@ -8,34 +8,37 @@ import { normalizeWallet } from "./auth";
 import { appOrigin, audit, requireOrganization, requireUser } from "./session";
 import { parseCsv } from "../../lib/csv";
 import { getSupportedTokens, nativeUsdc, type Token } from "../payments/intents";
+import { canonicalNetwork, DestinationError, normalizeDestination } from "../../lib/recipient-destination";
 
 export interface RecipientRecord {
   id: string; organization_id: string; user_id: string | null; name: string; email: string | null; kind: string;
-  primary_asset: string; primary_network: string; primary_address: string; backup_network: string | null; backup_address: string | null;
+  primary_asset: string; primary_network: string; primary_address: string; primary_memo: string | null; backup_network: string | null; backup_address: string | null;
   fallback_consent: number; preference_status: string; version: number; confirmed_at: string | null; archived: number; created_at: string; updated_at: string;
 }
 
-const EVM_NETWORKS = new Set(["eth","base","arb","pol","op","avax","bsc","bnb","gnosis","aurora","bera","plasma","monad"]);
+const EVM_NETWORKS = new Set(["eth","base","arb","pol","op","avax","bsc","gnosis","aurora","bera","plasma","monad","xlayer","scroll","adi","hood","hlevm","hypercore"]);
 const BACKUP_NETWORKS = ["base","arb","pol","eth","sol","near"] as const;
-const NETWORK_ALIASES:Record<string,string>={ethereum:"eth",arbitrum:"arb",polygon:"pol",solana:"sol",optimism:"op",avalanche:"avax",berachain:"bera"};
-const canonicalNetwork=(value:string)=>NETWORK_ALIASES[value.toLowerCase()] || value.toLowerCase();
 const ProfileInput = z.object({
   name: z.string().trim().min(1).max(120), email: z.email().max(254).nullable().optional(), kind: z.enum(["employee","contractor","business"]),
   primaryAsset: z.string().trim().min(1).max(240).default("USDC"), primaryNetwork: z.string().trim().min(2).max(80), primaryAddress: z.string().trim().min(2).max(200),
+  primaryMemo: z.string().trim().max(120).nullable().optional(),
+  backupMemo: z.string().trim().max(0,"USDC backup destinations cannot require a separate receiving memo. Use a personal wallet on an enabled backup network.").nullable().optional(),
   backupNetwork: z.preprocess((value)=>typeof value==="string"?canonicalNetwork(value):value,z.enum(BACKUP_NETWORKS).nullable().optional()), backupAddress: z.string().trim().min(2).max(200).nullable().optional(),
 });
-export const PreferenceInput = ProfileInput.pick({primaryAsset:true,primaryNetwork:true,primaryAddress:true,backupNetwork:true,backupAddress:true}).extend({expectedVersion:z.number().int().positive(),fallbackConsent:z.boolean().default(false)});
+export const PreferenceInput = ProfileInput.pick({primaryAsset:true,primaryNetwork:true,primaryAddress:true,primaryMemo:true,backupMemo:true,backupNetwork:true,backupAddress:true}).extend({expectedVersion:z.number().int().positive(),fallbackConsent:z.boolean().default(false)});
 
 function familyFor(network: string): string | undefined {
   if (EVM_NETWORKS.has(network)) return "evm";
-  if (network === "sol") return "solana";
+  if (network === "sol" || network === "fogo") return "solana";
   if (network === "near") return "near";
 }
 
-function validateRoute<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;backupNetwork?:string|null;backupAddress?:string|null}>(input: T): T {
+function validateRoute<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;primaryMemo?:string|null;backupNetwork?:string|null;backupAddress?:string|null}>(input: T): T {
   input.primaryNetwork = canonicalNetwork(input.primaryNetwork);
-  const family = familyFor(input.primaryNetwork);
-  if (family) input.primaryAddress = normalizeWallet(family,input.primaryAddress);
+  try {
+    const destination = normalizeDestination(input.primaryNetwork,input.primaryAddress,input.primaryMemo);
+    input.primaryAddress = destination.address; input.primaryMemo = destination.memo;
+  } catch(error) { if(error instanceof DestinationError)throw new ApiError(400,error.message,error.code);throw error; }
   if (Boolean(input.backupNetwork)!==Boolean(input.backupAddress)) throw new ApiError(400,"Choose both the backup network and its receiving address","BACKUP_INCOMPLETE");
   if (input.backupNetwork && input.backupAddress) {
     input.backupAddress=normalizeWallet(familyFor(input.backupNetwork)!,input.backupAddress);
@@ -54,7 +57,7 @@ function validateBackupAsset(input:{primaryAsset:string;primaryNetwork:string;ba
   if(primary.assetId===usdc.assetId)throw new ApiError(400,"Choose another network for the native USDC backup when your primary is already native USDC","BACKUP_SAME_NETWORK");
 }
 
-export async function validateProfile<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;backupNetwork?:string|null;backupAddress?:string|null}>(input:T):Promise<T> {
+export async function validateProfile<T extends {primaryAsset:string;primaryNetwork:string;primaryAddress:string;primaryMemo?:string|null;backupNetwork?:string|null;backupAddress?:string|null}>(input:T):Promise<T> {
   validateRoute(input);
   if(input.primaryNetwork===input.backupNetwork) {
     let tokens:Token[]|null=null;
@@ -68,7 +71,7 @@ function serialize(record: RecipientRecord): RecipientRecord {
   return {...record,name:decrypt(record.name),email:record.email?decrypt(record.email):null};
 }
 
-const RECIPIENT_COLUMNS = "id,organization_id,user_id,name,email,kind,primary_asset,primary_network,primary_address,backup_network,backup_address,fallback_consent,preference_status,version,confirmed_at,archived,created_at,updated_at";
+const RECIPIENT_COLUMNS = "id,organization_id,user_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,fallback_consent,preference_status,version,confirmed_at,archived,created_at,updated_at";
 
 export function getRecipient(orgId:string,id:string):RecipientRecord {
   const recipient=row<RecipientRecord>(`SELECT ${RECIPIENT_COLUMNS} FROM recipients WHERE organization_id = ? AND id = ?`,orgId,id);
@@ -107,7 +110,7 @@ export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[
       if(!externalId||externalId.length>120)throw new ApiError(400,"Use a stable external_id of 1 to 120 characters","EXTERNAL_ID_REQUIRED");
       if(seen.has(externalId))throw new ApiError(400,"This external_id appears more than once in the file","DUPLICATE_EXTERNAL_ID");
       seen.add(externalId);
-      const input=validateRoute(ProfileInput.parse({name:record.name,email:record.email?.toLowerCase()||null,kind:record.kind,primaryAsset:record.primary_asset,primaryNetwork:record.primary_network,primaryAddress:record.primary_address,backupNetwork:record.backup_network||null,backupAddress:record.backup_address||null}));
+      const input=validateRoute(ProfileInput.parse({name:record.name,email:record.email?.toLowerCase()||null,kind:record.kind,primaryAsset:record.primary_asset,primaryNetwork:record.primary_network,primaryAddress:record.primary_address,primaryMemo:record.primary_memo||null,backupMemo:record.backup_memo||null,backupNetwork:record.backup_network||null,backupAddress:record.backup_address||null}));
       const id=importRecipientId(access.organizationId,externalId);
       return transaction((db):ImportResult=>{
         if(row("SELECT id FROM recipients WHERE id = ? AND organization_id = ?",id,access.organizationId)) {
@@ -115,7 +118,7 @@ export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[
           if(recipient.archived)throw new ApiError(409,"This source key belongs to an archived payee. Existing history is preserved.","RECIPIENT_ARCHIVED");
           const original=row<{profile_ciphertext:string}>("SELECT profile_ciphertext FROM recipient_versions WHERE recipient_id = ? AND version = 1",id);
           const initial:RecipientRecord=original?JSON.parse(decrypt(original.profile_ciphertext)):recipient;
-          if(initial.name!==input.name||initial.email!==(input.email||null)||initial.kind!==input.kind||initial.primary_asset!==input.primaryAsset||initial.primary_network!==input.primaryNetwork||initial.primary_address!==input.primaryAddress||initial.backup_network!==(input.backupNetwork||null)||initial.backup_address!==(input.backupAddress||null))throw new ApiError(409,"This external_id was imported with different details. Edit the existing payee instead.","IMPORT_KEY_CONFLICT");
+          if(initial.name!==input.name||initial.email!==(input.email||null)||initial.kind!==input.kind||initial.primary_asset!==input.primaryAsset||initial.primary_network!==input.primaryNetwork||initial.primary_address!==input.primaryAddress||(initial.primary_memo??null)!==(input.primaryMemo??null)||initial.backup_network!==(input.backupNetwork||null)||initial.backup_address!==(input.backupAddress||null))throw new ApiError(409,"This external_id was imported with different details. Edit the existing payee instead.","IMPORT_KEY_CONFLICT");
           return {row:index+2,externalId,status:"existing",recipient};
         }
         if(!tokens)throw new ApiError(503,"The live asset catalog is unavailable. Retry later; existing imported profiles are preserved.","CATALOG_UNAVAILABLE");
@@ -124,8 +127,8 @@ export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[
         if(!asset||asset.blockchain!==input.primaryNetwork)throw new ApiError(400,"Choose a live catalog asset ID on its matching network","ASSET_UNSUPPORTED");
         if(dryRun)return {row:index+2,externalId,status:"ready"};
         const token=newToken(),now=new Date().toISOString();
-        db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-          .run(id,access.organizationId,encrypt(input.name),input.email?encrypt(input.email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
+        db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+          .run(id,access.organizationId,encrypt(input.name),input.email?encrypt(input.email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
         const recipient=getRecipient(access.organizationId,id);
         saveVersion(recipient,access.userId);audit(access.userId,access.organizationId,"recipient.imported",id,{version:1});
         return {row:index+2,externalId,status:"created",recipient,invitationUrl:`${appOrigin()}/receive?token=${token}`};
@@ -152,8 +155,8 @@ recipientRoutes.post("/:orgId/recipients/import",requireOrganization("recipients
 recipientRoutes.post("/:orgId/recipients",requireOrganization("recipients:manage"),async(c)=>{
   const input=await validateProfile(ProfileInput.parse(await c.req.json())),orgId=c.req.param("orgId"),id=randomUUID(),token=newToken(),now=new Date().toISOString();
   transaction((db)=>{
-    db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .run(id,orgId,encrypt(input.name),input.email?encrypt(input.email.toLowerCase()):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
+    db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(id,orgId,encrypt(input.name),input.email?encrypt(input.email.toLowerCase()):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.created",id,{version:1});
   });
@@ -170,8 +173,8 @@ recipientRoutes.patch("/:orgId/recipients/:recipientId",requireOrganization("rec
     if(existing.version!==input.expectedVersion) throw new ApiError(409,"This recipient changed. Refresh before saving.","RECIPIENT_VERSION_CHANGED");
     const email=input.email?.toLowerCase() || null;
     const identityChanged=existing.email!==email;
-    db.prepare("UPDATE recipients SET name = ?,email = ?,kind = ?,primary_asset = ?,primary_network = ?,primary_address = ?,backup_network = ?,backup_address = ?,fallback_consent = 0,preference_status = 'pending_confirmation',confirmed_at = NULL,user_id = CASE WHEN ? THEN NULL ELSE user_id END,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
-      .run(encrypt(input.name),email?encrypt(email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.backupNetwork??null,input.backupAddress??null,Number(identityChanged),new Date().toISOString(),id,orgId,input.expectedVersion);
+    db.prepare("UPDATE recipients SET name = ?,email = ?,kind = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = 0,preference_status = 'pending_confirmation',confirmed_at = NULL,user_id = CASE WHEN ? THEN NULL ELSE user_id END,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
+      .run(encrypt(input.name),email?encrypt(email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(identityChanged),new Date().toISOString(),id,orgId,input.expectedVersion);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.updated",id,{version:input.expectedVersion+1});
   });
@@ -223,7 +226,7 @@ recipientPortalRoutes.get("/:token",(c)=>{
 recipientPortalRoutes.get("/:token/payments",(c)=>{
   const recipient=invitedRecipient(c.req.param("token"),c.get("userId"));
   if(!row("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'payments'")) throw new ApiError(503,"Payment history is not configured yet. Your saved payout preferences remain available.","PAYMENT_HISTORY_SETUP_REQUIRED");
-  const payments=rows("SELECT p.id,p.kind,p.reference,p.amount,p.status,p.scheduled_for,p.created_at,p.updated_at,a.destination_asset,a.destination_network,a.destination_address,a.destination_tx_hash,a.state AS route_status FROM payments p LEFT JOIN payout_attempts a ON a.id = (SELECT latest.id FROM payout_attempts latest WHERE latest.payment_id = p.id AND latest.organization_id = p.organization_id ORDER BY latest.created_at DESC LIMIT 1) WHERE p.organization_id = ? AND p.recipient_id = ? ORDER BY p.created_at DESC LIMIT 100",recipient.organization_id,recipient.id);
+  const payments=rows("SELECT p.id,p.kind,p.reference,p.amount,p.status,p.scheduled_for,p.created_at,p.updated_at,a.destination_asset,a.destination_network,a.destination_address,a.destination_memo,a.destination_tx_hash,a.state AS route_status FROM payments p LEFT JOIN payout_attempts a ON a.id = (SELECT latest.id FROM payout_attempts latest WHERE latest.payment_id = p.id AND latest.organization_id = p.organization_id ORDER BY latest.created_at DESC LIMIT 1) WHERE p.organization_id = ? AND p.recipient_id = ? ORDER BY p.created_at DESC LIMIT 100",recipient.organization_id,recipient.id);
   return c.json({payments,amountAsset:"USDC",amountDecimals:6});
 });
 recipientPortalRoutes.post("/:token/confirm",async(c)=>{
@@ -231,8 +234,8 @@ recipientPortalRoutes.post("/:token/confirm",async(c)=>{
   if(input.fallbackConsent && (!input.backupNetwork || !input.backupAddress)) throw new ApiError(400,"Choose a complete backup route before consenting to USDC fallback","BACKUP_INCOMPLETE");
   transaction((db)=>{
     const now=new Date().toISOString();
-    const result=db.prepare("UPDATE recipients SET user_id = ?,primary_asset = ?,primary_network = ?,primary_address = ?,backup_network = ?,backup_address = ?,fallback_consent = ?,preference_status = 'confirmed',confirmed_at = ?,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
-      .run(userId,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,recipient.organization_id,input.expectedVersion);
+    const result=db.prepare("UPDATE recipients SET user_id = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = ?,preference_status = 'confirmed',confirmed_at = ?,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
+      .run(userId,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,recipient.organization_id,input.expectedVersion);
     if(!result.changes) throw new ApiError(409,"Your preferences changed. Refresh before confirming.","RECIPIENT_VERSION_CHANGED");
     saveVersion(getRecipient(recipient.organization_id,recipient.id),userId);
     audit(userId,recipient.organization_id,"recipient.preferences_confirmed",recipient.id,{version:input.expectedVersion+1,fallbackConsent:input.fallbackConsent});
