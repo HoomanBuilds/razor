@@ -12,6 +12,11 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | [Product overview](specs/product-overview.md) | Customer, product promise, roles, workflows, scope, NEAR services and product defaults |
 | [Feature catalog](specs/features.md) | Required behavior and acceptance criteria for each product area |
 | [Payout preferences and USDC backup](specs/payouts-and-fallback.md) | Recipient choices, supported backup networks, consent, fallback decisions and recovery |
+| [Receiving metadata](specs/recipient-destinations.md) | Validated address families, XRP tags and unsupported destination metadata |
+| [Account notifications](specs/notifications.md) | Personal/company updates, optional email preferences and honest provider acceptance |
+| [Project reporting](specs/project-reporting.md) | Classified receipts, client-fund protection, costs, commitments and cost-center views |
+| [Company operations](specs/operations.md) | Recurring drafts, bounded execution, worker setup and recovery |
+| [Private inference](specs/private-inference.md) | NEAR AI Cloud verification, privacy boundaries and retained draft handling |
 | [NEAR track alignment](specs/near-track-alignment.md) | Official prompt findings, target tracks and evidence needed to support each track |
 
 These documents describe the intended product. They do not claim the features have been implemented or integrations tested. The features are organized by product responsibility, without using the hackathon deadline to reduce their depth.

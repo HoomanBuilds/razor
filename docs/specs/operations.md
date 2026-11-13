@@ -14,9 +14,9 @@ Use the same `DATABASE_PATH` and `DATA_ENCRYPTION_KEY` as the web application. T
 
 ## Recurring drafts
 
-Company managers with payment preparation access can capture an approved bill or pay run with an interval of 1 to 365 UTC days, first due date and maximum total entitlement per cycle. The encrypted snapshot binds approved amounts, fee ceilings, membership access and confirmed recipient versions. Changed source terms, changed receiving preferences, a disputed source or lost creator access hold the cycle. A manager reviews the change and creates a new template.
+Company managers with payment preparation access can capture an approved bill or pay run with an interval of 1 to 365 company-zone calendar days or 1 to 12 calendar months, first due date and maximum total entitlement per cycle. The encrypted snapshot binds approved amounts, fee ceilings, membership access and confirmed recipient versions. Changed source terms, changed receiving preferences, a disputed source or lost creator access hold the cycle. A manager reviews the change and creates a new template.
 
-Each occurrence has one `(rule, due time)` identity, and its bill/payrun and payment drafts are written in the same SQLite transaction. A restarted or duplicate worker observes that occurrence rather than creating another. A late worker creates at most one catch-up cycle per rule per tick, preserving the original interval. Payroll period dates shift by the difference from the source's scheduled date or period end; intervals are fixed days, not calendar months.
+Each occurrence has one `(rule, due time)` identity, and its bill/payrun and payment drafts are written in the same SQLite transaction. A restarted or duplicate worker observes that occurrence rather than creating another. A late worker creates at most one catch-up cycle per rule per tick, preserving the original interval. Payroll period dates shift by the difference from the source's scheduled date or period end; calendar-month templates preserve their original day or selected month-end anchor, including short months and leap years. Their payroll period boundaries advance by calendar months instead of a fixed number of milliseconds. Initial due time is retained separately from the next occurrence so an idempotent retry cannot silently change the schedule.
 
 Every generated obligation remains `draft` without an approver or signature. Source approval is not transferred to a future payment. Milestone requirements are preserved while acceptance evidence is cleared. Partial-installment invoice sources require a separate approved bill for the intended recurring amount or manual installment preparation; they are rejected rather than silently repeating the original full invoice liability.
 
@@ -45,7 +45,7 @@ Jobs use unique company-scoped keys and three-minute leases. Expired leases are 
 
 Company pause blocks new recurring drafts, due-work execution and broadcasts. Reconciliation and expired-assistant-data purges continue. Source submission is never counted as final recipient delivery. Existing reconciliation services retain the distinction between pending, unknown, reported delivery, verified refund and final onchain closure.
 
-Notices are an in-app outbox, scoped by company, optional user and required role permission. Read receipts are per user. No email, Slack or other external notification is sent. Expired private assistant drafts are purged daily by the worker, or immediately through a document manager's purge action.
+Notices are an in-app outbox, scoped by company, optional user and required role permission. Read receipts are per user. Optional generic email updates use an explicit verified-account opt-in and configured Resend transport. Provider acceptance is recorded separately from inbox delivery. See [notifications](notifications.md). Expired private assistant drafts are purged daily by the worker, or immediately through a document manager's purge action.
 
 ## API and UI
 

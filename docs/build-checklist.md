@@ -21,7 +21,7 @@ The evidence review on 13 November 2026 verifies **11 of 127 checks: 10 of 82 co
 | --- | --- |
 | Last full build review | Pending; targeted local production-build review passed on 2026-11-13 |
 | Build or deployment reviewed | Local production candidate `26ced9d`; no deployed payment or private-inference evidence |
-| Selected optional features | No optional requirement verified; optional netting remains separate from core completion |
+| Selected optional features | Project/cost-center reporting integrated; retained assets and consented netting in development. None of the optional requirements is fully verified |
 | Target track evidence | Planned: Real-World Money, Autonomous Business, Privacy & Private AI; live demonstrations pending |
 
 ## 1. A new payer can arrive and start working
