@@ -15,7 +15,7 @@ import {
   Panel,
   Status,
 } from "./shared";
-import type { Bill, PayrollRun } from "./types";
+import type { Bill, Payment, PayrollRun, Recipient } from "./types";
 import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
 
@@ -27,20 +27,29 @@ function dollars(value: FormDataEntryValue | null, allowZero = false): string {
   }
 }
 
+function recordedPayee(payment: Payment | null, recipient?: Recipient) {
+  const saved = payment as (Payment & { recipientName?: string; recipient_version?: number }) | null;
+  return saved?.recipientName ?? (saved?.recipient_version === recipient?.version ? recipient?.name : null) ?? "Recorded payee";
+}
+
 export function Bills() {
   const [selectedBill, setSelectedBill] = useState("");
   const [approvalBillId, setApprovalBillId] = useState<string | null>(null);
   const { base, recipients, organization, revision, refresh, navigate } =
     useWorkspace();
+  const canRead = organization.permissions?.includes("payments:read") === true;
+  const canPrepare = organization.permissions?.includes("payments:prepare") === true;
+  const canApprove = organization.permissions?.includes("payments:approve") === true;
   const {
     data,
     error: loadError,
     loading,
-  } = useResource<{ bills: Bill[] }>(`${base}/bills`, revision);
+  } = useResource<{ bills: Bill[] }>(canRead ? `${base}/bills` : null, revision);
   const { busy, error, run } = useAction();
+  if (!canRead) return null;
   return (
     <div className="grid gap-6">
-      <Panel
+      {canPrepare && <Panel
         title="New bill"
         description="Record an invoice before funding. Approval creates one linked payment with a fixed entitlement and fee ceiling."
       >
@@ -142,20 +151,20 @@ export function Bills() {
             <Action busy={busy === "create"} disabled={!recipients.length}>
               Save draft
             </Action>
-            <button
+            {organization.permissions?.includes("recipients:manage") && <button
               type="button"
               className="text-sm text-primary"
               onClick={() => navigate("recipients")}
             >
               Add a payee
-            </button>
-            <button
+            </button>}
+            {organization.permissions?.includes("documents:manage") && <button
               type="button"
               className="text-sm text-primary"
               onClick={() => navigate("assistant")}
             >
               Analyze an invoice privately
-            </button>
+            </button>}
           </div>
         </form>
         {error && (
@@ -163,7 +172,7 @@ export function Bills() {
             {error}
           </p>
         )}
-      </Panel>
+      </Panel>}
       {approvalBillId !== null && (
         <PaymentManagementPanel mode="bills" initialBillId={approvalBillId} />
       )}
@@ -201,9 +210,9 @@ export function Bills() {
                   {(bill.project_reference || bill.cost_center_reference) && <p className="mt-1 text-xs text-muted-foreground">{[bill.project_reference && `Project: ${bill.project_reference}`, bill.cost_center_reference && `Cost center: ${bill.cost_center_reference}`].filter(Boolean).join(" · ")}</p>}
                 </td>
                 <td>
-                  {recipients.find(
+                  {recordedPayee(bill.payment, recipients.find(
                     (recipient) => recipient.id === bill.recipient_id,
-                  )?.name ?? "Payee"}
+                  ))}
                 </td>
                 <td className="tabular-nums">{usd(bill.amount)}{BigInt(bill.setoffAmount) > 0n && <p className="mt-1 text-xs text-muted-foreground">{usd(bill.setoffAmount)} debt discharged<br/>{usd(bill.remainingLiability)} remains</p>}</td>
                 <td>{dateLabel(bill.due_date, organization.timezone)}</td>
@@ -222,9 +231,9 @@ export function Bills() {
                       className="text-xs text-primary"
                       onClick={() => setSelectedBill(bill.id)}
                     >
-                      Manage terms
+                      {canPrepare ? "Manage terms" : "View terms"}
                     </button>
-                    {bill.payment?.status === "draft" &&
+                    {canApprove && bill.payment?.status === "draft" &&
                       bill.status !== "disputed" && (
                         <Action
                           disabled={!!busy}
@@ -255,17 +264,20 @@ export function Bills() {
 export function Payroll() {
   const { base, recipients, organization, revision, refresh, navigate } =
     useWorkspace();
+  const canRead = organization.permissions?.includes("payments:read") === true;
+  const canPrepare = organization.permissions?.includes("payments:prepare") === true;
   const {
     data,
     error: loadError,
     loading,
-  } = useResource<{ runs: PayrollRun[] }>(`${base}/payroll`, revision);
+  } = useResource<{ runs: PayrollRun[] }>(canRead ? `${base}/payroll` : null, revision);
   const { busy, error, run, setError } = useAction();
   const [items, setItems] = useState<Record<string, string>>({});
   const [reviewRunId, setReviewRunId] = useState("");
+  if (!canRead) return null;
   return (
     <div className="grid gap-6">
-      <Panel
+      {canPrepare && <Panel
         title="Prepare a pay run"
         description="Amounts are net USDC entitlements. Recipients receive their preferred supported asset, with an approved USDC backup where consented."
       >
@@ -411,7 +423,7 @@ export function Payroll() {
             {error}
           </p>
         )}
-      </Panel>
+      </Panel>}
       {reviewRunId && (
         <PaymentManagementPanel mode="payroll" initialRunId={reviewRunId} />
       )}
@@ -466,9 +478,9 @@ export function Payroll() {
                       key={item.id}
                     >
                       <span>
-                        {recipients.find(
+                        {recordedPayee(item.payment, recipients.find(
                           (recipient) => recipient.id === item.recipient_id,
-                        )?.name ?? "Payee"}
+                        ))}
                       </span>
                       <span className="ml-auto tabular-nums">
                         {usd(item.amount)}
