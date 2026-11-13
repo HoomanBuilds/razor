@@ -113,3 +113,16 @@ test("batch invoice approval is all-or-none and rejects changed reviewed terms",
   const final = previewBillBatch(access, ids);
   assert.equal(approveBillBatch(access, ids, final.reviewToken).payments.length, 2);
 });
+
+
+test("invoice approval reviews include matching local warnings and invalidate when related requests change", () => {
+  const a = createBill(access, { recipientId: "recipient", reference: "review-warning-801", title: "Service", amount: "2200000" });
+  const initial = previewBillBatch(access, [a.id]);
+  assert.equal(initial.duplicateWarnings.length, 0);
+  createBill(access, { recipientId: "recipient", reference: "review-warning-802", title: "Service", amount: "2200000" });
+  const current = previewBillBatch(access, [a.id]);
+  assert.equal(current.duplicateWarnings.length, 1);
+  assert.ok(current.duplicateWarnings[0].invoiceIds.includes(a.id));
+  assert.notEqual(current.reviewToken, initial.reviewToken);
+  assert.throws(() => approveBillBatch(access, [a.id], initial.reviewToken), /changed after review/);
+});

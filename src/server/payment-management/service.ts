@@ -10,6 +10,7 @@ import { paymentBudget } from "../../lib/payment-budget";
 import { view } from "../payments/near";
 import type { ChainPayment, Payment, RecipientSnapshot, TreasuryConfig } from "../payments/types";
 import { getSupportedTokens, type Token } from "../payments/intents";
+import { duplicateInvoiceWarnings } from "../business/duplicate-invoices";
 import { recipientRouteReadiness } from "./routing";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
@@ -134,7 +135,9 @@ export function previewBillBatch(access: AccessContext, billIds: string[]) {
     if (!bill || !bill.payment_id) throw new ApiError(404, "Invoice or its payment draft was not found", "BILL_NOT_FOUND");
     return { ...bill, title: decrypt(bill.title), acceptance_evidence: undefined, acceptanceEvidence: bill.acceptance_evidence ? decrypt(bill.acceptance_evidence) : null, ...paymentReview(access, getPayment(access, bill.payment_id)) };
   });
-  const result = { bills, total: bills.reduce((sum, bill) => sum + BigInt(bill.payment.amount), 0n).toString(), maxFees: bills.reduce((sum, bill) => sum + BigInt(bill.payment.max_fee), 0n).toString(), funding: fundingReview(access, bills.map(bill => bill.payment)) };
+  const selected = new Set(billIds);
+  const duplicateWarnings = duplicateInvoiceWarnings(rows<{id:string;recipient_id:string;reference:string;amount:string;created_at:string}>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?", access.organizationId)).filter(warning => warning.invoiceIds.some(id => selected.has(id)));
+  const result = { bills, duplicateWarnings, total: bills.reduce((sum, bill) => sum + BigInt(bill.payment.amount), 0n).toString(), maxFees: bills.reduce((sum, bill) => sum + BigInt(bill.payment.max_fee), 0n).toString(), funding: fundingReview(access, bills.map(bill => bill.payment)) };
   return { ...result, reviewToken: digest(result) };
 }
 

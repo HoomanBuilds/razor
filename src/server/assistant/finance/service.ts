@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
+export { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
 import { paymentBudget } from "../../../lib/payment-budget";
 import { ApiError, requirePermission, type AccessContext } from "../../context";
 import { getDb, row, rows, transaction } from "../../db";
@@ -13,7 +15,6 @@ import { sha256 } from "../verification";
 import { financeSourceFingerprint, planningInput, validateModelPlan, type PlanningInput, type PlanSource, type SelectedRecipient } from "./plans";
 
 interface OpenPayment {id:string;recipient_id:string;reference:string;kind:string;status:string;amount:string;max_fee:string;total_spent:string;reserved_amount:string;scheduled_for:string|null;hold_reason:string|null;metadata:string}
-interface Invoice {id:string;recipient_id:string;reference:string;amount:string;created_at:string}
 interface StoredPlan {id:string;organization_id:string;plan_hash:string;source_fingerprint:string;payload_ciphertext:string;evidence_ciphertext:string;prepared_run_id:string|null;created_at:string;expires_at:string}
 interface Payload {instruction:string;source:PlanSource;sourceFingerprint:string;allocations:Array<{recipientId:string;opaqueId:string;version:number;amount:string}>;total:string;feeBudget:string;maximumCost:string;explanation:string;warnings:string[];verification:Record<string,unknown>;context:{availableUSDC:string;lastSyncedAt:string|null;openUnreservedUSDC?:string}}
 const activePlans=new Set<string>();
@@ -22,27 +23,6 @@ function plannerPermission(access:AccessContext) {
   for(const permission of ["company:read","payments:read","payments:prepare","recipients:read","documents:manage"])requirePermission(access,permission);
 }
 
-function normalizedReference(value:string) {return value.toLowerCase().replace(/[^a-z0-9]/g,"");}
-function nearbyReference(left:string,right:string) {
-  if(left===right)return true;
-  if(left.length===right.length&&left.length>=5)return [...left].filter((char,index)=>char!==right[index]).length<=1;
-  const a=/^(.*?)(\d+)$/.exec(left),b=/^(.*?)(\d+)$/.exec(right);
-  if(!a||!b||a[1]!==b[1])return false;
-  const distance=BigInt(a[2])-BigInt(b[2]);return distance>=-2n&&distance<=2n;
-}
-
-export function duplicateInvoiceWarnings(invoices:Invoice[]) {
-  const groups=new Map<string,Invoice[]>(),warnings:Array<{code:string;message:string;invoiceIds:string[];references:string[];recipientId:string;amountUSDC:string}>=[];
-  for(const invoice of [...invoices].sort((a,b)=>a.created_at.localeCompare(b.created_at))) {
-    const key=`${invoice.recipient_id}:${invoice.amount}`,previous=groups.get(key) || [];
-    for(const other of previous.slice(-10)) {
-      const left=normalizedReference(other.reference),right=normalizedReference(invoice.reference),days=Math.abs(Date.parse(invoice.created_at)-Date.parse(other.created_at))/86400000;
-      if(left===right || days<=31&&nearbyReference(left,right))warnings.push({code:"POSSIBLE_DUPLICATE_INVOICE",message:"The same supplier has equal invoice amounts and similar references. Review the source documents before approving another payment.",invoiceIds:[other.id,invoice.id],references:[other.reference,invoice.reference],recipientId:invoice.recipient_id,amountUSDC:invoice.amount});
-    }
-    previous.push(invoice);groups.set(key,previous);
-  }
-  return warnings.slice(-100);
-}
 
 export function financeInsights(access:AccessContext) {
   requirePermission(access,"payments:read");
@@ -59,7 +39,7 @@ export function financeInsights(access:AccessContext) {
     return {...summary,reference,remainingBudgetUSDC:cost.toString(),unreservedUSDC:needed.toString()};
   });
   const available=BigInt(treasury.available),shortfall=unreserved>available?unreserved-available:0n;
-  const warnings:Array<Record<string,unknown>>=duplicateInvoiceWarnings(rows<Invoice>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?",access.organizationId));
+  const warnings:Array<Record<string,unknown>>=duplicateInvoiceWarnings(rows<{id:string;recipient_id:string;reference:string;amount:string;created_at:string}>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?",access.organizationId));
   if(!treasury.lastSyncedAt||Date.now()-Date.parse(treasury.lastSyncedAt)>300000)warnings.unshift({code:"CASH_SNAPSHOT_STALE",message:"Cash coverage uses the last recorded NEAR treasury snapshot. Sync it before making funding decisions."});
   if(shortfall>0n)warnings.unshift({code:"CASH_SHORTFALL",message:"Recorded available cash is below the unreserved remaining payment budgets. This includes draft proposals; no payment has been blocked or approved by this calculation.",amountUSDC:shortfall.toString()});
   for(const payment of open)if(BigInt(payment.total_spent)>BigInt(payment.amount)+BigInt(payment.max_fee))warnings.push({code:"BUDGET_OVERAGE",message:"Recorded payment spend exceeds its approved amount and fee budget. Review its receipts.",paymentId:payment.id});
