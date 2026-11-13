@@ -6,13 +6,15 @@ import { ApiError } from "../context";
 export const hashToken = (value: string) => createHash("sha256").update(value).digest("hex");
 export const newToken = () => randomBytes(32).toString("base64url");
 
+export function decodeDataEncryptionKey(configured: string): Buffer {
+  const key = Buffer.from(configured, /^[a-f0-9]{64}$/i.test(configured) ? "hex" : "base64");
+  if (key.length !== 32) throw new ApiError(503, "DATA_ENCRYPTION_KEY must encode exactly 32 bytes", "ENCRYPTION_SETUP_REQUIRED");
+  return key;
+}
+
 function encryptionKey(): Buffer {
   const configured = process.env.DATA_ENCRYPTION_KEY;
-  if (configured) {
-    const key = Buffer.from(configured, /^[a-f0-9]{64}$/i.test(configured) ? "hex" : "base64");
-    if (key.length !== 32) throw new ApiError(503, "DATA_ENCRYPTION_KEY must encode exactly 32 bytes", "ENCRYPTION_SETUP_REQUIRED");
-    return key;
-  }
+  if (configured) return decodeDataEncryptionKey(configured);
   if (process.env.NODE_ENV === "production") throw new ApiError(503, "Configure DATA_ENCRYPTION_KEY before storing private recipient records", "ENCRYPTION_SETUP_REQUIRED");
   const file = resolve(".data/private-data.key");
   mkdirSync(dirname(file), { recursive: true });
