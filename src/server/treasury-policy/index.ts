@@ -4,7 +4,8 @@ import { ApiError, requirePermission, type AccessContext, type AppEnv } from "..
 import { getDb, row } from "../db";
 import { getTreasury, setNetwork, syncTreasury } from "../payments";
 import { nativeUsdc, getSupportedTokens } from "../payments/intents";
-import { treasuryAction, treasuryArgs, view, validNearAccount } from "../payments/near";
+import { contractCodeHash, treasuryAction, treasuryArgs, view, validNearAccount } from "../payments/near";
+import { reviewedArtifactHash } from "../near-artifacts";
 import { BACKUP_NETWORKS } from "../payments/policy";
 import type { ApprovalTier, TreasuryConfig, WalletTransaction } from "../payments/types";
 import { atomic } from "../../lib/money";
@@ -99,6 +100,7 @@ export async function prepareCompanyStorage(access: AccessContext, deposit: stri
   if (!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, state.ownerAccount, state.network)) throw new ApiError(403, "Verify the company owner wallet before funding storage", "OWNER_WALLET_REQUIRED");
   const amount = atomic(deposit).toString();
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId)!;
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the shared treasury code before funding company storage", "TREASURY_CODE_MISMATCH");
   return { ...state, deposit: amount, walletActions: [treasuryAction(config, "add_storage", {}, amount, "30000000000000")] };
 }
 
