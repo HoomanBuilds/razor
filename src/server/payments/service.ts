@@ -1,3 +1,4 @@
+import { pageWindow } from "../pagination";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { getDb, row, rows, transaction } from "../db";
@@ -383,11 +384,13 @@ interface ApprovalPlan {
   walletActions: WalletTransaction[];
   approvalActions: WalletTransaction[];
   approvalAccounts: string[];
+  signerAccounts: string[];
   approvals: ApprovalStatus | null;
   message: string;
 }
 
 async function buildWalletActions(access: AccessContext, config: TreasuryConfig, payment: Payment, recipient: RecipientSnapshot, attemptId: string, quote: ExecutionRecord, backup: boolean, tokens: Token[], approvalOnly = false): Promise<ApprovalPlan> {
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the treasury code before authorizing this route", "TREASURY_CODE_MISMATCH");
   validatePayoutDestination(backup ? recipient.backup_network! : recipient.primary_network, backup ? recipient.backup_address! : recipient.primary_address, backup ? null : recipient.primary_memo);
   const terms = executionTerms(quote);
   const expires = Date.parse(terms.deadline);
@@ -402,7 +405,7 @@ async function buildWalletActions(access: AccessContext, config: TreasuryConfig,
     view<ChainPayment | null>(config, "get_payment", { payment_id: payment.id }),
     view<{ primary: typeof primary; backup: typeof backupDestination; backup_consent: boolean; active: boolean; version: string } | null>(config, "get_recipient", { recipient_id: payment.recipient_id }),
     view<string | null>(config, "get_obligation", { reference: onchainReference(payment) }),
-    view<{ owner_id: string; approvers: string[]; policy_version: string; paused: boolean }>(config, "get_config"),
+    view<{ owner_id: string; approvers: string[]; policy_version: string; paused: boolean; executors?: string[] }>(config, "get_config"),
   ]);
   if (policy.paused) throw new ApiError(409, "The NEAR treasury is paused", "ONCHAIN_PAUSED");
   if (obligation && obligation !== payment.id) throw new ApiError(409, "The onchain obligation reference is already in use", "ONCHAIN_OBLIGATION_CONFLICT");
@@ -422,18 +425,26 @@ async function buildWalletActions(access: AccessContext, config: TreasuryConfig,
   if (isDirectExecution(quote) && (quote.assetId !== `nep141:${config.token_contract}` || terms.amountIn !== payment.amount || terms.amountOut !== payment.amount)) throw new ApiError(409, "Direct NEAR delivery must equal the approved native-USDC entitlement", "DIRECT_TERMS_INVALID");
   const linked = rows<{ address: string }>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=?", access.userId, config.network);
   const approvalAccounts = access.permissions.includes("payments:approve") ? linked.map((item) => item.address).filter((account) => account === policy.owner_id || policy.approvers.includes(account)) : [];
-  const plan: ApprovalPlan = { network: config.network, stage: "waiting", walletActions: [], approvalActions: [], approvalAccounts, approvals: null, message: "An authorized NEAR approver must review the exact route." };
+  const plan: ApprovalPlan = { network: config.network, stage: "waiting", walletActions: [], approvalActions: [], approvalAccounts, signerAccounts: [], approvals: null, message: "An authorized NEAR approver must review the exact route." };
+  const finish = () => {
+    const ownerOnly = plan.walletActions.some(transaction => transaction.actions.some(item => ["set_backup_asset", "set_recipient"].includes(item.params.methodName)));
+    plan.signerAccounts = linked.map(item => item.address).filter(account => account === policy.owner_id || !ownerOnly && (policy.approvers.includes(account) || policy.executors?.includes(account)));
+    if (plan.walletActions.length && !plan.signerAccounts.length) { plan.walletActions = []; plan.stage = "waiting"; plan.message = ownerOnly ? "The verified treasury owner must connect to prepare these recipient settings. Then resume this exact route." : "Link an authorized treasury executor or approver wallet, then resume this exact route."; }
+    return plan;
+  };
   if (existing && !chainAttempt && (existing.policy_version !== policy.policy_version || existing.status === "held")) {
     const status = await view<ApprovalStatus>(config, "get_approval_status", { payment_id: payment.id, attempt_id: attemptId });
     if (!status || status.policy_version !== policy.policy_version || !/^[a-f0-9]{64}$/.test(status.payment_terms_hash) || status.approval_amount !== (BigInt(payment.amount) + BigInt(payment.max_fee)).toString()) throw new ApiError(409, "The current obligation approval could not be verified", "APPROVAL_VIEW_INVALID");
+    plan.approvalAccounts = approvalAccounts.filter(account => !status.payment_approvals.includes(account));
     plan.stage = "approve"; plan.approvals = status; plan.message = "Renew this obligation under the current policy before preparing its new exact route.";
-    if (approvalAccounts.length) plan.approvalActions = [action(config, "approve_payment", { payment_id: payment.id, expected_policy_version: status.policy_version, expected_terms_hash: status.payment_terms_hash }, "1")];
-    return plan;
+    if (plan.approvalAccounts.length) plan.approvalActions = [action(config, "approve_payment", { payment_id: payment.id, expected_policy_version: status.policy_version, expected_terms_hash: status.payment_terms_hash }, "1")];
+    return finish();
   }
   if (existing && chainAttempt) {
     plan.approvals = checkedApprovalStatus(await view<ApprovalStatus>(config, "get_approval_status", { payment_id: payment.id, attempt_id: attemptId }), payment.id, attemptId);
     if (plan.approvals.approval_amount !== (BigInt(payment.amount) + BigInt(payment.max_fee)).toString() || plan.approvals.policy_version !== policy.policy_version) throw new ApiError(409, "The approval policy changed while reading this route. Refresh before signing", "POLICY_CHANGED");
-    if (approvalAccounts.some((account) => !plan.approvals!.payment_approvals.includes(account) || !plan.approvals!.attempt_approvals.includes(account))) plan.approvalActions = [
+    plan.approvalAccounts = approvalAccounts.filter(account => !plan.approvals!.payment_approvals.includes(account) || !plan.approvals!.attempt_approvals.includes(account));
+    if (plan.approvalAccounts.some((account) => !plan.approvals!.payment_approvals.includes(account) || !plan.approvals!.attempt_approvals.includes(account))) plan.approvalActions = [
       action(config, "approve_payment", { payment_id: payment.id, expected_policy_version: plan.approvals.policy_version, expected_terms_hash: plan.approvals.payment_terms_hash }, "1"),
       action(config, "authorize_attempt", { payment_id: payment.id, attempt_id: attemptId, expected_policy_version: plan.approvals.policy_version, expected_terms_hash: plan.approvals.attempt_terms_hash }, "1"),
     ];
@@ -454,7 +465,7 @@ async function buildWalletActions(access: AccessContext, config: TreasuryConfig,
     } else {
       plan.stage = "approve"; plan.message = "Each distinct authorized wallet approves both the obligation and this exact route. Approval does not send the source payment.";
     }
-    return plan;
+    return finish();
   }
   if (approvalOnly) throw new ApiError(409, "A payer must prepare this exact route in the NEAR treasury before collecting approvals", "ROUTE_PREPARATION_REQUIRED");
   requirePermission(access, "payments:execute");
@@ -475,7 +486,7 @@ async function buildWalletActions(access: AccessContext, config: TreasuryConfig,
     }
   }
   plan.walletActions.push(action(config, "create_attempt", { payment_id: payment.id, attempt_id: attemptId, use_backup: backup, route }));
-  return plan;
+  return finish();
 }
 
 export function getAttempt(access: AccessContext, attemptId: string): PayoutAttempt {
@@ -599,19 +610,28 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
   return { payment: getPayment(access, paymentId), attempt: getAttempt(access, attempt.id), providerError };
 }
 
-export async function closeUnfundedAttempt(access: AccessContext, attemptId: string) {
+export async function closeUnfundedAttempt(access: AccessContext, attemptId: string, observe = checkStatus) {
   requirePermission(access, "payments:execute");
   const attempt = getAttempt(access, attemptId);
   if (attempt.observed_output && BigInt(attempt.observed_output) > 0n) throw new ApiError(409, "A destination delivery was observed. Close the partial route and prepare only its unpaid remainder", "PARTIAL_DELIVERY_OBSERVED");
-  if (["closed_unfunded", "refunded_verified"].includes(attempt.state)) return { attempt, walletActions: [] };
+  if (attempt.state === "refunded_verified") return { attempt, walletActions: [] };
   const config = configFor(access);
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the treasury code before signing recovery actions", "TREASURY_CODE_MISMATCH");
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
   if (chainAttempt && ["discarded", "transfer_failed", "refunded"].includes(chainAttempt.status)) return { ...await reconcilePayment(access, attempt.payment_id), walletActions: [] };
-  if (chainAttempt?.status === "prepared") return { attempt, walletActions: [action(config, "discard_attempt", { payment_id: attempt.payment_id, attempt_id: attemptId })] };
   const quote = JSON.parse(attempt.quote) as ExecutionRecord;
-  const originalDeadline = isDirectExecution(quote) ? quote.deadline : quote.quote.deadline ?? quote.quoteRequest.deadline;
-  if (!chainAttempt && attempt.state === "prepared" && Date.parse(originalDeadline) <= Date.now()) {
+  if (chainAttempt?.status === "prepared" || !chainAttempt && ["prepared", "closed_unfunded"].includes(attempt.state)) {
+    if (attempt.source_tx_hash) throw new ApiError(409, "A source transaction is recorded. Reconcile it before closing this route", "PRIOR_ATTEMPT_UNRESOLVED");
+    if (!isDirectExecution(quote)) {
+      const status = await observe(attempt.deposit_address, attempt.deposit_memo);
+      assertSameQuote(quote, status.quoteResponse);
+      if (status.status !== "PENDING_DEPOSIT" || status.swapDetails?.originChainTxHashes?.length || deliveryOutput(attempt, status).positive) throw new ApiError(409, "The original route has observed source or destination activity. Keep it in reconciliation", "PRIOR_ATTEMPT_UNRESOLVED");
+    }
+  }
+  if (chainAttempt?.status === "prepared") return { attempt, walletActions: [action(config, "discard_attempt", { payment_id: attempt.payment_id, attempt_id: attemptId })] };
+  const originalDeadline = executionTerms(quote).deadline;
+  if (!chainAttempt && ["prepared", "closed_unfunded"].includes(attempt.state) && Date.parse(originalDeadline) <= Date.now()) {
     transaction(() => {
       getDb().prepare("UPDATE payout_attempts SET state='closed_unfunded',updated_at=? WHERE id=? AND state='prepared'").run(now(), attemptId);
       getDb().prepare("UPDATE payments SET status='approved',hold_reason=NULL,updated_at=? WHERE id=? AND status='prepared'").run(now(), attempt.payment_id);
@@ -625,12 +645,14 @@ export async function prepareSettlement(access: AccessContext, attemptId: string
   requirePermission(access, "payments:approve");
   const attempt = getAttempt(access, attemptId);
   const config = configFor(access);
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the treasury code before signing recovery actions", "TREASURY_CODE_MISMATCH");
   const reconciled = await reconcilePayment(access, attempt.payment_id);
   if (reconciled.payment.status === "paid") return { ...reconciled, walletActions: [] };
   if (reconciled.payment.status === "partially_paid") throw new ApiError(409, "This terminal partial payment cannot be reported or retried in full", "PARTIAL_LIABILITY");
   const provider = JSON.parse(reconciled.attempt?.reconciliation || "{}").provider as Awaited<ReturnType<typeof checkStatus>> | null;
   const measured = deliveryOutput(attempt, provider);
   if (input.outcome === "delivered" && (provider?.status !== "SUCCESS" || !measured.complete || !reconciled.attempt?.destination_tx_hash)) throw new ApiError(409, "Full delivery needs a matching destination transaction and exact output at least equal to the signed quote. Missing or short output requires reconciliation", "DELIVERY_UNVERIFIED");
+  if (input.outcome === "refund_pending" && (!provider || !["REFUNDED", "FAILED", "INCOMPLETE_DEPOSIT"].includes(provider.status))) throw new ApiError(409, "A pending or unavailable route cannot be declared closed for a refund. Keep reconciling its original outcome", "REFUND_ROUTE_UNRESOLVED");
   if (input.outcome === "refund_pending" && (measured.positive || reconciled.attempt?.observed_output && BigInt(reconciled.attempt.observed_output) > 0n)) throw new ApiError(409, "Destination delivery was observed. Use explicit terminal partial settlement instead of a full retry", "PARTIAL_DELIVERY_OBSERVED");
   const receipt = retainPrivateEvidence(access, attemptId, `settlement:${input.outcome}`, input.receipt);
   return { ...reconciled, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt, actual_output: measured.actual })] };
@@ -640,8 +662,18 @@ export async function prepareRefundConfirmation(access: AccessContext, attemptId
   requirePermission(access, "payments:approve");
   const attempt = getAttempt(access, attemptId);
   const config = configFor(access);
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the treasury code before signing recovery actions", "TREASURY_CODE_MISMATCH");
   if (attempt.observed_output && BigInt(attempt.observed_output) > 0n) throw new ApiError(409, "A partially delivered route cannot become a full-refund retry", "PARTIAL_DELIVERY_OBSERVED");
   if (atomic(input.refundAmount, true) > atomic(attempt.amount_in)) throw new ApiError(422, "The refund exceeds the original source amount", "REFUND_EXCEEDS_INPUT");
+  const reconciled = await reconcilePayment(access, attempt.payment_id);
+  const evidence = JSON.parse(reconciled.attempt?.reconciliation || "{}") as {provider?: Awaited<ReturnType<typeof checkStatus>> | null};
+  if (evidence.provider?.status !== "REFUNDED") throw new ApiError(409, "Wait for the original route's completed refund report before confirming recovered cash", "REFUND_ROUTE_UNRESOLVED");
+  const measured = deliveryOutput(attempt, evidence.provider);
+  if (measured.positive || reconciled.attempt?.observed_output && BigInt(reconciled.attempt.observed_output) > 0n) throw new ApiError(409, "Delivery was observed while checking this refund. Reconcile the actual entitlement before retrying", "PARTIAL_DELIVERY_OBSERVED");
+  const reportedRefund = evidence.provider.swapDetails?.refundedAmount;
+  let matchesReportedRefund = false;
+  try { matchesReportedRefund = typeof reportedRefund === "string" && atomic(input.refundAmount, true) === atomic(reportedRefund, true); } catch {}
+  if (!matchesReportedRefund) throw new ApiError(409, "Confirm exactly the source USDC returned by the completed routing refund", "REFUND_AMOUNT_UNVERIFIED");
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);
   if (chainAttempt?.status !== "refund_pending") throw new ApiError(409, "Report route closure and the pending refund on NEAR first", "REFUND_NOT_REPORTED");
@@ -681,12 +713,25 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)!;
 }
 
+function fundingRows(access: AccessContext, limit: number, offset: number, unresolved = false) {
+  const filter = unresolved ? " AND (f.status NOT IN ('confirmed','refunded_verified','refunded_attested','closed_unsent','cancelled') OR f.status IN ('closed_unsent','cancelled') AND f.source_tx_hash IS NOT NULL)" : "";
+  return rows<FundingLeg>(`SELECT f.*,CASE WHEN f.payment_id IS NOT NULL THEN 'obligation' WHEN EXISTS(SELECT 1 FROM funding_request_quotes q WHERE q.funding_id=f.id) THEN 'funding_request' ELSE 'company' END AS source_context FROM funding_legs f WHERE f.organization_id=?${filter} ORDER BY f.created_at DESC,f.id DESC LIMIT ? OFFSET ?`, access.organizationId, limit, offset);
+}
 export function listFunding(access: AccessContext): FundingLeg[] {
   requirePermission(access, "company:read");
-  return rows<FundingLeg>("SELECT f.*,CASE WHEN f.payment_id IS NOT NULL THEN 'obligation' WHEN EXISTS(SELECT 1 FROM funding_request_quotes q WHERE q.funding_id=f.id) THEN 'funding_request' ELSE 'company' END AS source_context FROM funding_legs f WHERE f.organization_id=? ORDER BY f.created_at DESC LIMIT 250", access.organizationId);
+  return fundingRows(access, 250, 0);
+}
+export function fundingPage(access: AccessContext, page = 1, pageSize = 25, scope: "all" | "unresolved" = "all") {
+  requirePermission(access, "company:read");
+  const { offset } = pageWindow(page, pageSize);
+  if (!["all", "unresolved"].includes(scope)) throw new ApiError(422, "Choose all or unresolved funding", "INVALID_FUNDING_FILTER");
+  const filter = scope === "unresolved" ? " AND (status NOT IN ('confirmed','refunded_verified','refunded_attested','closed_unsent','cancelled') OR status IN ('closed_unsent','cancelled') AND source_tx_hash IS NOT NULL)" : "";
+  const total = row<{total:number}>(`SELECT COUNT(*) AS total FROM funding_legs WHERE organization_id=?${filter}`, access.organizationId)!.total;
+  const funding = fundingRows(access, pageSize, offset, scope === "unresolved");
+  return { funding, page, pageSize, total, hasMore: offset + funding.length < total };
 }
 
-export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string) {
+export async function reconcileFunding(access: AccessContext, fundingId: string, sourceTxHash?: string, dependencies: { status?: typeof checkStatus; sync?: typeof syncTreasury } = {}) {
   requirePermission(access, "payments:prepare");
   if (sourceTxHash && !/^[A-Za-z0-9:_-]{8,160}$/.test(sourceTxHash)) throw new ApiError(422, "Enter the exact source transaction hash from your wallet or exchange", "FUNDING_HASH_INVALID");
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
@@ -694,17 +739,21 @@ export async function reconcileFunding(access: AccessContext, fundingId: string,
   if (["confirmed", "refunded_verified", "refunded_attested"].includes(funding.status)) return { funding, treasury: await syncTreasury(access) };
   if (sourceTxHash) {
     if (funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
-    getDb().prepare("UPDATE funding_legs SET source_tx_hash=?,updated_at=? WHERE id=?").run(sourceTxHash, now(), fundingId);
+    const saved = getDb().prepare("UPDATE funding_legs SET source_tx_hash=COALESCE(source_tx_hash,?),updated_at=? WHERE id=? AND (source_tx_hash IS NULL OR source_tx_hash=?)").run(sourceTxHash, now(), fundingId, sourceTxHash);
+    if (!saved.changes) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
     try {
       const sourceToken = (await getSupportedTokens()).find((token) => token.assetId === funding.origin_asset);
       const sender = sourceToken?.blockchain === "near" ? (JSON.parse(funding.quote) as QuoteResponse).quoteRequest.refundTo : undefined;
       await notifyDeposit(funding.deposit_address, sourceTxHash, funding.deposit_memo, sender);
     } catch {}
   }
-  const status = await checkStatus(funding.deposit_address, funding.deposit_memo);
+  const status = await (dependencies.status ?? checkStatus)(funding.deposit_address, funding.deposit_memo);
   assertSameQuote(JSON.parse(funding.quote), status.quoteResponse);
-  const onchain = await syncTreasury(access);
+  const onchain = await (dependencies.sync ?? syncTreasury)(access);
   const deliveredHash = status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null;
-  getDb().prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=?,updated_at=? WHERE id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested')").run(fundingStateAfterProvider(funding, status.status), status.status, deliveredHash, now(), fundingId);
+  transaction(db => {
+    const latest = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId)!;
+    db.prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=COALESCE(?,destination_tx_hash),updated_at=? WHERE id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested')").run(fundingStateAfterProvider(latest, status.status), status.status, deliveredHash, now(), fundingId);
+  });
   return { funding: row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId), treasury: onchain };
 }

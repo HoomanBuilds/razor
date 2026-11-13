@@ -77,7 +77,8 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
       const payload = await response.json();
       if (typeof payload.message === "string") reason = payload.message.replace(/[\u0000-\u001f]/g, " ").slice(0, 180);
     } catch {}
-    throw new ApiError(response.status === 400 ? 422 : 503, reason, "ROUTE_UNAVAILABLE");
+    const routeRejected = response.status === 400 || response.status === 422;
+    throw new ApiError(routeRejected ? 422 : 503, reason, routeRejected ? "ROUTE_UNAVAILABLE" : "ROUTING_SERVICE_UNAVAILABLE");
   }
   return response.json() as Promise<T>;
 }

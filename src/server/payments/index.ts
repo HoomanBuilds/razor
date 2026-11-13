@@ -1,8 +1,10 @@
+import { paginationInput } from "../pagination";
 import { Hono } from "hono";
 import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
 import { getSupportedTokens } from "./intents";
 import * as service from "./service";
+import { paymentRecoveryOverview } from "./recovery";
 import { paymentReviewToken } from "./approval";
 import { transaction } from "../db";
 
@@ -42,7 +44,11 @@ paymentsRoutes.post("/treasury/setup", async (c) => c.json(await service.prepare
 paymentsRoutes.get("/networks", (c) => c.json({ networks: service.listNetworks(c.get("access")) }));
 paymentsRoutes.patch("/networks/:network", async (c) => c.json(service.setNetwork(c.get("access"), c.req.param("network"), (await body(c.req.raw, z.object({ enabled: z.boolean() }))).enabled)));
 paymentsRoutes.get("/ledger", (c) => c.json({ ledger: service.listLedger(c.get("access")) }));
-paymentsRoutes.get("/funding", (c) => c.json({ funding: service.listFunding(c.get("access")) }));
+paymentsRoutes.get("/funding", c => {
+  if (c.req.query("page") === undefined && c.req.query("pageSize") === undefined && c.req.query("scope") === undefined) return c.json({ funding: service.listFunding(c.get("access")) });
+  const input = paginationInput.extend({scope:z.enum(["all","unresolved"]).default("all")}).parse(c.req.query());
+  return c.json(service.fundingPage(c.get("access"), input.page, input.pageSize, input.scope));
+});
 paymentsRoutes.post("/funding", async (c) => c.json(await service.prepareFunding(c.get("access"), await body(c.req.raw, fundingInput)), 201));
 paymentsRoutes.post("/funding/:id/reconcile", async (c) => c.json(await service.reconcileFunding(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ sourceTxHash: text.optional() }))).sourceTxHash)));
 paymentsRoutes.get("/payments", (c) => {
@@ -53,6 +59,7 @@ paymentsRoutes.get("/payments", (c) => {
 });
 paymentsRoutes.get("/payments/summary", (c) => c.json(service.paymentSummary(c.get("access"))));
 paymentsRoutes.post("/payments", async (c) => c.json({ payment: service.createPayment(c.get("access"), await body(c.req.raw, paymentInput)) }, 201));
+paymentsRoutes.get("/payments/:id/recovery", async c => c.json(await paymentRecoveryOverview(c.get("access"), c.req.param("id"))));
 paymentsRoutes.get("/payments/:id", (c) => {
   const payment = service.getPayment(c.get("access"), c.req.param("id"));
   return c.json({ payment, reviewToken: paymentReviewToken(payment), attempts: service.listAttempts(c.get("access"), payment.id) });

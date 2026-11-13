@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { paginationInput } from "../pagination";
 import type { AppEnv } from "../context";
 import { verifyOrigin } from "../identity/session";
 import * as service from "./service";
@@ -8,11 +9,19 @@ export * from "./service";
 export const fundingRequestRoutes = new Hono<AppEnv>();
 export const sourceFundingRoutes = new Hono<AppEnv>();
 sourceFundingRoutes.post("/:id/deposit-claim", async c => c.json(await service.claimCompanyFunding(c.get("access"), c.req.param("id"))));
+sourceFundingRoutes.post("/:id/close-unsent", async c => {
+  const input = z.object({ noTransferConfirmed: z.boolean() }).strict().parse(await c.req.json());
+  return c.json(await service.closeCompanyUnsentFunding(c.get("access"), c.req.param("id"), input.noTransferConfirmed));
+});
 export const publicFundingRoutes = new Hono<AppEnv>();
 const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const key = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 
-fundingRequestRoutes.get("/", (c) => c.json({ requests: service.listFundingRequests(c.get("access")) }));
+fundingRequestRoutes.get("/", c => {
+  if (c.req.query("page") === undefined && c.req.query("pageSize") === undefined) return c.json({ requests: service.listFundingRequests(c.get("access")) });
+  const input = paginationInput.parse(c.req.query());
+  return c.json(service.fundingRequestPage(c.get("access"), input.page, input.pageSize));
+});
 fundingRequestRoutes.post("/", async (c) => c.json(await service.createFundingRequest(c.get("access"), z.object({ amount: z.string().regex(/^[1-9]\d*$/).max(39), purpose: z.string().trim().min(1).max(500), expiresAt: z.string().datetime(), paymentId: z.string().min(1).max(128).optional() }).strict().parse(await c.req.json())), 201));
 fundingRequestRoutes.get("/:id", (c) => c.json({ request: service.getFundingRequest(c.get("access"), c.req.param("id")) }));
 fundingRequestRoutes.post("/:id/revoke", (c) => c.json({ request: service.revokeFundingRequest(c.get("access"), c.req.param("id")) }));

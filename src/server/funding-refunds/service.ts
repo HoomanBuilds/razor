@@ -1,3 +1,4 @@
+import { pageWindow } from "../pagination";
 import { randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -47,10 +48,13 @@ function frozenToken(funding: FundingLeg): Token | null {
   } catch { throw new ApiError(409, "The original source token snapshot cannot be verified", "FUNDING_REFUND_ASSET_MISMATCH"); }
 }
 
-export function listFundingRefunds(access: AccessContext) {
+export function listFundingRefunds(access: AccessContext, page = 1, pageSize = 100) {
   requirePermission(access, "payments:read");
-  const funding = rows<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND (status IN ('recovery_pending','unknown','refunded_verified','refunded_attested') OR provider_status IN ('REFUNDED','FAILED','INCOMPLETE_DEPOSIT')) ORDER BY created_at DESC LIMIT 100", access.organizationId);
-  return { funding: funding.map(leg => {
+  const { offset } = pageWindow(page, pageSize);
+  const filter = "organization_id=? AND (status IN ('recovery_pending','unknown','refunded_verified','refunded_attested') OR provider_status IN ('REFUNDED','FAILED','INCOMPLETE_DEPOSIT'))";
+  const total = row<{total:number}>(`SELECT COUNT(*) AS total FROM funding_legs WHERE ${filter}`, access.organizationId)!.total;
+  const funding = rows<FundingLeg>(`SELECT * FROM funding_legs WHERE ${filter} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, access.organizationId, pageSize, offset);
+  return { page, pageSize, total, hasMore: offset + funding.length < total, funding: funding.map(leg => {
     const quote = parseQuote(leg), closure = closureFor(access, leg.id);
     return { id: leg.id, reference: leg.reference, paymentId: leg.payment_id, status: leg.status, providerStatus: leg.provider_status, sourceAsset: leg.origin_asset, sourceSymbol: leg.origin_symbol ?? null, sourceDecimals: leg.origin_decimals ?? null, sourceNetwork: leg.origin_network ?? null, refundTo: quote.quoteRequest.refundTo, sourceTransactionHash: leg.source_tx_hash, closure: closure ?? null };
   }), message: "Source refunds return the original source asset to the original funder's recovery address. They do not create company USDC or prove a recipient payout.", canPrepare: access.permissions.includes("payments:prepare") || access.permissions.includes("payments:approve") };
