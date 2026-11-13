@@ -42,7 +42,7 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
   requirePermission(access, "payments:read");
   const item = row<Payment>("SELECT * FROM payments WHERE id = ? AND organization_id = ?", paymentId, access.organizationId);
   if (!item) throw new ApiError(404, "Payment not found", "PAYMENT_NOT_FOUND");
-  return item;
+  return { ...item, recipientName: recordedRecipientName(access.organizationId, item) };
 }
 
 export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
@@ -182,7 +182,7 @@ export function createPayment(access: AccessContext, input: CreatePaymentInput):
     const existing = row<Payment>("SELECT * FROM payments WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);
     if (existing) {
       if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment") || existing.scheduled_for !== (input.scheduledFor ?? null) || !isDeepStrictEqual(JSON.parse(existing.metadata), JSON.parse(json(input.metadata ?? {})))) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
-      return existing;
+      return getPayment(access, existing.id);
     }
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id = ? AND organization_id = ?", input.recipientId, access.organizationId);
     if (!recipient) throw new ApiError(404, "Recipient not found", "RECIPIENT_NOT_FOUND");

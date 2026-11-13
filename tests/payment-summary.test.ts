@@ -5,7 +5,7 @@ import { getDb, transaction } from "../src/server/db";
 import type { AccessContext } from "../src/server/context";
 import { PERMISSIONS } from "../src/server/identity/session";
 import { encrypt } from "../src/server/identity/crypto";
-import { createPayment, listPayments, paymentPage, paymentSummary } from "../src/server/payments/service";
+import { createPayment, getPayment, listPayments, paymentPage, paymentSummary } from "../src/server/payments/service";
 import { createClientReserve } from "../src/server/client-reserves/service";
 import { NATIVE_USDC } from "../src/server/payments/policy";
 import { createBill } from "../src/server/business/service";
@@ -94,6 +94,7 @@ test("unresolved source money is not requested twice and recorded recipient vers
   assert.equal(summary.openPrincipal, "100"); assert.equal(summary.unreservedBudget, "0"); assert.equal(summary.fundingGap, "0");
   assert.equal(summary.attention[0].recipientName, "Original recipient");
   assert.equal(paymentPage(f.access, 1, 50).payments[0].recipientName, "Original recipient");
+  assert.equal(getPayment(f.access, payment.id).recipientName, "Original recipient");
 });
 
 test("invoice face liabilities remain visible beyond a smaller installment without inventing a payable budget", () => {

@@ -7,7 +7,7 @@ import { encrypt, hashToken } from "../src/server/identity/crypto";
 import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { getAccess } from "../src/server/identity/session";
 import { recipientWorkspaceRoutes } from "../src/server/recipient-workspace";
-import { ownPayments, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
+import { companyRequests, ownPayments, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
 
 process.env.DATABASE_PATH=":memory:";
 process.env.DATA_ENCRYPTION_KEY="73".repeat(32);
@@ -82,6 +82,7 @@ test("recipient reassignment preserves original private history without exposing
   assert.throws(()=>ownRecipient(user,id),(error)=>error instanceof ApiError&&error.code==="RECIPIENT_NOT_FOUND");
   assert.ok(ownRequests(user).some(record=>record.id===submitted.id));
   assert.ok(!ownRequests(other).some(record=>record.id===submitted.id));
+  assert.equal(companyRequests(access).find(record=>record.id===submitted.id)!.recipientName,"Original supplier");
   assert.throws(()=>submitInvoice(other,input),(error)=>error instanceof ApiError&&error.code==="INVOICE_REFERENCE_CONFLICT");
   assert.throws(()=>prepareInvoiceRequest(access,submitted.id,{sourceFingerprint:submitted.sourceFingerprint,agreedUSDC:"20",maxFee:"1",reviewConfirmed:true}),(error)=>error instanceof ApiError&&error.code==="INVOICE_RECIPIENT_CHANGED");
 });

@@ -92,7 +92,13 @@ export function submitInvoice(userId:string,data:InvoiceInput) {
 
 export function companyRequests(access:AccessContext) {
   requirePermission(access,"payments:read");
-  return rows<Intake>("SELECT * FROM recipient_invoice_requests WHERE organization_id=? ORDER BY created_at DESC LIMIT 250",access.organizationId).map(request=>({...readableRequest(request),recipientName:getRecipient(access.organizationId,request.recipient_id).name}));
+  return rows<Intake>("SELECT * FROM recipient_invoice_requests WHERE organization_id=? ORDER BY created_at DESC LIMIT 250",access.organizationId).map(request=>{
+    const versions=rows<{version:number}>("SELECT version FROM recipient_versions WHERE recipient_id=? AND created_at<=? ORDER BY version DESC",request.recipient_id,request.created_at);
+    const original=versions.map(version=>getRecipientVersion(access.organizationId,request.recipient_id,version.version)).find(profile=>profile?.user_id===request.submitted_by&&profile.preference_status==="confirmed");
+    const current=getRecipient(access.organizationId,request.recipient_id);
+    const recipientName=original?.name ?? (current.user_id===request.submitted_by?current.name:"Original invoice submitter");
+    return {...readableRequest(request),recipientName};
+  });
 }
 
 export function prepareInvoiceRequest(access:AccessContext,id:string,data:z.infer<typeof reviewInput>) {
