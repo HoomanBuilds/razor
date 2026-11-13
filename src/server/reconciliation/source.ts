@@ -54,8 +54,8 @@ export async function prepareSourceRecovery(access: AccessContext, attemptId: st
   getDb().prepare("UPDATE payout_attempts SET source_tx_hash=?,updated_at=? WHERE id=? AND organization_id=?").run(proof.transactionHash, new Date().toISOString(), attemptId, access.organizationId);
   const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "recover_source_transfer", args: treasuryArgs(config, { payment_id: payment.id, attempt_id: attemptId, succeeded: proof.succeeded, receipt: compact }), gas: "60000000000000", deposit: "1" } }] }];
   const authority = await recoveryAuthority(config, access.userId);
-  const chain = await view<{ owner_id: string }>(config, "get_config");
-  const owners = rows<{address:string}>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=? AND address=?", access.userId, config.network, chain.owner_id).map(wallet => wallet.address);
+  const ownerPolicy = await view<{ owner_id: string }>(config, "get_config");
+  const owners = rows<{address:string}>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=? AND address=?", access.userId, config.network, ownerPolicy.owner_id).map(wallet => wallet.address);
   const eligibleSigners = authority.shared && !proof.succeeded ? authority.refundAccounts : [...new Set([...owners, ...authority.refundAccounts])];
   return { proof, sourceOutcome: proof.succeeded ? "succeeded" : "failed", requiresOwnerSignature: !authority.shared || proof.succeeded, requiresPlatformRecovery: authority.shared && !proof.succeeded, eligibleSigners, walletActions };
 }

@@ -116,8 +116,20 @@ export function inspectSharedDeposit(result: FinalTransaction, config: TreasuryC
   const companyId = treasuryArgs(config).company_id;
   if (config.architecture !== "shared_v1" || !companyId || !proof.events.length || proof.receiver !== config.near_account_id || result.final_execution_status !== "FINAL" || result.transaction?.hash !== proof.transactionHash || result.transaction.signer_id !== proof.senderAccountId || !result.status || !("SuccessValue" in result.status)) throw new ApiError(409, "Shared funding requires a final transaction bound to this company", "SHARED_DEPOSIT_UNVERIFIED");
   const credits: SharedDepositCredit[] = [];
+  const outcomes = new Map(result.receipts_outcome?.map(receipt => [receipt.id, receipt]) ?? []);
+  const descendants = new Set<string>();
+  const pending = proof.events.map(event => event.receiptId);
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (descendants.has(id)) continue;
+    descendants.add(id);
+    const outcome = outcomes.get(id)?.outcome;
+    if (!outcome || "Failure" in outcome.status) continue;
+    pending.push(...outcome.receipt_ids ?? []);
+    if (typeof outcome.status.SuccessReceiptId === "string") pending.push(outcome.status.SuccessReceiptId);
+  }
   for (const receipt of result.receipts_outcome ?? []) {
-    if (receipt.outcome.executor_id !== config.near_account_id || !("SuccessValue" in receipt.outcome.status || "SuccessReceiptId" in receipt.outcome.status)) continue;
+    if (!descendants.has(receipt.id) || receipt.outcome.executor_id !== config.near_account_id || !("SuccessValue" in receipt.outcome.status || "SuccessReceiptId" in receipt.outcome.status)) continue;
     for (const log of receipt.outcome.logs) {
       if (!log.startsWith("EVENT_JSON:")) continue;
       let event;

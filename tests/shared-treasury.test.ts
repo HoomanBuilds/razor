@@ -49,6 +49,8 @@ test("funding requires the same final transaction to prove exact company credit 
   assert.throws(() => inspectSharedDeposit(unrelated, config, proof));
   const missing = result(); missing.receipts_outcome!.pop();
   assert.throws(() => inspectSharedDeposit(missing, config, proof));
+  const disconnected = result(); disconnected.receipts_outcome![0].outcome.status = { SuccessValue: "" };
+  assert.throws(() => inspectSharedDeposit(disconnected, config, proof));
   assert.throws(() => inspectSharedDeposit({ ...transaction, final_execution_status: "EXECUTED_OPTIMISTIC" }, config, proof));
   assert.throws(() => inspectSharedDeposit(transaction, config, { ...proof, events: [] }));
   assert.throws(() => inspectSharedDeposit(transaction, config, { ...proof, amount: "999999" }));
