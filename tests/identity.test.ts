@@ -165,3 +165,26 @@ test("custom roles require usable permission dependencies and can be archived wi
   assert.equal((await request("/invitations/accept",{token},member.cookie)).status,409);
   assert.equal((await request(`${base}`,undefined,member.cookie)).status,403);
 });
+
+test("legacy recipient links cannot reclaim a bound profile or expose a prior owner's payments",async()=>{
+  const payer=await signIn(),original=await signIn(),replacement=await signIn();
+  const {organization}=await(await request("/organizations",{name:"Portal ownership"},payer.cookie)).json();
+  const profile={name:"Original payee",kind:"employee",primaryAsset:"USDC",primaryNetwork:"pol",primaryAddress:original.account.address,backupNetwork:"base",backupAddress:original.account.address};
+  const {recipient,invitationUrl}=await(await request(`/organizations/${organization.id}/recipients`,profile,payer.cookie)).json(),token=new URL(invitationUrl).searchParams.get("token"),path=`/recipient-portal/${token}`;
+  const confirmed=await request(`${path}/confirm`,{...profile,primaryAddress:replacement.account.address,expectedVersion:1,fallbackConsent:true},original.cookie);
+  assert.equal(confirmed.status,200);
+  assert.equal((await request(path,undefined,replacement.cookie)).status,403);
+  assert.equal((await request(`${path}/confirm`,{...profile,primaryAddress:replacement.account.address,expectedVersion:2,fallbackConsent:true},replacement.cookie)).status,403);
+  const now=new Date().toISOString();
+  function payment(id:string,version:number){getDb().prepare("INSERT INTO payments (id,organization_id,recipient_id,kind,reference,amount,max_fee,status,recipient_version,recipient_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(id,organization.id,recipient.id,"payroll",id,"1000000","0","draft",version,"{}",now,now);}
+  payment("legacy-original-owner",2);
+  assert.deepEqual((await(await request(`${path}/payments`,undefined,original.cookie)).json()).payments.map((item:{id:string})=>item.id),["legacy-original-owner"]);
+  const changed=await request(`/organizations/${organization.id}/recipients/${recipient.id}`,{...profile,name:"Replacement payee",email:"replacement@example.test",primaryAddress:replacement.account.address,expectedVersion:2},payer.cookie,"PATCH");
+  assert.equal(changed.status,200);
+  assert.equal((await request(path,undefined,replacement.cookie)).status,200);
+  assert.deepEqual((await(await request(`${path}/payments`,undefined,replacement.cookie)).json()).payments,[]);
+  assert.equal((await request(`${path}/confirm`,{...profile,primaryAddress:replacement.account.address,expectedVersion:3,fallbackConsent:true},replacement.cookie)).status,200);
+  payment("legacy-replacement-owner",4);
+  assert.deepEqual((await(await request(`${path}/payments`,undefined,replacement.cookie)).json()).payments.map((item:{id:string})=>item.id),["legacy-replacement-owner"]);
+  assert.equal((await request(`${path}/payments`,undefined,original.cookie)).status,403);
+});

@@ -219,6 +219,7 @@ function invitedRecipient(token:string,userId:string):RecipientRecord {
   if(!record) throw new ApiError(404,"This recipient link has expired. Ask the payer for a new link.","RECIPIENT_LINK_UNAVAILABLE");
   const recipient=serialize(record);
   if(recipient.user_id===userId) return recipient;
+  if(recipient.user_id)throw new ApiError(403,"This profile is already linked to another Razor account. Sign in with that account to manage its preferences.","RECIPIENT_ACCOUNT_MISMATCH");
   const user=row<{email:string|null}>("SELECT email FROM users WHERE id = ?",userId)!;
   if(user.email && recipient.email && user.email.toLowerCase()===recipient.email.toLowerCase()) return recipient;
   const family=familyFor(recipient.primary_network);
@@ -233,19 +234,25 @@ recipientPortalRoutes.get("/:token",(c)=>{
   const recipient=invitedRecipient(c.req.param("token"),c.get("userId"));
   return c.json({recipient,organization:row("SELECT id,name FROM organizations WHERE id = ?",recipient.organization_id),backupAsset:"USDC",backupNetworks:BACKUP_NETWORKS});
 });
-recipientPortalRoutes.get("/:token/payments",(c)=>{
-  const recipient=invitedRecipient(c.req.param("token"),c.get("userId"));
+recipientPortalRoutes.get("/:token/payments",async(c)=>{
+  const userId=c.get("userId"),recipient=invitedRecipient(c.req.param("token"),userId);
   if(!row("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'payments'")) throw new ApiError(503,"Payment history is not configured yet. Your saved payout preferences remain available.","PAYMENT_HISTORY_SETUP_REQUIRED");
-  const payments=rows("SELECT p.id,p.kind,p.reference,p.amount,p.status,p.scheduled_for,p.created_at,p.updated_at,a.destination_asset,a.destination_network,a.destination_address,a.destination_memo,a.destination_tx_hash,a.state AS route_status FROM payments p LEFT JOIN payout_attempts a ON a.id = (SELECT latest.id FROM payout_attempts latest WHERE latest.payment_id = p.id AND latest.organization_id = p.organization_id ORDER BY latest.created_at DESC LIMIT 1) WHERE p.organization_id = ? AND p.recipient_id = ? ORDER BY p.created_at DESC LIMIT 100",recipient.organization_id,recipient.id);
+  if(recipient.user_id!==userId)return c.json({payments:[],amountAsset:"USDC",amountDecimals:6});
+  const {ownPayments}=await import("../recipient-workspace/service");
+  const payments=ownPayments(userId,recipient.id).slice(0,100).map(payment=>{
+    const attempt=payment.attempts.at(-1),updatedAt=row<{updated_at:string}>("SELECT updated_at FROM payments WHERE id=? AND organization_id=?",payment.id,recipient.organization_id)?.updated_at;
+    return {id:payment.id,kind:payment.kind,reference:payment.reference,amount:payment.amount,status:payment.status,scheduled_for:payment.scheduled_for,created_at:payment.created_at,updated_at:updatedAt,destination_asset:attempt?.destination_asset??null,destination_network:attempt?.destination_network??null,destination_address:attempt?.destination_address??null,destination_memo:attempt?.destination_memo??null,destination_tx_hash:attempt?.destination_tx_hash??null,route_status:attempt?.state??null};
+  });
   return c.json({payments,amountAsset:"USDC",amountDecimals:6});
 });
+
 recipientPortalRoutes.post("/:token/confirm",async(c)=>{
   const input=await validateProfile(PreferenceInput.parse(await c.req.json())),userId=c.get("userId"),recipient=invitedRecipient(c.req.param("token"),userId);
   if(input.fallbackConsent && (!input.backupNetwork || !input.backupAddress)) throw new ApiError(400,"Choose a complete backup route before consenting to USDC fallback","BACKUP_INCOMPLETE");
   transaction((db)=>{
     const now=new Date().toISOString();
-    const result=db.prepare("UPDATE recipients SET user_id = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = ?,preference_status = 'confirmed',confirmed_at = ?,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
-      .run(userId,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,recipient.organization_id,input.expectedVersion);
+    const result=db.prepare("UPDATE recipients SET user_id = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = ?,preference_status = 'confirmed',confirmed_at = ?,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ? AND archived=0 AND (user_id IS NULL OR user_id=?)")
+      .run(userId,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,recipient.organization_id,input.expectedVersion,userId);
     if(!result.changes) throw new ApiError(409,"Your preferences changed. Refresh before confirming.","RECIPIENT_VERSION_CHANGED");
     saveVersion(getRecipient(recipient.organization_id,recipient.id),userId);
     audit(userId,recipient.organization_id,"recipient.preferences_confirmed",recipient.id,{version:input.expectedVersion+1,fallbackConsent:input.fallbackConsent});
