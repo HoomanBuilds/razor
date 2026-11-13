@@ -96,6 +96,8 @@ export interface TreasuryConfig {
   near_account_id: string;
   network: "mainnet" | "testnet";
   token_contract: string;
+  architecture?: "isolated_v1" | "shared_v1";
+  company_id?: string | null;
 }
 
 export interface ChainAttempt {
