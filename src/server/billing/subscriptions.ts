@@ -37,7 +37,23 @@ function project(value: PeriodRow): BillingPeriod {
 }
 
 function periodsAt(organizationId: string, at: string): BillingPeriod[] {
-  return rows<PeriodRow>("SELECT * FROM billing_periods WHERE organization_id=? AND ends_at>? AND (superseded_at IS NULL OR superseded_at>?) AND (revoked_at IS NULL OR revoked_at>?) ORDER BY starts_at,id", organizationId, at, at, at).map(project);
+  const candidates = rows<PeriodRow>("SELECT * FROM billing_periods WHERE organization_id=? AND ends_at>? AND (superseded_at IS NULL OR superseded_at>?) AND (revoked_at IS NULL OR revoked_at>?) ORDER BY starts_at,id", organizationId, at, at, at);
+  return candidates.filter(value => {
+    const visited = new Set<string>();
+    let parentId = value.replaces_period_id;
+    while (parentId) {
+      if (visited.has(parentId)) return false;
+      visited.add(parentId);
+      const parent = row<{ replaces_period_id: string | null; revoked_at: string | null }>("SELECT replaces_period_id,revoked_at FROM billing_periods WHERE id=? AND organization_id=?", parentId, organizationId);
+      if (!parent || parent.revoked_at && parent.revoked_at <= at) return false;
+      parentId = parent.replaces_period_id;
+    }
+    return true;
+  }).map(project);
+}
+
+export function dependentPurchaseInvoices(organizationId: string, invoiceId: string): string[] {
+  return rows<{ source_invoice_id: string }>("WITH RECURSIVE descendants(id,source_invoice_id) AS (SELECT child.id,child.source_invoice_id FROM billing_periods parent JOIN billing_periods child ON child.replaces_period_id=parent.id AND child.organization_id=parent.organization_id WHERE parent.organization_id=? AND parent.source_invoice_id=? AND child.revoked_at IS NULL UNION SELECT child.id,child.source_invoice_id FROM billing_periods child JOIN descendants parent ON child.replaces_period_id=parent.id WHERE child.organization_id=? AND child.revoked_at IS NULL) SELECT source_invoice_id FROM descendants", organizationId, invoiceId, organizationId).map(value => value.source_invoice_id);
 }
 
 export function nextBillingMonth(value: TimeInput, anchorDay?: number): string {
@@ -177,7 +193,7 @@ export function revokePurchase(organizationId: string, invoiceId: string, now: T
     db.prepare("UPDATE billing_periods SET revoked_at=? WHERE id=?").run(at, period.id);
     if (period.replaces_period_id && !row("SELECT id FROM billing_periods WHERE replaces_period_id=? AND id!=? AND revoked_at IS NULL", period.replaces_period_id, period.id)) db.prepare("UPDATE billing_periods SET superseded_at=NULL WHERE id=? AND organization_id=?").run(period.replaces_period_id, organizationId);
     db.prepare("UPDATE billing_subscription_settings SET revision=revision+1,updated_at=? WHERE organization_id=?").run(at, organizationId);
-    billingEvent(organizationId, null, "purchase.refunded_access_revoked", invoiceId);
+    billingEvent(organizationId, null, "purchase.refunded_access_revoked", invoiceId, { dependentInvoicesRequiringReview: dependentPurchaseInvoices(organizationId, invoiceId) });
     return getSubscriptionState(organizationId, at);
   });
 }
