@@ -1,0 +1,85 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { base58 } from "@scure/base";
+import { prepareDeployment } from "../src/server/setup/deployment";
+import { NATIVE_USDC } from "../src/lib/native-usdc";
+
+function fixture() {
+  const directory = mkdtempSync(join(tmpdir(), "razor-deploy-'"));
+  const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+  const entries = [["razor_treasury.wasm", "NEAR_TREASURY_CODE_HASH"], ["razor_factory.wasm", "NEAR_FACTORY_CODE_HASH"], ["razor_clearing.wasm", "NEAR_CLEARING_CODE_HASH"]];
+  const artifacts = entries.map(([file, environmentKey], index) => {
+    const bytes = index === 1 ? Buffer.concat([wasm, Buffer.from("embedded"), wasm, Buffer.from([0])]) : Buffer.concat([wasm, Buffer.from([index])]);
+    writeFileSync(join(directory, file), bytes);
+    const digest = createHash("sha256").update(bytes).digest();
+    return { file, environmentKey, bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest) };
+  });
+  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ artifacts }));
+  return { directory, input: { network: "mainnet" as const, factoryAccount: "factory.near", clearingAccount: "clearing.near", ownerAccount: "owner.near", artifactDirectory: directory } };
+}
+
+test("deployment plan preserves canonical mainnet USDC, reviewed hashes and atomic initialization without execution", () => {
+  const { directory, input } = fixture();
+  try {
+    const plan = prepareDeployment(input);
+    assert.equal(plan.tokenContract, NATIVE_USDC.near);
+    assert.equal(plan.deployed, false);
+    assert.equal(plan.accountsVerified, false);
+    assert.equal(plan.steps.length, 2);
+    for (const step of plan.steps) {
+      assert.equal(step.atomicInitialization, true);
+      assert.equal(step.signerAccountId, step.accountId);
+      assert.deepEqual(step.argv.slice(4, 9), [step.artifact.path, "with-init-call", "new", "json-args", JSON.stringify(step.args)]);
+      assert(step.shellCommand.includes("'\\''"));
+      assert(!step.argv.includes("without-init-call"));
+    }
+    assert.equal(plan.steps[1].args.factory_id, input.factoryAccount);
+    assert.equal(plan.environment.NEAR_TREASURY_CODE_HASH, plan.artifacts[0].codeHash);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("deployment plans reject unsafe identities and mixed mainnet/testnet tokens", () => {
+  const { directory, input } = fixture();
+  try {
+    assert.throws(() => prepareDeployment({ ...input, ownerAccount: input.factoryAccount }), /distinct/);
+    assert.throws(() => prepareDeployment({ ...input, clearingAccount: "bad..near" }), /valid/);
+    assert.throws(() => prepareDeployment({ ...input, factoryAccount: "factory.testnet" }), /mainnet/);
+    assert.throws(() => prepareDeployment({ ...input, testnetToken: "token.testnet" }), /canonical/);
+    assert.throws(() => prepareDeployment({ ...input, network: "testnet" }), /testnet token/);
+    const plan = prepareDeployment({ ...input, network: "testnet", testnetToken: "usdc.testnet" });
+    assert.equal(plan.settlementEnabled, false);
+    assert.equal(plan.tokenContract, "usdc.testnet");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("deployment plans reject modified, invalid and duplicate artifact metadata", () => {
+  const { directory, input } = fixture();
+  try {
+    const file = join(directory, "razor_clearing.wasm"), original = readFileSync(file);
+    writeFileSync(file, "not wasm");
+    assert.throws(() => prepareDeployment(input), /invalid WebAssembly/);
+    writeFileSync(file, Buffer.concat([original, Buffer.from([1])]));
+    assert.throws(() => prepareDeployment(input), /manifest/);
+    writeFileSync(file, original);
+    const manifestFile = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    manifest.artifacts.push(manifest.artifacts[0]);
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    assert.throws(() => prepareDeployment(input), /manifest/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("deployment plans reject a factory embedding another treasury even when all manifest hashes match", () => {
+  const { directory, input } = fixture();
+  try {
+    const file = join(directory, "razor_treasury.wasm"), bytes = Buffer.concat([readFileSync(file), Buffer.from([99])]);
+    writeFileSync(file, bytes);
+    const manifestFile = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(manifestFile, "utf8")), digest = createHash("sha256").update(bytes).digest();
+    Object.assign(manifest.artifacts[0], { bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest) });
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    assert.throws(() => prepareDeployment(input), /exact treasury/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
