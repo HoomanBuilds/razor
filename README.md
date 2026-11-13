@@ -20,7 +20,7 @@ SQLite migrations run automatically into `.data/razor.sqlite`. Use persistent lo
 
 ## NEAR setup
 
-Company treasury ownership is separate from application login. Link the NEAR owner wallet, create or connect a Razor treasury, register its native USDC token storage and refresh the confirmed balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
+Company treasury ownership is separate from application login. Link the NEAR owner wallet and activate a company ledger in the shared Razor treasury. The platform deploys treasury code and registers native USDC storage once. Each company funds only its own state allowance and transaction gas; confirmed tagged deposits determine its spendable balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
 
 Build the NEAR contracts with `bash contracts/build.sh`, using Binaryen `wasm-opt` version 130 alongside Rust. The guarded, serialized build optimizes shared treasury, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints three public code-hash pins for the corresponding `.env.example` fields. Company activation registers isolated company state in the shared treasury without deploying another code copy. Use those published artifacts and hashes rather than raw Cargo output. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
 

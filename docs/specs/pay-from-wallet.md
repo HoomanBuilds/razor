@@ -19,7 +19,7 @@ The task reopens from server-persisted funding claims, source legs, receipts and
 
 A source signing claim is saved immediately before invoking a wallet transfer. The source hash is recorded after broadcast. Unknown outcomes retain that claim and block another deposit. A hash recovered from a wallet or exchange can be recorded on the same leg.
 
-Provider success, a final NEAR token receipt, the treasury's recognized balance and recipient delivery are distinct stages. Provider success alone creates no linked credit. A final receipt can precede the contract's refreshed token balance. In that case the task offers an explicit wallet call to `refresh_balance` and reconciliation instead of another deposit. This refresh is blocked while a treasury source callback remains unresolved.
+Provider success, a final NEAR token receipt, the shared treasury's exact company credit and recipient delivery are distinct stages. Provider success alone creates no linked credit. A final receipt can precede the contract's refreshed token balance. In that case the task offers an explicit wallet call to `refresh_balance` and reconciliation instead of another deposit. This refresh is blocked while a treasury source callback remains unresolved.
 
 Once reserved, the same task uses the staged NEAR preparation, approval quorum and execution flow. It can review the recipient's consented USDC backup, subject to the existing route failure and network rules. Failed payout recovery retains the same approved budget; source costs already incurred reduce the remaining allowance.
 
