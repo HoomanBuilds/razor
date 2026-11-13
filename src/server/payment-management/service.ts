@@ -13,6 +13,7 @@ import { getSupportedTokens, type Token } from "../payments/intents";
 import { duplicateInvoiceWarnings } from "../business/duplicate-invoices";
 import { recipientRouteReadiness } from "./routing";
 import { liabilityPayments } from "../partial-settlement/model";
+import { recordedRecipientName } from "../payments/recipient-names";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
 interface Replacement { old_payment_id: string; new_payment_id: string; liability_kind: string; liability_id: string; reason_ciphertext: string; created_at: string }
@@ -51,7 +52,7 @@ function profile(recipient: RecipientRecord): RecipientSnapshot {
 function paymentReview(access: AccessContext, payment: Payment) {
   const recipient = getRecipient(access.organizationId, payment.recipient_id);
   const recordedProfile = JSON.parse(payment.recipient_snapshot) as RecipientSnapshot;
-  return { payment, recipientName: recipient.name, recordedProfile, currentProfile: profile(recipient), profileChanged: payment.recipient_version !== recipient.version };
+  return { payment, recipientName: recordedRecipientName(access.organizationId, payment), recordedProfile, currentProfile: profile(recipient), profileChanged: payment.recipient_version !== recipient.version };
 }
 
 function currentRun(access: AccessContext, runId: string): Run {

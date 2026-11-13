@@ -16,6 +16,7 @@ import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
+import { recordedRecipientName } from "./recipient-names";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -46,7 +47,8 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
 export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
   requirePermission(access, "payments:read");
   const query = "SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC,p.id DESC";
-  return page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
+  const payments = page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
+  return payments.map(payment => ({ ...payment, recipientName: recordedRecipientName(access.organizationId, payment) }));
 }
 
 export function paymentPage(access: AccessContext, page: number, pageSize: number) {
