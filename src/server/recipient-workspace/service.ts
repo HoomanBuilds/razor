@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
-import { getRecipient, type RecipientRecord } from "../identity/recipients";
+import { getRecipient, getRecipientVersion, type RecipientRecord } from "../identity/recipients";
 import { audit } from "../identity/session";
 import { createBill } from "../business/service";
 import { parseUnits } from "../../lib/money";
@@ -23,18 +23,30 @@ export function ownRecipient(userId:string,recipientId:string):RecipientRecord {
 }
 
 export function ownProfiles(userId:string) {
-  return rows<{id:string;organization_id:string;company_name:string}>("SELECT r.id,r.organization_id,o.name AS company_name FROM recipients r JOIN organizations o ON o.id=r.organization_id WHERE r.user_id = ? ORDER BY r.created_at DESC",userId).map(profile=>({recipient:getRecipient(profile.organization_id,profile.id),company:{id:profile.organization_id,name:profile.company_name}}));
+  const current=rows<{id:string;organization_id:string;company_name:string}>("SELECT r.id,r.organization_id,o.name AS company_name FROM recipients r JOIN organizations o ON o.id=r.organization_id WHERE r.user_id = ? ORDER BY r.created_at DESC",userId).map(profile=>({recipient:getRecipient(profile.organization_id,profile.id),company:{id:profile.organization_id,name:profile.company_name},historicalOnly:false}));
+  const profiles=new Map(current.map(profile=>[profile.recipient.id,profile]));
+  const historical=rows<{recipient_id:string;organization_id:string;company_name:string;profile_ciphertext:string}>("SELECT v.recipient_id,r.organization_id,o.name AS company_name,v.profile_ciphertext FROM recipient_versions v JOIN recipients r ON r.id=v.recipient_id JOIN organizations o ON o.id=r.organization_id WHERE v.changed_by=? ORDER BY v.version DESC",userId);
+  for(const saved of historical){
+    if(profiles.has(saved.recipient_id))continue;
+    const recipient=JSON.parse(decrypt(saved.profile_ciphertext)) as RecipientRecord;
+    if(recipient.user_id!==userId||recipient.id!==saved.recipient_id||recipient.organization_id!==saved.organization_id||recipient.preference_status!=="confirmed"||!recipient.confirmed_at)continue;
+    profiles.set(saved.recipient_id,{recipient,company:{id:saved.organization_id,name:saved.company_name},historicalOnly:true});
+  }
+  return [...profiles.values()];
 }
 
 export function ownPayments(userId:string,recipientId?:string) {
-  if(recipientId)ownRecipient(userId,recipientId);
-  const payments=rows<{id:string;organization_id:string;recipient_id:string;company_name:string;reference:string;kind:string;amount:string;delivered_amount:string;status:string;scheduled_for:string|null;created_at:string;recipient_snapshot:string;metadata:string;bill_reference:string|null;bill_title:string|null;payroll_reference:string|null;period_start:string|null;period_end:string|null}>(
-    `SELECT p.id,p.organization_id,p.recipient_id,o.name AS company_name,p.reference,p.kind,p.amount,p.delivered_amount,p.status,p.scheduled_for,p.created_at,p.recipient_snapshot,p.metadata,b.reference AS bill_reference,b.title AS bill_title,pr.reference AS payroll_reference,pr.period_start,pr.period_end
+  if(recipientId&&!ownProfiles(userId).some(profile=>profile.recipient.id===recipientId))throw new ApiError(404,"This recipient history is not linked to your verified account","RECIPIENT_NOT_FOUND");
+  const payments=rows<{id:string;organization_id:string;recipient_id:string;company_name:string;reference:string;kind:string;amount:string;delivered_amount:string;status:string;scheduled_for:string|null;created_at:string;recipient_version:number;recipient_snapshot:string;metadata:string;bill_reference:string|null;bill_title:string|null;payroll_reference:string|null;period_start:string|null;period_end:string|null}>(
+    `SELECT p.id,p.organization_id,p.recipient_id,o.name AS company_name,p.reference,p.kind,p.amount,p.delivered_amount,p.status,p.scheduled_for,p.created_at,p.recipient_version,p.recipient_snapshot,p.metadata,b.reference AS bill_reference,b.title AS bill_title,pr.reference AS payroll_reference,pr.period_start,pr.period_end
      FROM payments p JOIN recipients r ON r.id=p.recipient_id AND r.organization_id=p.organization_id JOIN organizations o ON o.id=p.organization_id
      LEFT JOIN bill_installments bi ON bi.payment_id=p.id LEFT JOIN bills b ON b.id=bi.bill_id AND b.organization_id=p.organization_id AND b.recipient_id=r.id
      LEFT JOIN payroll_items pi ON pi.payment_id=p.id AND pi.recipient_id=r.id LEFT JOIN payroll_runs pr ON pr.id=pi.run_id AND pr.organization_id=p.organization_id
-     WHERE r.user_id = ? ${recipientId?"AND r.id = ?":""} ORDER BY p.created_at DESC LIMIT 250`,...(recipientId?[userId,recipientId]:[userId]));
-  return payments.map(payment=>{
+     WHERE (r.user_id = ? OR EXISTS (SELECT 1 FROM recipient_versions v WHERE v.recipient_id=r.id AND v.version=p.recipient_version AND v.changed_by=?)) ${recipientId?"AND r.id = ?":""} ORDER BY p.created_at DESC LIMIT 250`,...(recipientId?[userId,userId,recipientId]:[userId,userId]));
+  return payments.filter(payment=>{
+    const profile=getRecipientVersion(payment.organization_id,payment.recipient_id,payment.recipient_version);
+    return profile?.user_id===userId&&profile.organization_id===payment.organization_id&&profile.id===payment.recipient_id&&profile.preference_status==="confirmed"&&!!profile.confirmed_at;
+  }).map(payment=>{
     let metadata:Record<string,unknown>={},snapshot:Record<string,unknown>={};
     try{metadata=JSON.parse(payment.metadata);snapshot=JSON.parse(payment.recipient_snapshot);}catch{}
     const displayReference=payment.bill_reference || payment.payroll_reference || (typeof metadata.displayReference==="string"?metadata.displayReference:null) || (/^(bill|payroll):/.test(payment.reference)?payment.kind==="payroll"?"Payroll payment":"Invoice payment":payment.reference);
@@ -58,7 +70,7 @@ function readableRequest(request:Intake) {
 }
 
 export function ownRequests(userId:string) {
-  return rows<Intake>("SELECT i.* FROM recipient_invoice_requests i JOIN recipients r ON r.id=i.recipient_id AND r.organization_id=i.organization_id WHERE r.user_id=? ORDER BY i.created_at DESC LIMIT 250",userId).map(readableRequest);
+  return rows<Intake>("SELECT i.* FROM recipient_invoice_requests i JOIN recipients r ON r.id=i.recipient_id AND r.organization_id=i.organization_id WHERE i.submitted_by=? ORDER BY i.created_at DESC LIMIT 250",userId).map(readableRequest);
 }
 
 export function submitInvoice(userId:string,data:InvoiceInput) {
@@ -70,7 +82,7 @@ export function submitInvoice(userId:string,data:InvoiceInput) {
   const sourceFingerprint=hash({organizationId:recipient.organization_id,...input}),referenceHash=hash(input.reference);
   return transaction(db=>{
     const old=row<Intake>("SELECT * FROM recipient_invoice_requests WHERE organization_id=? AND recipient_id=? AND reference_hash=?",recipient.organization_id,recipient.id,referenceHash);
-    if(old){if(old.source_fingerprint!==sourceFingerprint)throw new ApiError(409,"This invoice reference already contains different terms","INVOICE_REFERENCE_CONFLICT");return readableRequest(old);}
+    if(old){if(old.submitted_by!==userId)throw new ApiError(409,"This invoice reference is already used by an earlier recipient. Choose a new reference.","INVOICE_REFERENCE_CONFLICT");if(old.source_fingerprint!==sourceFingerprint)throw new ApiError(409,"This invoice reference already contains different terms","INVOICE_REFERENCE_CONFLICT");return readableRequest(old);}
     const id=randomUUID(),now=new Date().toISOString();
     db.prepare("INSERT INTO recipient_invoice_requests (id,organization_id,recipient_id,submitted_by,reference_hash,source_fingerprint,payload_ciphertext,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run(id,recipient.organization_id,recipient.id,userId,referenceHash,sourceFingerprint,encrypt(JSON.stringify(input)),now,now);
     audit(userId,recipient.organization_id,"invoice_request.submitted",id,{sourceFingerprint});
@@ -95,6 +107,7 @@ export function prepareInvoiceRequest(access:AccessContext,id:string,data:z.infe
     const review={sourceFingerprint:input.sourceFingerprint,agreedUSDC:agreedAmount,maxFee,title,dueDate:dueDate || null,reviewConfirmed:true};
     if(request.review_ciphertext&&JSON.stringify(JSON.parse(decrypt(request.review_ciphertext)))!==JSON.stringify(review))throw new ApiError(409,"This request already has a reviewed draft with different agreed terms","INVOICE_REVIEW_CONFLICT");
     const recipient=getRecipient(access.organizationId,request.recipient_id);
+    if(recipient.user_id!==request.submitted_by)throw new ApiError(409,"The receiving profile now belongs to a different person. Review the original supplier and create a separate verified profile before preparing this invoice.","INVOICE_RECIPIENT_CHANGED");
     if(recipient.archived||recipient.preference_status!=="confirmed")throw new ApiError(409,"The supplier must confirm an active receiving profile before a draft is prepared","RECIPIENT_CONFIRMATION_REQUIRED");
     const bill=createBill(access,{recipientId:request.recipient_id,reference:payload.reference,title,amount:agreedAmount,maxFee,dueDate:dueDate?`${dueDate}T00:00:00.000Z`:undefined,lineItems:payload.lineItems.map(item=>({...item,currency:payload.currency})),evidence:JSON.stringify({invoiceRequestId:id,sourceFingerprint:request.source_fingerprint,originalAmount:payload.amount,originalCurrency:payload.currency,agreement:"Human finance review confirmed the explicit USDC liability"}),documentHash:request.source_fingerprint});
     if(bill.document_hash!==request.source_fingerprint)throw new ApiError(409,"An invoice already uses this reference with a different source. Review the existing invoice instead.","INVOICE_SOURCE_CONFLICT");

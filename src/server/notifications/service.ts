@@ -2,15 +2,38 @@ import { randomUUID } from "node:crypto";
 import { ApiError } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
+import { getRecipientVersion } from "../identity/recipients";
 import { appOrigin } from "../identity/session";
 
 interface Delivery { id: string; source_kind: "company" | "recipient"; source_id: string; organization_id: string; user_id: string; email_ciphertext: string; attempts: number; created_at: string; lease_owner: string }
 const now = () => new Date().toISOString();
 
+function refreshNoticeOwners(organizationId?:string,userId?:string) {
+  const notices=rows<{id:string;organization_id:string;recipient_id:string;recipient_version:number;user_id:string}>("SELECT n.id,n.organization_id,n.recipient_id,p.recipient_version,n.user_id FROM recipient_notices n JOIN payments p ON p.id=n.entity_id AND p.recipient_id=n.recipient_id AND p.organization_id=n.organization_id LEFT JOIN recipient_versions v ON v.recipient_id=p.recipient_id AND v.version=p.recipient_version WHERE v.changed_by IS NOT NULL AND v.changed_by!=n.user_id AND (? IS NULL OR n.organization_id=?) AND (? IS NULL OR n.user_id=? OR v.changed_by=?)",organizationId??null,organizationId??null,userId??null,userId??null,userId??null);
+  transaction(db=>{
+    for(const notice of notices){
+      const profile=getRecipientVersion(notice.organization_id,notice.recipient_id,notice.recipient_version);
+      if(profile?.user_id&&profile.preference_status==="confirmed"&&profile.confirmed_at&&profile.user_id!==notice.user_id)db.prepare("UPDATE recipient_notices SET user_id=?,read_at=NULL WHERE id=?").run(profile.user_id,notice.id);
+    }
+  });
+}
+function mayReadRecipientNotice(userId:string,id:string) {
+  const notice=row<{entity_id:string;recipient_id:string;organization_id:string}>("SELECT entity_id,recipient_id,organization_id FROM recipient_notices WHERE id=? AND user_id=?",id,userId);
+  if(!notice)return false;
+  if(notice.entity_id===notice.recipient_id)return true;
+  const payment=row<{recipient_version:number}>("SELECT recipient_version FROM payments WHERE id=? AND recipient_id=? AND organization_id=?",notice.entity_id,notice.recipient_id,notice.organization_id);
+  if(!payment)return false;
+  const profile=getRecipientVersion(notice.organization_id,notice.recipient_id,payment.recipient_version);
+  return profile?.user_id===userId&&profile.preference_status==="confirmed"&&!!profile.confirmed_at;
+}
+
 export function listRecipientNotices(userId: string) {
-  return rows("SELECT id,title,body,entity_id,recipient_id,read_at,created_at FROM recipient_notices WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100", userId);
+  refreshNoticeOwners(undefined,userId);
+  return rows("SELECT id,title,body,entity_id,recipient_id,read_at,created_at FROM recipient_notices WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100", userId).filter((notice)=>mayReadRecipientNotice(userId,(notice as {id:string}).id));
 }
 export function readRecipientNotice(userId: string, id: string) {
+  refreshNoticeOwners(undefined,userId);
+  if(!mayReadRecipientNotice(userId,id))throw new ApiError(404,"Notification not found","NOTICE_NOT_FOUND");
   const updated = getDb().prepare("UPDATE recipient_notices SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?").run(now(), id, userId);
   if (!updated.changes) throw new ApiError(404, "Notification not found", "NOTICE_NOT_FOUND");
   return { read: true };
@@ -28,9 +51,9 @@ export function saveNotificationPreferences(userId: string, emailEnabled: boolea
 }
 
 function mayRead(delivery: Pick<Delivery, "source_kind" | "source_id" | "organization_id" | "user_id">) {
-  if (delivery.source_kind === "recipient") return !!row("SELECT id FROM recipient_notices WHERE id=? AND user_id=? AND organization_id=?", delivery.source_id, delivery.user_id, delivery.organization_id);
+  if (delivery.source_kind === "recipient") return !!row("SELECT id FROM recipient_notices WHERE id=? AND user_id=? AND organization_id=?", delivery.source_id, delivery.user_id, delivery.organization_id)&&mayReadRecipientNotice(delivery.user_id,delivery.source_id);
   return !!row(`SELECT n.id FROM notices n JOIN memberships m ON m.organization_id=n.organization_id AND m.user_id=? AND m.status='active'
-    JOIN organization_roles r ON r.id=m.role_id AND r.organization_id=m.organization_id
+    JOIN organization_roles r ON r.id=m.role_id AND r.organization_id=m.organization_id AND r.archived_at IS NULL
     WHERE n.id=? AND n.organization_id=? AND (n.user_id IS NULL OR n.user_id=?) AND EXISTS(SELECT 1 FROM json_each(r.permissions_json) WHERE value=n.required_permission)`, delivery.user_id, delivery.source_id, delivery.organization_id, delivery.user_id);
 }
 
@@ -38,7 +61,7 @@ function enqueueEmails(organizationId?: string) {
   const candidates = rows<{ source_kind: "company" | "recipient"; source_id: string; organization_id: string; user_id: string; email: string }>(`
     SELECT 'company' AS source_kind,n.id AS source_id,n.organization_id,u.id AS user_id,u.email
     FROM notices n JOIN memberships m ON m.organization_id=n.organization_id AND m.status='active'
-    JOIN organization_roles r ON r.id=m.role_id AND r.organization_id=m.organization_id JOIN users u ON u.id=m.user_id
+    JOIN organization_roles r ON r.id=m.role_id AND r.organization_id=m.organization_id AND r.archived_at IS NULL JOIN users u ON u.id=m.user_id
     JOIN notification_preferences p ON p.user_id=u.id AND p.email_enabled=1
     WHERE u.email IS NOT NULL AND n.created_at>=p.enabled_at AND n.created_at>? AND (? IS NULL OR n.organization_id=?)
       AND (n.user_id IS NULL OR n.user_id=u.id) AND EXISTS(SELECT 1 FROM json_each(r.permissions_json) WHERE value=n.required_permission)
@@ -56,6 +79,7 @@ function enqueueEmails(organizationId?: string) {
 
 export async function dispatchNotifications(organizationId?: string, limit = 5) {
   if (!process.env.RESEND_API_KEY || !process.env.NOTIFICATION_FROM_EMAIL) return { configured: false, accepted: 0 };
+  refreshNoticeOwners(organizationId);
   enqueueEmails(organizationId);
   let accepted = 0;
   for (let index = 0; index < Math.min(limit, 10); index++) {

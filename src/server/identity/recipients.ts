@@ -83,6 +83,16 @@ export function listRecipients(orgId:string):RecipientRecord[] {
   return rows<RecipientRecord>(`SELECT ${RECIPIENT_COLUMNS} FROM recipients WHERE organization_id = ? AND archived = 0 ORDER BY created_at DESC`,orgId).map(serialize);
 }
 
+export function getRecipientVersion(orgId:string,id:string,version:number):RecipientRecord|null {
+  const saved=row<{profile_ciphertext:string}>("SELECT v.profile_ciphertext FROM recipient_versions v JOIN recipients r ON r.id=v.recipient_id WHERE r.organization_id=? AND v.recipient_id=? AND v.version=?",orgId,id,version);
+  if(saved){
+    const profile=JSON.parse(decrypt(saved.profile_ciphertext)) as RecipientRecord;
+    return profile.organization_id===orgId&&profile.id===id&&profile.version===version?profile:null;
+  }
+  const current=row<{version:number}>("SELECT version FROM recipients WHERE organization_id=? AND id=?",orgId,id);
+  return current?.version===version?getRecipient(orgId,id):null;
+}
+
 export function saveVersion(recipient:RecipientRecord,userId:string) {
   getDb().prepare("INSERT INTO recipient_versions (recipient_id,version,profile_ciphertext,changed_by,created_at) VALUES (?,?,?,?,?)").run(recipient.id,recipient.version,encrypt(JSON.stringify(recipient)),userId,new Date().toISOString());
 }
