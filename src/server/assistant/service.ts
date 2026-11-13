@@ -66,7 +66,7 @@ export function getDraftEvidence(access: AccessContext, draftId: string) {
   const item = row<StoredDraft>("SELECT * FROM assistant_drafts WHERE id=? AND organization_id=?", draftId, access.organizationId);
   if (!item) throw new ApiError(404, "Invoice draft not found or retention expired", "ASSISTANT_DRAFT_NOT_FOUND");
   audit(access, "invoice_evidence_viewed", draftId);
-  return { id: item.id, draft: JSON.parse(decrypt(item.draft_ciphertext)), evidence: JSON.parse(decrypt(item.evidence_ciphertext)), createdAt: item.created_at, expiresAt: item.expires_at };
+  return { id: item.id, documentHash:createHash("sha256").update(decrypt(item.input_ciphertext)).digest("hex"), sourceText:decrypt(item.input_ciphertext), draft: JSON.parse(decrypt(item.draft_ciphertext)), evidence: JSON.parse(decrypt(item.evidence_ciphertext)), createdAt: item.created_at, expiresAt: item.expires_at };
 }
 
 export function deleteDraft(access: AccessContext, draftId: string) {

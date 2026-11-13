@@ -7,7 +7,12 @@ export const assistantRoutes = new Hono<AppEnv>();
 
 assistantRoutes.get("/config", (c) => c.json(service.assistantConfiguration(c.get("access"))));
 assistantRoutes.get("/drafts", (c) => c.json({ drafts: service.listDrafts(c.get("access")) }));
-assistantRoutes.get("/drafts/:id/evidence", (c) => c.json(service.getDraftEvidence(c.get("access"), c.req.param("id"))));
+assistantRoutes.get("/drafts/:id/evidence", (c) => {
+  const evidence=service.getDraftEvidence(c.get("access"),c.req.param("id"));
+  c.header("Cache-Control","no-store");
+  if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-private-invoice.json"');
+  return c.json(evidence);
+});
 assistantRoutes.delete("/drafts/:id", (c) => c.json(service.deleteDraft(c.get("access"), c.req.param("id"))));
 assistantRoutes.post("/analyze", async (c) => {
   let body: unknown;

@@ -7,7 +7,12 @@ import { deleteFinancePlan, financeInsights, financePlanEvidence, listFinancePla
 export const financeRoutes=new Hono<AppEnv>();
 financeRoutes.get("/insights",c=>c.json(financeInsights(c.get("access"))));
 financeRoutes.get("/plans",c=>c.json({plans:listFinancePlans(c.get("access"))}));
-financeRoutes.get("/plans/:id/evidence",c=>c.json(financePlanEvidence(c.get("access"),c.req.param("id"))));
+financeRoutes.get("/plans/:id/evidence",c=>{
+  const evidence=financePlanEvidence(c.get("access"),c.req.param("id"));
+  c.header("Cache-Control","no-store");
+  if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-finance-proposal.json"');
+  return c.json(evidence);
+});
 financeRoutes.post("/plan",async c=>c.json(await proposeFinancePlan(c.get("access"),planningInput.parse(await c.req.json()))));
 financeRoutes.post("/plans/:id/prepare",async c=>{
   const input=z.object({planHash:z.string().regex(/^[a-f0-9]{64}$/),reviewConfirmed:z.literal(true)}).parse(await c.req.json());

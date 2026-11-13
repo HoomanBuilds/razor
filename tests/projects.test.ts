@@ -65,3 +65,19 @@ test("business setoff is reported as discharged debt and never inflates project 
   assert.equal(report.projects[0].settledPayments, "0");
   assert(projectExport(access).includes("debt_discharged_without_cash_micro_usdc"));
 });
+
+test("project cash reports keep unprepared installment principal separate from executable budgets",()=>{
+  const {access,now}=fixture(),db=getDb(),recipient=access.organizationId;
+  db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_network,primary_address,created_at,updated_at) VALUES(?,?,'Supplier','business','near','supplier.near',?,?)").run(recipient,access.organizationId,now,now);
+  const bill=createBill({...access,permissions:[...access.permissions,"payments:prepare"]},{recipientId:recipient,reference:"Installment liability",title:"Services",amount:"100000000",projectReference:"Installments",costCenterReference:"Delivery"});
+  db.prepare("UPDATE payments SET amount='40000000',status='paid',delivered_amount='40000000',total_spent='41000000' WHERE id=?").run(bill.payment_id);
+  let report=projectReports(access).projects[0];
+  assert.equal(report.sourceSpent,"41000000");assert.equal(report.openBudget,"0");assert.equal(report.remainingLiability,"60000000");assert.equal(report.unpreparedLiability,"60000000");
+  const next=randomUUID();
+  db.prepare("INSERT INTO payments(id,organization_id,recipient_id,kind,reference,amount,max_fee,status,recipient_version,recipient_snapshot,created_at,updated_at) VALUES(?,?,?,'invoice','Next installment','60000000','1000000','draft',1,'{}',?,?)").run(next,access.organizationId,recipient,now,now);
+  db.prepare("INSERT INTO bill_installments(id,bill_id,payment_id,created_at) VALUES(?,?,?,?)").run(randomUUID(),bill.id,next,now);
+  report=projectReports(access).projects[0];
+  assert.equal(report.openBudget,"61000000");assert.equal(report.remainingLiability,"60000000");assert.equal(report.unpreparedLiability,"0");
+  assert.equal(projectReports(access).costCenters[0].remainingLiability,"60000000");
+  assert(projectExport(access).includes("unprepared_net_liability_micro_usdc"));
+});

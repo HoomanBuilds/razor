@@ -12,7 +12,12 @@ export { getFundingReceipt, verifyFundingCredit } from "./funding";
 export { reconciliationQueue } from "./service";
 export { prepareSourceRecovery } from "./source";
 export const reconciliationRoutes = new Hono<AppEnv>();
-reconciliationRoutes.get("/attempts/:id/evidence", (c) => c.json({ evidence: listPrivateEvidence(c.get("access"), c.req.param("id")) }));
+reconciliationRoutes.get("/attempts/:id/evidence", (c) => {
+  const evidence=listPrivateEvidence(c.get("access"),c.req.param("id"));
+  c.header("Cache-Control","no-store");
+  if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-settlement-evidence.json"');
+  return c.json({evidence});
+});
 
 reconciliationRoutes.get("/", (c) => {
   const parsed = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }).safeParse(c.req.query());

@@ -7,7 +7,7 @@ import { approveDeployment, assertFreshDeployment, requireModelReceipt, sha256 }
 import { ApiError } from "../src/server/context";
 import { getDb } from "../src/server/db";
 import { encrypt } from "../src/server/identity/crypto";
-import { analyzeInvoice, listDrafts } from "../src/server/assistant/service";
+import { analyzeInvoice, deleteDraft, getDraftEvidence, listDrafts } from "../src/server/assistant/service";
 
 test("invalid model nonce is rejected by the official verifier", async () => {
   await assert.rejects(verifyModelAttestation({
@@ -62,6 +62,15 @@ test("retained invoice review preserves the original source hash and requires do
   const [draft]=listDrafts(access);
   assert.equal(draft.documentHash,sha256(source));
   assert.equal(draft.draft.reference,"INV-42");
+  const retained=getDraftEvidence(access,draft.id);
+  assert.equal(retained.sourceText,source);assert.equal(retained.documentHash,sha256(source));
+  assert.throws(()=>getDraftEvidence({...access,organizationId:"unrelated-company"},draft.id),error=>error instanceof ApiError&&error.status===404);
   assert.throws(()=>listDrafts({...access,permissions:["company:read"]}),error=>error instanceof ApiError&&error.status===403);
   assert.equal(listDrafts({...access,organizationId:"unrelated-company"}).length,0);
+  assert.throws(()=>getDraftEvidence({...access,permissions:["company:read"]},draft.id),error=>error instanceof ApiError&&error.status===403);
+  db.prepare("INSERT INTO assistant_drafts(id,organization_id,created_by,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at) SELECT 'delete-invoice',organization_id,created_by,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at FROM assistant_drafts WHERE id=?").run(draft.id);
+  assert.deepEqual(deleteDraft(access,"delete-invoice"),{deleted:true});
+  assert.throws(()=>getDraftEvidence(access,"delete-invoice"),error=>error instanceof ApiError&&error.status===404);
+  db.prepare("UPDATE assistant_drafts SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(draft.id);
+  assert.throws(()=>getDraftEvidence(access,draft.id),error=>error instanceof ApiError&&error.status===404);
 });
