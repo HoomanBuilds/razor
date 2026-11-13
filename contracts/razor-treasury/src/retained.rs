@@ -37,8 +37,7 @@ pub struct RetainedAsset {
     pub withdrawal: Option<RetainedWithdrawal>,
 }
 
-#[near]
-impl Treasury {
+impl CompanyTreasury {
     pub fn get_retained_assets(&self) -> Vec<RetainedAsset> {
         self.retained_assets.values().cloned().collect()
     }
@@ -47,7 +46,6 @@ impl Treasury {
         self.retained_assets.get(&token_contract).cloned()
     }
 
-    #[payable]
     pub fn set_retained_asset(
         &mut self,
         token_contract: AccountId,
@@ -110,7 +108,7 @@ impl Treasury {
         };
         self.retained_assets
             .insert(token_contract.clone(), asset.clone());
-        emit(
+        self.emit(
             "retained_asset_policy_changed",
             json!({"token_contract":token_contract,"asset_id":asset.asset_id,"symbol":asset.symbol,"decimals":asset.decimals,"enabled":enabled}),
         );
@@ -130,7 +128,6 @@ impl Treasury {
         self.retained_balance_probe(token_contract, epoch)
     }
 
-    #[private]
     pub fn on_retained_balance_sync(&mut self, token_contract: AccountId, epoch: U64) -> bool {
         let mut asset = self.load_retained(&token_contract);
         if asset.balance_epoch != epoch || asset.in_flight.0 != 0 {
@@ -139,7 +136,9 @@ impl Treasury {
         let Some(actual) = read_balance() else {
             return false;
         };
-        asset.balance = U128(actual);
+        if actual < add(asset.balance.0, asset.in_flight.0) {
+            return false;
+        }
         asset.confirmed_at_ms = U64(now_ms());
         asset.balance_epoch = U64(asset
             .balance_epoch
@@ -147,20 +146,18 @@ impl Treasury {
             .checked_add(1)
             .expect("VERSION_OVERFLOW"));
         self.retained_assets.insert(token_contract.clone(), asset);
-        emit(
+        self.emit(
             "retained_balance_observed",
             json!({"token_contract":token_contract,"amount":U128(actual)}),
         );
         true
     }
 
-    #[private]
     pub fn on_retained_deposit_sync(&mut self, token_contract: AccountId, epoch: U64) -> U128 {
         self.on_retained_balance_sync(token_contract, epoch);
         U128(0)
     }
 
-    #[payable]
     pub fn withdraw_retained_asset(
         &mut self,
         token_contract: AccountId,
@@ -202,7 +199,7 @@ impl Treasury {
             receipt: None,
         });
         self.retained_assets.insert(token_contract.clone(), asset);
-        emit(
+        self.emit(
             "retained_withdrawal_started",
             json!({"token_contract":token_contract,"withdrawal_id":withdrawal_id,"receiver_id":receiver_id,"amount":amount}),
         );
@@ -217,11 +214,14 @@ impl Treasury {
             .then(
                 ext_self::ext(env::current_account_id())
                     .with_static_gas(GAS_CALLBACK)
-                    .on_retained_withdraw_result(token_contract, withdrawal_id),
+                    .on_retained_withdraw_result(
+                        self.company_id.clone(),
+                        token_contract,
+                        withdrawal_id,
+                    ),
             )
     }
 
-    #[private]
     pub fn on_retained_withdraw_result(
         &mut self,
         token_contract: AccountId,
@@ -235,7 +235,6 @@ impl Treasury {
         self.finish_retained_withdrawal(token_contract, withdrawal_id, success, None)
     }
 
-    #[payable]
     pub fn recover_retained_withdrawal(
         &mut self,
         token_contract: AccountId,
@@ -243,7 +242,6 @@ impl Treasury {
         succeeded: bool,
         receipt: String,
     ) -> Promise {
-        self.assert_owner();
         require!(
             !receipt.is_empty() && receipt.len() <= 2_000,
             "RECEIPT_REQUIRED"
@@ -261,7 +259,7 @@ impl Treasury {
     }
 }
 
-impl Treasury {
+impl CompanyTreasury {
     fn load_retained(&self, token_contract: &AccountId) -> RetainedAsset {
         require!(
             token_contract != &self.token_contract,
@@ -280,14 +278,14 @@ impl Treasury {
             .then(
                 ext_self::ext(env::current_account_id())
                     .with_static_gas(GAS_CALLBACK)
-                    .on_retained_balance_sync(token_contract, epoch),
+                    .on_retained_balance_sync(self.company_id.clone(), token_contract, epoch),
             )
     }
 
     pub(crate) fn retained_deposit(
         &mut self,
         token_contract: AccountId,
-        sender_id: AccountId,
+        _sender_id: AccountId,
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
@@ -296,31 +294,15 @@ impl Treasury {
         require!(amount.0 > 0, "DEPOSIT_AMOUNT_REQUIRED");
         let mut asset = self.load_retained(&token_contract);
         require!(asset.enabled, "RETAINED_DEPOSITS_DISABLED");
+        asset.balance = U128(add(asset.balance.0, amount.0));
         asset.balance_epoch = U64(asset
             .balance_epoch
             .0
             .checked_add(1)
             .expect("VERSION_OVERFLOW"));
-        let epoch = asset.balance_epoch;
-        let pending = asset.in_flight.0 != 0;
-        self.retained_assets.insert(token_contract.clone(), asset);
-        emit(
-            "retained_deposit_received",
-            json!({"token_contract":token_contract,"sender_id":sender_id,"amount":amount,"refresh_required":pending}),
-        );
-        if pending {
-            return PromiseOrValue::Value(U128(0));
-        }
-        PromiseOrValue::Promise(
-            ext_ft::ext(token_contract.clone())
-                .with_static_gas(GAS_BALANCE)
-                .ft_balance_of(env::current_account_id())
-                .then(
-                    ext_self::ext(env::current_account_id())
-                        .with_static_gas(GAS_CALLBACK)
-                        .on_retained_deposit_sync(token_contract, epoch),
-                ),
-        )
+        asset.confirmed_at_ms = U64(now_ms());
+        self.retained_assets.insert(token_contract, asset);
+        PromiseOrValue::Value(U128(0))
     }
 
     fn finish_retained_withdrawal(
@@ -358,7 +340,7 @@ impl Treasury {
             .checked_add(1)
             .expect("VERSION_OVERFLOW"));
         self.retained_assets.insert(token_contract.clone(), asset);
-        emit(
+        self.emit(
             "retained_withdrawal_result",
             json!({"token_contract":token_contract,"withdrawal_id":withdrawal_id,"succeeded":succeeded}),
         );

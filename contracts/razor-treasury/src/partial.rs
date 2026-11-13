@@ -1,7 +1,6 @@
 use super::*;
 
-#[near]
-impl Treasury {
+impl CompanyTreasury {
     pub fn report_partial_settlement(
         &mut self,
         payment_id: String,
@@ -67,7 +66,7 @@ impl Treasury {
         self.partial_receipts
             .insert(receipt.clone(), format!("{}:{}", payment_id, attempt_id));
         self.payments.insert(payment_id.clone(), payment.clone());
-        emit(
+        self.emit(
             "partial_settlement_reported",
             json!({"payment_id":payment_id,"attempt_id":attempt_id,"quote_hash":expected_quote_hash,"actual_output":actual_output,"credited_amount":credited_amount,"route_closed":true,"receipt":receipt,"reporter":env::predecessor_account_id()}),
         );

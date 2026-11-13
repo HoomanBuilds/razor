@@ -36,9 +36,10 @@ fn callback(result: PromiseResult) {
     );
 }
 
-fn setup(direct: bool) -> Treasury {
+fn setup(direct: bool) -> CompanyTreasury {
     call("owner.testnet", 0);
-    let mut treasury = Treasury::new(
+    let mut treasury = CompanyTreasury::new(
+        "company-a".into(),
         account("owner.testnet"),
         account("usdc.testnet"),
         U128(500),
@@ -81,7 +82,7 @@ fn setup(direct: bool) -> Treasury {
     treasury
 }
 
-fn approve(treasury: &mut Treasury) -> Payment {
+fn approve(treasury: &mut CompanyTreasury) -> Payment {
     let status = treasury.get_approval_status("payment".into(), None);
     treasury.approve_payment(
         "payment".into(),
@@ -90,7 +91,7 @@ fn approve(treasury: &mut Treasury) -> Payment {
     )
 }
 
-fn authorize(treasury: &mut Treasury, id: &str) -> Payment {
+fn authorize(treasury: &mut CompanyTreasury, id: &str) -> Payment {
     let status = treasury.get_approval_status("payment".into(), Some(id.into()));
     treasury.authorize_attempt(
         "payment".into(),
@@ -100,7 +101,7 @@ fn authorize(treasury: &mut Treasury, id: &str) -> Payment {
     )
 }
 
-fn prepare(treasury: &mut Treasury, id: &str, direct: bool, amount: u128) {
+fn prepare(treasury: &mut CompanyTreasury, id: &str, direct: bool, amount: u128) {
     call("agent.testnet", 0);
     treasury.create_attempt(
         "payment".into(),
@@ -128,7 +129,7 @@ fn prepare(treasury: &mut Treasury, id: &str, direct: bool, amount: u128) {
     authorize(treasury, id);
 }
 
-fn execute(treasury: &mut Treasury, id: &str) {
+fn execute(treasury: &mut CompanyTreasury, id: &str) {
     call("agent.testnet", 0);
     drop(treasury.execute_payment("payment".into(), id.into()));
 }
@@ -207,14 +208,26 @@ fn refund_reservation_uses_actual_cash_and_cumulative_fee_budget() {
     callback(PromiseResult::Successful(
         near_sdk::serde_json::to_vec(&U128(998)).unwrap(),
     ));
-    assert!(treasury.on_refund_verified("payment".into(), "attempt-1".into(), epoch));
+    assert!(treasury.on_refund_verified(
+        "payment".into(),
+        "attempt-1".into(),
+        epoch,
+        U128(treasury.balance),
+        true
+    ));
     let payment = treasury.get_payment("payment".into()).unwrap();
     assert_eq!(payment.incurred_cost, U128(2));
     assert_eq!(payment.reservation, U128(108));
     assert_eq!(payment.status, PaymentStatus::Retryable);
     assert_eq!(treasury.get_balance().balance, U128(998));
     assert_eq!(treasury.get_balance().available, U128(890));
-    assert!(!treasury.on_refund_verified("payment".into(), "attempt-1".into(), epoch));
+    assert!(!treasury.on_refund_verified(
+        "payment".into(),
+        "attempt-1".into(),
+        epoch,
+        U128(treasury.balance),
+        true
+    ));
     assert_eq!(treasury.get_balance().reserved, U128(108));
     assert_eq!(treasury.unsettled_payments, 0);
 }
@@ -470,7 +483,7 @@ fn disabled_backup_cannot_execute_after_policy_reapproval() {
     assert_eq!(treasury.get_balance().reserved, U128(110));
 }
 
-fn two_wallet_policy(treasury: &mut Treasury) {
+fn two_wallet_policy(treasury: &mut CompanyTreasury) {
     call("owner.testnet", 1);
     treasury.set_role(account("finance.testnet"), "approver".into(), true);
     treasury.set_approval_policy(
@@ -694,7 +707,7 @@ fn invalid_tier_shapes_and_changed_hash_are_rejected() {
     );
 }
 
-fn register_retained(treasury: &mut Treasury) {
+fn register_retained(treasury: &mut CompanyTreasury) {
     call("owner.testnet", 1);
     treasury.set_retained_asset(
         account("wrapped.testnet"),
@@ -709,6 +722,12 @@ fn register_retained(treasury: &mut Treasury) {
 fn ownership_recovery_waits_for_retained_withdrawal_callbacks() {
     let mut treasury = setup(false);
     register_retained(&mut treasury);
+    call("wrapped.testnet", 0);
+    drop(treasury.ft_on_transfer(
+        account("depositor.testnet"),
+        U128(500),
+        "razor:retain".into(),
+    ));
     drop(treasury.refresh_retained_balance(account("wrapped.testnet")));
     let epoch = treasury
         .get_retained_asset(account("wrapped.testnet"))
@@ -744,7 +763,7 @@ fn ownership_recovery_waits_for_retained_withdrawal_callbacks() {
 }
 
 #[test]
-fn retained_deposits_observe_actual_ft_quantity_without_crediting_payment_cash() {
+fn retained_deposits_credit_exact_transfer_without_absorbing_pooled_balance() {
     let mut treasury = setup(false);
     register_retained(&mut treasury);
     call("wrapped.testnet", 0);
@@ -762,7 +781,7 @@ fn retained_deposits_observe_actual_ft_quantity_without_crediting_payment_cash()
             .get_retained_asset(account("wrapped.testnet"))
             .unwrap()
             .balance,
-        U128(0)
+        U128(500)
     );
     callback(PromiseResult::Successful(
         near_sdk::serde_json::to_vec(&U128(450)).unwrap(),
@@ -776,7 +795,7 @@ fn retained_deposits_observe_actual_ft_quantity_without_crediting_payment_cash()
             .get_retained_asset(account("wrapped.testnet"))
             .unwrap()
             .balance,
-        U128(450)
+        U128(500)
     );
     assert_eq!(treasury.get_balance().balance, U128(1_000));
     assert_eq!(treasury.get_balance().reserved, U128(110));
@@ -804,6 +823,12 @@ fn retained_deposits_observe_actual_ft_quantity_without_crediting_payment_cash()
 fn retained_probes_and_withdrawal_callbacks_are_versioned_and_idempotent() {
     let mut treasury = setup(false);
     register_retained(&mut treasury);
+    call("wrapped.testnet", 0);
+    drop(treasury.ft_on_transfer(
+        account("depositor.testnet"),
+        U128(500),
+        "razor:retain".into(),
+    ));
     call("reader.testnet", 0);
     drop(treasury.refresh_retained_balance(account("wrapped.testnet")));
     let older = treasury
@@ -987,7 +1012,7 @@ fn retained_assets_require_owner_identity_and_pause_but_retirement_preserves_wit
     assert_eq!(treasury.get_balance().reserved, U128(110));
 }
 
-fn partial_source() -> Treasury {
+fn partial_source() -> CompanyTreasury {
     let mut treasury = setup(false);
     prepare(&mut treasury, "attempt-1", false, 102);
     execute(&mut treasury, "attempt-1");
