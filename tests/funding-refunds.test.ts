@@ -9,6 +9,7 @@ import { refundTerms } from "../src/server/funding-refunds/policy";
 import { inspectEvmRefund, inspectSolanaRefund, verifySourceRefund, type EvmRefundReceipt } from "../src/server/funding-refunds/receipts";
 import { createFundingRefundService, listFundingRefunds } from "../src/server/funding-refunds/service";
 import { createFundingRequest, getPublicAssets, getPublicFundingRequest, reconcilePublicFunding, resumePublicQuote } from "../src/server/funding-requests/service";
+import { accountingExport } from "../src/server/reconciliation/export";
 import { fundingRefundExport } from "../src/server/funding-refunds/export";
 import type { RefundTerms } from "../src/server/funding-refunds/types";
 import type { QuoteResponse, StatusResponse, Token } from "../src/server/payments/intents";
@@ -89,6 +90,10 @@ test("attested source refund closure is audited and idempotent, preserves USDC a
   assert(csv.includes('"0.00099"'));
   assert(csv.includes('"funder_or_reporter_attestation"'));
   assert(csv.includes('"1000"'));
+  const completeExport = accountingExport({ ...access, permissions: [...access.permissions, "reports:read"] });
+  assert(completeExport.includes('"source_funding_refund"'));
+  assert(completeExport.includes('"refunded_source_base_units"'));
+  assert(completeExport.includes('"funder_or_reporter_attestation"'));
   assert.throws(() => listFundingRefunds({ ...access, permissions: ["company:read"] }), code("FORBIDDEN"));
   const publicResult = await reconcilePublicFunding(token, { fundingId });
   assert.equal(publicResult.funding.status, "refunded_attested");

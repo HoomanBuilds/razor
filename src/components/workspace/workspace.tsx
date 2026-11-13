@@ -38,6 +38,7 @@ import { ClientReservesPanel } from "./client-reserves";
 import { NotificationInbox } from "../notifications/inbox";
 import { ProjectReportsPanel } from "./project-reports";
 import { TreasuryRecoveryPanel } from "./treasury-recovery";
+import { FundingRefundsPanel } from "./funding-refunds";
 import { RetainedAssetsPanel } from "./retained-assets";
 import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
@@ -392,6 +393,7 @@ function CompanyWorkspace({
         <div className="grid gap-6">
           <Treasury />
           <RetainedAssetsPanel />
+          <FundingRefundsPanel />
           <ClientReservesPanel />
           <FundingRequestsPanel />
         </div>

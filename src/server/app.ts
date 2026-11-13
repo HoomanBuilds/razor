@@ -24,6 +24,7 @@ import { accountRecoveryRoutes, treasuryRecoveryRoutes } from "./account-recover
 import { retainedAssetRoutes } from "./retained-assets";
 import { clearingRoutes } from "./clearing";
 import { paymentFundingRoutes } from "./payment-funding";
+import { fundingRefundRoutes } from "./funding-refunds";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use(
@@ -98,6 +99,7 @@ app.route("/organizations/:orgId/access-recovery", treasuryRecoveryRoutes);
 app.route("/organizations/:orgId/retained-assets", retainedAssetRoutes);
 app.route("/organizations/:orgId/clearing", clearingRoutes);
 app.route("/organizations/:orgId/payment-funding", paymentFundingRoutes);
+app.route("/organizations/:orgId/funding-refunds", fundingRefundRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );

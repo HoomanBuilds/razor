@@ -37,8 +37,7 @@ function parseQuote(funding: FundingLeg): QuoteResponse {
 }
 function frozenToken(funding: FundingLeg): Token | null {
   const request = row<{ origin_token_json: string | null }>("SELECT origin_token_json FROM funding_request_quotes WHERE funding_id=?", funding.id);
-  const task = row("SELECT name FROM sqlite_master WHERE type='table' AND name='payment_funding_quotes'") && rows<{ name: string }>("PRAGMA table_info(payment_funding_quotes)").some(column => column.name === "origin_token_json")
-    ? row<{ origin_token_json: string | null }>("SELECT origin_token_json FROM payment_funding_quotes WHERE funding_id=? AND organization_id=?", funding.id, funding.organization_id) : null;
+  const task = row<{ origin_token_json: string | null }>("SELECT origin_token_json FROM payment_funding_quotes WHERE funding_id=? AND organization_id=?", funding.id, funding.organization_id);
   const text = request?.origin_token_json ?? task?.origin_token_json;
   if (!text) return null;
   try {
@@ -106,7 +105,7 @@ export function createFundingRefundService(dependencies: Dependencies = { status
       db.prepare("UPDATE funding_legs SET status=?,provider_status='REFUNDED',source_tx_hash=COALESCE(source_tx_hash,?),updated_at=? WHERE id=? AND organization_id=?").run(status, terms.sourceTransactionHash, now(), fundingId, access.organizationId);
       db.prepare("UPDATE funding_refund_reviews SET confirmed_at=? WHERE id=?").run(now(), review.id);
       db.prepare("UPDATE funding_request_quotes SET state='closed',updated_at=? WHERE funding_id=?").run(now(), fundingId);
-      if (row("SELECT name FROM sqlite_master WHERE type='table' AND name='payment_funding_quotes'")) db.prepare("UPDATE payment_funding_quotes SET state='closed',updated_at=? WHERE funding_id=? AND organization_id=?").run(now(), fundingId, access.organizationId);
+      db.prepare("UPDATE payment_funding_quotes SET state='closed',updated_at=? WHERE funding_id=? AND organization_id=?").run(now(), fundingId, access.organizationId);
       activity(access, "funding.source_refund_closed", fundingId, { provenance: observed.proof.provenance });
     });
     return { closure: closureFor(access, fundingId)!, alreadyClosed: false, companyUsdcCredited: "0" };

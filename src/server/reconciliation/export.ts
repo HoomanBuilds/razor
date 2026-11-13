@@ -10,6 +10,7 @@ import type {
 } from "../payments/types";
 import { isDirectExecution } from "./direct";
 import { clientReserveExportRows } from "../client-reserves";
+import { fundingRefundExportRows } from "../funding-refunds/export";
 import { clearingExportRows } from "../clearing/accounting";
 
 export function csvCell(value: unknown): string {
@@ -380,6 +381,7 @@ export function accountingExport(access: AccessContext): string {
       ...entry,
     });
   records.push(...clearingExportRows(access.organizationId));
+  records.push(...fundingRefundExportRows(access).map(record => ({ record_type: "source_funding_refund", ...record })));
   const headers = [
     "record_type",
     "record_id",
@@ -460,6 +462,22 @@ export function accountingExport(access: AccessContext): string {
     "planned_residual_transfer_volume_usdc",
     "residual_transfer_volume_usdc",
     "minimum_starting_liquidity_usdc",
+    "source_asset_id",
+    "source_symbol",
+    "source_network",
+    "source_decimals",
+    "refund_address",
+    "refunded_source_base_units",
+    "refunded_source_quantity",
+    "provider_reported_deposit_base_units",
+    "unclassified_source_difference_base_units",
+    "source_transaction_hash",
+    "refund_transaction_hash",
+    "refund_provenance",
+    "provider_status",
+    "company_usdc_credit",
+    "confirmed_by",
+    "confirmed_at",
   ];
   return [
     headers.map(csvCell).join(","),
