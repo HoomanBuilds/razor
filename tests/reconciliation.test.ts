@@ -8,6 +8,8 @@ import { accountingExport, csvCell } from "../src/server/reconciliation/export";
 import { executionTerms, hasProvenPrimaryFailure } from "../src/server/reconciliation/direct";
 import { assertCanStartDeposit, quoteDepositWindow, type QuoteResponse } from "../src/server/payments/intents";
 import { inspectSourceTransfer } from "../src/server/reconciliation/source";
+import { reconciliationQueue } from "../src/server/reconciliation/service";
+import { enqueueOperations, tickOperations } from "../src/server/operations/worker";
 import { parseCsv } from "../src/lib/csv";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -92,4 +94,29 @@ test("receipt replay is blocked and complete CSV exports stay scoped and spreads
   assert.ok(records.some((record) => record.payment_reference === "'+spreadsheet-command"));
   assert.equal(csvCell("\t=1+1"), '"\'\t=1+1"');
   assert.equal(csvCell("-0.5"), '"-0.5"');
+});
+
+
+test("resolved funding leaves reconciliation and existing jobs complete without a provider call", async () => {
+  const db = getDb(), created = new Date().toISOString();
+  db.prepare("INSERT INTO users(id,name,created_at) VALUES('fund-owner','Owner',?)").run(created);
+  db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES('fund-org','Funding company','fund-owner',?,?)").run(created, created);
+  db.prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES('fund-role','fund-org','Owner',?,1,?)").run(JSON.stringify(["company:read","payments:read","payments:prepare"]), created);
+  db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES('fund-org','fund-owner','fund-role',?)").run(created);
+  const insert = db.prepare("INSERT INTO funding_legs(id,organization_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,'fund-org',?,'asset','1','1','{}','deposit.near','treasury.near',?,?,?)");
+  for (const status of ["confirmed", "refunded_verified", "closed_unsent", "cancelled", "recovery_pending", "refunded"]) insert.run(`status-${status}`, status, status, created, created);
+  const access = { userId: "fund-owner", organizationId: "fund-org", permissions: ["payments:read"] };
+  const review = reconciliationQueue(access);
+  assert.deepEqual(review.funding.map(item => item.funding.status).sort(), ["recovery_pending", "refunded"]);
+  assert.equal(review.totals.funding, 2);
+  enqueueOperations("fund-org");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM operation_jobs WHERE organization_id='fund-org' AND kind='reconcile_funding'").get()!.n, 2);
+  db.prepare("DELETE FROM operation_jobs WHERE organization_id='fund-org'").run();
+  db.prepare("INSERT INTO operation_jobs(id,organization_id,job_key,kind,entity_id,run_at,created_at,updated_at) VALUES('old-confirmed-job','fund-org','old-confirmed','reconcile_funding','status-confirmed',?,?,?)").run(created, created, created);
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("Closed funding must not poll a provider"); };
+  try {
+    await tickOperations({ organizationId: "fund-org", maxJobs: 1 });
+    assert.equal(db.prepare("SELECT status FROM operation_jobs WHERE id='old-confirmed-job'").get()!.status, "completed");
+  } finally { globalThis.fetch = original; }
 });
