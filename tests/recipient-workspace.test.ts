@@ -4,9 +4,10 @@ import { Hono } from "hono";
 import { ApiError, type AccessContext, type AppEnv } from "../src/server/context";
 import { getDb, row } from "../src/server/db";
 import { encrypt, hashToken } from "../src/server/identity/crypto";
+import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { getAccess } from "../src/server/identity/session";
 import { recipientWorkspaceRoutes } from "../src/server/recipient-workspace";
-import { ownPayments, ownProfiles, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
+import { ownPayments, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
 
 process.env.DATABASE_PATH=":memory:";
 process.env.DATA_ENCRYPTION_KEY="73".repeat(32);
@@ -48,4 +49,39 @@ test("private invoice requests are idempotent and create only explicit human-rev
   assert.equal(row<{count:number}>("SELECT count(*) AS count FROM bills")!.count,1);
   assert.throws(()=>prepareInvoiceRequest(access,submitted.id,{...review,agreedUSDC:"111"}),(error)=>error instanceof ApiError&&error.code==="INVOICE_REVIEW_CONFLICT");
   assert.throws(()=>submitInvoice(user,{...input,amount:"101",lineItems:[{...input.lineItems[0],unitPrice:"101"}]}),(error)=>error instanceof ApiError&&error.code==="INVOICE_REFERENCE_CONFLICT");
+});
+
+test("recipient reassignment preserves original private history without exposing it to the new owner",()=>{
+  const id="reassigned-profile";
+  db.prepare("INSERT INTO recipients (id,organization_id,user_id,name,email,kind,primary_asset,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id,org,user,encrypt("Original supplier"),encrypt("original@example.test"),"contractor","USDC","near","original.near","confirmed",now,now,now);
+  saveVersion(getRecipient(org,id),user);
+  const input={recipientId:id,reference:"REASSIGNED-OLD-INVOICE",amount:"20",currency:"USDC",lineItems:[{description:"Original private services",quantity:"1",unitPrice:"20"}]};
+  const submitted=submitInvoice(user,input);
+  function payment(paymentId:string,version:number) {
+    db.prepare("INSERT INTO payments (id,organization_id,recipient_id,kind,reference,amount,max_fee,status,recipient_version,recipient_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(paymentId,org,id,"contractor",paymentId,"20000000","0","draft",version,"{}",now,now);
+  }
+  payment("original-owner-payment",1);
+  db.prepare("UPDATE recipients SET user_id=NULL,name=?,email=?,primary_address='unconfirmed.near',preference_status='pending_confirmation',confirmed_at=NULL,version=2 WHERE id=?").run(encrypt("New supplier"),encrypt("new@example.test"),id);
+  saveVersion(getRecipient(org,id),finance);
+  payment("unclaimed-profile-payment",2);
+  db.prepare("UPDATE recipients SET user_id=?,primary_address='new-owner.near',preference_status='confirmed',confirmed_at=?,version=3 WHERE id=?").run(other,now,id);
+  saveVersion(getRecipient(org,id),other);
+  payment("new-owner-payment",3);
+  assert.ok(ownPayments(user).some(record=>record.id==="original-owner-payment"));
+  assert.ok(!ownPayments(user).some(record=>record.id==="new-owner-payment"));
+  assert.ok(!ownPayments(other).some(record=>record.id==="original-owner-payment"));
+  assert.ok(ownPayments(other).some(record=>record.id==="new-owner-payment"));
+  assert.ok(!ownPayments(other).some(record=>record.id==="unclaimed-profile-payment"));
+  assert.deepEqual(ownPayments(user,id).map(record=>record.id),["original-owner-payment"]);
+  const historical=ownProfiles(user).find(profile=>profile.recipient.id===id)!;
+  assert.equal(historical.historicalOnly,true);
+  assert.equal(historical.recipient.name,"Original supplier");
+  assert.equal(historical.recipient.email,"original@example.test");
+  assert.equal(historical.recipient.primary_address,"original.near");
+  assert.equal(ownProfiles(other).find(profile=>profile.recipient.id===id)!.historicalOnly,false);
+  assert.throws(()=>ownRecipient(user,id),(error)=>error instanceof ApiError&&error.code==="RECIPIENT_NOT_FOUND");
+  assert.ok(ownRequests(user).some(record=>record.id===submitted.id));
+  assert.ok(!ownRequests(other).some(record=>record.id===submitted.id));
+  assert.throws(()=>submitInvoice(other,input),(error)=>error instanceof ApiError&&error.code==="INVOICE_REFERENCE_CONFLICT");
+  assert.throws(()=>prepareInvoiceRequest(access,submitted.id,{sourceFingerprint:submitted.sourceFingerprint,agreedUSDC:"20",maxFee:"1",reviewConfirmed:true}),(error)=>error instanceof ApiError&&error.code==="INVOICE_RECIPIENT_CHANGED");
 });

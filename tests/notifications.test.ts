@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getDb, row } from "../src/server/db";
 import { dispatchNotifications, listRecipientNotices, readRecipientNotice, saveNotificationPreferences } from "../src/server/notifications/service";
+import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { createPayment } from "../src/server/payments/service";
 import type { AccessContext } from "../src/server/context";
 
@@ -71,4 +72,23 @@ test("email notifications require verified opt-in, redact financial details and 
     if (priorKey === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = priorKey;
     if (priorFrom === undefined) delete process.env.NOTIFICATION_FROM_EMAIL; else process.env.NOTIFICATION_FROM_EMAIL = priorFrom;
   }
+});
+
+test("historical payment notices stay with their confirmed recipient after profile reassignment",()=>{
+  const {access,receiver,recipientId}=fixture(),db=getDb(),other=randomUUID(),now=new Date().toISOString();
+  saveVersion(getRecipient(access.organizationId,recipientId),receiver);
+  const original=createPayment(access,{recipientId,reference:"Original owner",amount:"1000000"});
+  db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(other,"Replacement recipient",now);
+  db.prepare("UPDATE recipients SET user_id=?,primary_address='replacement.near',version=2,updated_at=? WHERE id=?").run(other,now,recipientId);
+  saveVersion(getRecipient(access.organizationId,recipientId),other);
+  db.prepare("UPDATE payments SET status='held',updated_at=? WHERE id=?").run(now,original.id);
+  const replacement=createPayment(access,{recipientId,reference:"Replacement owner",amount:"2000000"});
+  db.prepare("UPDATE payments SET status='unknown',updated_at=? WHERE id=?").run(now,replacement.id);
+  const notices=listRecipientNotices(receiver) as {id:string;entity_id:string}[];
+  const old=notices.find(notice=>notice.entity_id===original.id)!;
+  assert.ok(old);
+  assert.ok(!notices.some(notice=>notice.entity_id===replacement.id));
+  assert.ok(!(listRecipientNotices(other) as {entity_id:string}[]).some(notice=>notice.entity_id===original.id));
+  assert.throws(()=>readRecipientNotice(other,old.id),/not found/);
+  assert.deepEqual(readRecipientNotice(receiver,old.id),{read:true});
 });
