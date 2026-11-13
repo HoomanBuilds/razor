@@ -14,6 +14,7 @@ import { DestinationError, normalizeDestination } from "../../lib/recipient-dest
 import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
+import { buildPaymentSummary } from "./summary";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -41,9 +42,24 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
   return item;
 }
 
-export function listPayments(access: AccessContext): Payment[] {
+export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
   requirePermission(access, "payments:read");
-  return rows<Payment>("SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC LIMIT 500", access.organizationId);
+  const query = "SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC,p.id DESC";
+  return page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
+}
+
+export function paymentPage(access: AccessContext, page: number, pageSize: number) {
+  requirePermission(access, "payments:read");
+  if (!Number.isSafeInteger(page) || page < 1 || page > 100000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new ApiError(422, "Choose a valid payment page and page size", "INVALID_INPUT");
+  return transaction(() => {
+    const total = row<{ total: number }>("SELECT COUNT(*) AS total FROM payments WHERE organization_id=?", access.organizationId)!.total;
+    return { payments: listPayments(access, { page, pageSize }), page, pageSize, total, hasMore: page * pageSize < total };
+  });
+}
+
+export function paymentSummary(access: AccessContext) {
+  requirePermission(access, "payments:read");
+  return transaction(() => buildPaymentSummary(access.organizationId, getTreasury(access)));
 }
 
 export function listLedger(access: AccessContext) {
@@ -196,23 +212,27 @@ export function reserveApprovedPayment(access: AccessContext, paymentId: string)
   return applyApprovalReservation(access, paymentId, true);
 }
 
+export function assertPaymentLiabilityApproved(access: AccessContext, payment: Payment) {
+  const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string; partialOf?: string };
+  if (metadata.billId) {
+    const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, payment.id);
+    if (!bill || bill.status !== "approved") throw new ApiError(409, "Approve the underlying invoice before approving its payment", "BILL_APPROVAL_REQUIRED");
+  }
+  if (metadata.runId) {
+    const run = row<{ status: string; approved_by: string | null }>("SELECT r.status,r.approved_by FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=?", metadata.runId, access.organizationId, payment.id, payment.recipient_id);
+    const parent = metadata.partialOf && row("SELECT payment_id FROM partial_settlements WHERE payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
+    const remainder = metadata.partialOf && row<{ remainder_payment_id: string }>("SELECT remainder_payment_id FROM partial_remainders WHERE original_payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
+    const individualRemainder = !!run?.approved_by && !!parent && !!remainder && liabilityPayments(access.organizationId, remainder.remainder_payment_id).some(entry => entry.id === payment.id);
+    if (!run || run.status !== "approved" && !individualRemainder) throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
+  }
+}
+
 function applyApprovalReservation(access: AccessContext, paymentId: string, existingOnly: boolean): Payment {
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
     if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
-    const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string; partialOf?: string };
-    if (metadata.billId) {
-      const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, paymentId);
-      if (!bill || bill.status !== "approved") throw new ApiError(409, "Approve the underlying invoice before approving its payment", "BILL_APPROVAL_REQUIRED");
-    }
-    if (metadata.runId) {
-      const run = row<{ status: string; approved_by: string | null }>("SELECT r.status,r.approved_by FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=?", metadata.runId, access.organizationId, payment.id, payment.recipient_id);
-      const parent = metadata.partialOf && row("SELECT payment_id FROM partial_settlements WHERE payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
-      const remainder = metadata.partialOf && row<{ remainder_payment_id: string }>("SELECT remainder_payment_id FROM partial_remainders WHERE original_payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
-      const individualRemainder = !!run?.approved_by && !!parent && !!remainder && liabilityPayments(access.organizationId, remainder.remainder_payment_id).some(entry => entry.id === payment.id);
-      if (!run || run.status !== "approved" && !individualRemainder) throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
-    }
+    assertPaymentLiabilityApproved(access, payment);
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
     if (!["draft", "approved_unfunded", "held"].includes(payment.status)) throw new ApiError(409, "This obligation cannot be approved in its current state", "PAYMENT_STATE_CHANGED");
     const recipient = row<{ version: number; preference_status: string; archived: number }>("SELECT version,preference_status,archived FROM recipients WHERE id = ? AND organization_id = ?", payment.recipient_id, access.organizationId);
