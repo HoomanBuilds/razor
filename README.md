@@ -22,7 +22,7 @@ SQLite migrations run automatically into `.data/razor.sqlite`. Use persistent lo
 
 Company treasury ownership is separate from application login. Link the NEAR owner wallet, create or connect a Razor treasury, register its native USDC token storage and refresh the confirmed balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
 
-Build the NEAR contracts with `bash contracts/build.sh`. The serialized build writes treasury, factory and clearing WASMs under `.tools/wasm/`, generates a build manifest and prints the three public code-hash pins for the corresponding `.env.example` fields. The factory embeds that exact treasury WASM. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
+Build the NEAR contracts with `bash contracts/build.sh`. The serialized build writes treasury, factory, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints four public code-hash pins for the corresponding `.env.example` fields. The factory embeds that exact treasury WASM. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
 
 Prepare an unsigned deployment plan with the account names you intend to create and fund:
 
@@ -44,6 +44,12 @@ npm run check:setup -- --remote
 ```
 
 The first command checks local configuration. The second also reads deployed NEAR code and authority. Neither sends payments, emails or private inference requests. Missing or invalid setup remains blocked; a successful configuration check does not establish a live payment or provider recovery. Use the [operator runbook](docs/operator-setup.md) for setup and live evidence requirements.
+
+## Company subscriptions
+
+Razor adds zero percentage markup to payment principal. Optional company plans fund the software. The versioned pilot offers are Free, Pro at 29 USDC/month and Business at 99 USDC/month. Default pilot mode grants bounded complimentary Pro access; enforced mode uses confirmed paid periods. Existing payments, financial records, ownership controls and recovery remain accessible. Subscription payments use a dedicated NEAR contract, require explicit wallet consent and never deduct from payroll. Renewals are manual.
+
+The [billing operator guide](docs/billing-operations.md) covers deployment, private issuer setup, versioned catalog administration, refunds and the reconciliation worker. Paid collection stays unavailable until its deployment, issuer and token configuration pass verification. Local checks are not paid revenue.
 
 ## Build and review
 

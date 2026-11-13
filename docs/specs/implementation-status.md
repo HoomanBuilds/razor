@@ -2,13 +2,15 @@
 
 The planned development slices are integrated. The full feature review fixed gaps in payroll imports, funding credit verification, original-route recovery, recurring operation recovery, historical records, private evidence access and financial reports. The subsequent open-items pass added operator preflight and atomic deployment planning, tightened private API/database protections and patched compatible wallet dependencies. Live-provider and deployment evidence remain open, along with explicitly documented upstream dependency findings.
 
-The catalog contains **90 requirements: 82 core and 8 optional**. Source coverage and verified behavior are different. The [build checklist](../build-checklist.md) currently verifies **15 of 127 checks: 14 core requirements and one additional scenario**. Its other boxes remain unchecked where complete acceptance evidence is missing. No mocked receipt establishes a live payment.
+The catalog contains **97 requirements: 89 core and 8 optional**, including seven authorized subscription requirements. Source coverage and verified behavior are different. The [build checklist](../build-checklist.md) currently verifies **15 of 134 checks: 14 core requirements and one additional scenario**. Its other boxes remain unchecked where complete acceptance evidence is missing. No mocked receipt establishes a live payment.
 
 On 13 November the user clarified that payers may fund with any supported asset and recipients may choose any supported primary payout asset. Both see optional compatibility suggestions; backup always uses native USDC on a curated supported network. Company amounts are recorded in USDC. `AUTH-03` was clarified accordingly, and its historical correction remains in the checklist.
 
-The selected [business model](business-model.md) uses optional company subscriptions with zero Razor percentage markup on payment principal. Recipient access and basic manual payments stay free of Razor platform charges. Proposed $29/$99 workspace prices require pilot validation. Subscription billing, paid-tier enforcement and Razor revenue collection are not implemented; the existing Max cost field is an execution budget. This commercial decision does not change the financial verification counts below.
+The selected [business model](business-model.md) uses optional company subscriptions with zero Razor percentage markup on payment principal. Recipient access and basic manual payments stay free of Razor platform charges. Versioned 29/99 USDC workspace offers require pilot validation. Subscription source now includes a dedicated NEAR billing contract, immutable catalog/invoices, explicit checkout, canonical receipt recovery, subscription lifecycle, shared quotas, service/worker enforcement, owner billing screens and operator controls. Default pilot access is complimentary; paid collection requires deployment and configuration. The existing Max cost field remains an execution budget. Local billing checks do not change the live financial verification counts below.
 
 ## Integrated product scope
+
+The subscription integration at `d6c630e` passed all 223 application checks, 18 focused recovery follow-up checks, six billing contract VM checks, its release WASM build and the full application typecheck/production build. Ten setup checks then passed, including final-block billing configuration, issuer isolation and artifact mismatch rejection; the final full typecheck passed again. The built app passed 17 existing HTTP workflow scenarios, six enforced-plan scenarios and nine pilot/enforced billing browser scenarios with no exceptions or automatic failed requests. Plans and invoice controls fit an actual 390 px viewport. A read-only unpaid invoice fixture verified expiry closure and submitted-hash visibility; no paid access or balance was fabricated. Operator catalog publication/retirement was exercised in an isolated local database. These results extend local source evidence, not live collection or the checklist's complete financial acceptance count.
 
 | Feature family | Integrated behavior |
 | --- | --- |
@@ -89,6 +91,8 @@ Earlier evidence files are local and ignored: `.data/razor-final-tests.log`, `.d
 - Reports distinguish actual treasury spending, client deposits, earned receipts and noncash setoff. Debt discharge does not become delivered tokens, cash income or profit.
 
 ## Remaining live and production gates
+
+Subscription collection additionally needs a fresh reviewed billing contract, registered six-decimal token storage, a dedicated matching issuer and real final checkout/renewal/refund evidence. Follow [billing operations](../billing-operations.md). No live subscription has been collected in this implementation review.
 
 1. Configure Privy and demonstrate Google/email signup, linked NEAR owner setup, return access and provider recovery. The external wallet-provider guide is implemented; successful provider recovery has not been demonstrated.
 2. Deploy fresh reviewed NEAR factory/treasury/clearing contracts and configure their IDs/code pins. The current storage layout has no legacy treasury migration. Compiling artifacts is not deployment.

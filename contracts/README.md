@@ -8,7 +8,7 @@
 ./contracts/build.sh
 ```
 
-Requires Rust 1.86 or newer and the installed `wasm32-unknown-unknown` target. Both SDK versions are pinned to 5.26.1. The script builds the treasury first, embeds that exact WASM into the factory and writes ignored artifacts to `.tools/wasm`. Builds run serially with one compiler job to limit memory. Set `CARGO_TARGET_DIR` to reuse a build cache. No binary needs to be committed.
+Requires Rust 1.86 or newer and the installed `wasm32-unknown-unknown` target. The contracts pin near-sdk to 5.26.1. The script builds the treasury first, embeds that exact WASM into the factory, builds clearing and billing, and writes ignored artifacts to `.tools/wasm`. Builds run serially with one compiler job to limit memory. Set `CARGO_TARGET_DIR` to reuse a build cache. No binary needs to be committed.
 
 For focused checks:
 
@@ -18,6 +18,8 @@ RAZOR_TREASURY_WASM="$PWD/.tools/wasm/razor_treasury.wasm" CARGO_TARGET_DIR="$PW
 ```
 
 Tests run locally with NEAR's SDK. They do not deploy or spend funds.
+
+The dedicated [billing contract](razor-billing/README.md) collects optional software subscriptions separately from company funds. Its deployment is optional in the planner until paid checkout is enabled.
 
 ## Platform setup
 

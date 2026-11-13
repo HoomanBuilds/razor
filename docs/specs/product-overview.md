@@ -24,7 +24,7 @@ The adoption hypothesis is that one approved payment workflow with reliable rece
 
 Optional company software subscriptions fund payroll automation, recurring operations, private invoice review and reconciliation. Razor charges zero percentage markup on payment principal. Recipient access and basic manual company payments remain free of Razor platform charges; actual network and routing costs remain explicit company expenses.
 
-Pro at $29 and Business at $99 per company workspace per month are working pilot prices. Billing and paid-tier enforcement are not implemented. Core financial authority, required approvals, recovery and access to existing receipts remain available regardless of subscription state. See the [business model](business-model.md) for the pricing and implementation boundaries.
+Pro at 29 USDC and Business at 99 USDC per company workspace per month are versioned pilot prices. Billing, quotas and safe paid-tier enforcement are implemented in source; live collection requires a verified dedicated NEAR billing deployment. Default pilot access remains complimentary. Core financial authority, required approvals, recovery and access to existing receipts remain available regardless of subscription state. See the [business model](business-model.md) for pricing and implementation boundaries.
 
 ## Product principles
 

@@ -1,6 +1,6 @@
 # Razor feature catalog
 
-Status: intended product behavior, not a shipped-feature list. Updated 12 November 2026.
+Status: intended product behavior, not a shipped-feature list. Updated 13 November 2026.
 
 Core features form the company payments product. Optional features can be enabled when a company needs them. Later extensions are outside the initial product definition, independent of the hackathon deadline.
 
@@ -187,6 +187,20 @@ Acceptance: two firms can offset reciprocal obligations; larger compatible cycle
 | OPS-05 | Recoverable access | Preserve company owner control and a defined recovery path for company and agent credentials |
 
 Acceptance: a service restart resumes monitoring existing attempts. Disabling a network blocks new use and requests a valid alternative; it does not silently rewrite saved addresses.
+
+## 11. Company subscription billing
+
+| ID | Feature | Required behavior |
+| --- | --- | --- |
+| SUB-01 | Versioned catalog | Store immutable plan versions with validated operator publication/retirement, frozen purchase terms and clearly labelled pilot offers |
+| SUB-02 | Exact subscription checkout | Only the actual company owner selects a verified NEAR payer and reviews the exact USDC charge, dates, receiver, network and signer before explicit wallet consent |
+| SUB-03 | Canonical collection recovery | Grant paid access only from final reviewed billing-contract state; preserve one logical invoice through retries, signed-offer refresh, duplicate/excess returns and missing callbacks |
+| SUB-04 | Subscription lifecycle | Preserve calendar-month anchors, prepaid renewals, prorated upgrades, usage identity, scheduled next-plan preferences, cancellation and stale paid-invoice refund recovery |
+| SUB-05 | Bounded commercial capacity | Enforce new batch payroll, recurring work, private AI, clearing proposals and seat capacity in services/workers; reserve shared AI attempts atomically and disclose counted failures |
+| SUB-06 | Preserved financial access | Keep existing obligations, permissions, approvals, recipient access, records, exports and fund recovery available after plan expiry or downgrade; never deduct subscription charges from payroll or client funds |
+| SUB-07 | Billing operations and evidence | Provide owner-private invoices/receipts, operator-signed original-payer refunds, reserve-aware withdrawals, durable receipt reconciliation and explicit setup/testnet/live states |
+
+Acceptance: the dedicated NEAR billing contract accepts each signed invoice once, records excess/duplicate returns and final original-payer refunds, and never grants direct authority over company funds. A plan change or temporary billing outage cannot strand an existing transfer. Pilot access and local fixtures never count as revenue. See [subscription billing](subscription-billing.md).
 
 ## Later extensions
 
