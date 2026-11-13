@@ -132,7 +132,7 @@ function Workspace() {
             {error}
           </p>
         )}
-        <SignInPanel />
+        <SignInPanel next={typeof window === "undefined" ? "/" : window.location.pathname + window.location.search} />
       </div>
     );
   if (!organization && !creating && session.recipientProfileCount)

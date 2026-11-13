@@ -7,6 +7,7 @@ import { ArrowUpRight, ShieldCheck, Wallet } from "lucide-react";
 import { useIdentity } from "./identity-provider";
 import { NewWalletSignIn } from "@/components/account/new-wallet-sign-in";
 import { walletErrorMessage, type WalletFamily } from "./wallets";
+import { localRedirect } from "@/lib/redirect-path";
 
 const SocialSignIn=dynamic(()=>import("./social-sign-in"),{ssr:false,loading:()=> <p className="text-sm text-slate-500">Loading secure sign-in...</p>});
 const WALLETS:Array<{family:WalletFamily;label:string}>=[{family:"near",label:"NEAR wallet"},{family:"evm",label:"Ethereum or EVM wallet"},{family:"solana",label:"Solana wallet"}];
@@ -23,7 +24,7 @@ export function WalletButtons({link=false,onComplete}:{link?:boolean;onComplete?
 
 export function SignInPanel({next="/",link=false}:{next?:string;link?:boolean}) {
   const {config,session,loading,error,refresh}=useIdentity(),router=useRouter();
-  const destination=next.startsWith("/")&&!next.startsWith("//")?next:"/";
+  const destination=localRedirect(next);
   useEffect(()=>{if(session&&!link)router.replace(destination);},[session,link,router,destination]);
   return <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-slate-900"><section className="w-full max-w-md space-y-7 rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"><div><a href="/" className="text-xl font-bold tracking-tight">Razor</a><h1 className="mt-7 text-2xl font-semibold">{link?"Connect your account":"Your business, moving forward"}</h1><p className="mt-2 text-sm leading-6 text-slate-500">{link?"Link a verified wallet or social sign-in to your current Razor account.":"Sign in, create your company, and manage payroll, contractors and business payments."}</p></div>{loading?<p aria-live="polite" className="text-sm text-slate-500">Loading sign-in options...</p>:<><WalletButtons link={link}/>{!link&&config?.ownerWalletSetup?<NewWalletSignIn providers={config.ownerWalletSetup.providers} network={config.nearNetwork} onComplete={refresh}/>:null}{config?.socialEnabled&&config.privyAppId?<><div className="flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200"/>or<span className="h-px flex-1 bg-slate-200"/></div><SocialSignIn appId={config.privyAppId} onComplete={refresh} link={link}/></>:<p className="text-xs text-slate-500">Google and email sign-in are not configured yet. You can continue with your wallet.</p>}</>}{error?<p role="alert" className="text-sm text-red-700">{error}</p>:null}<p className="flex items-start gap-2 border-t border-slate-100 pt-5 text-xs leading-5 text-slate-500"><ShieldCheck size={16} className="mt-0.5 shrink-0"/>Sign-in verifies your account. Payments always require the permissions and wallet approvals set by your company.</p></section></main>;
 }
