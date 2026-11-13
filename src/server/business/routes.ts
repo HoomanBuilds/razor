@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../context";
 import { requirePermission } from "../context";
-import { rows } from "../db";
+import { row, rows } from "../db";
 import { createBill, createPayrollRun, disputeBill, getPayrollRun, listBills, listPayrollRuns, report } from "./service";
 import { acceptBillMilestone, addBillInstallment, getBillTerms, resolveBillDispute, setBillTerms } from "./bill-terms";
 import { approveBillBatch, approveReviewedPayrollRun } from "../payment-management/service";
@@ -26,4 +26,10 @@ businessRoutes.post("/payroll", async (c) => c.json({ run: createPayrollRun(c.ge
 businessRoutes.get("/payroll/:id", (c) => c.json({ run: getPayrollRun(c.get("access"), c.req.param("id")) }));
 businessRoutes.post("/payroll/:id/approve", async (c) => c.json({ run: approveReviewedPayrollRun(c.get("access"), c.req.param("id"), z.object({ reviewToken: z.string().regex(/^[a-f0-9]{64}$/) }).parse(await c.req.json()).reviewToken) }));
 businessRoutes.get("/reports/export", (c) => { c.header("Content-Type", "text/csv; charset=utf-8"); c.header("Content-Disposition", 'attachment; filename="razor-payments.csv"'); return c.body(report(c.get("access"))); });
-businessRoutes.get("/activity", (c) => { const access = c.get("access"); requirePermission(access, "company:read"); return c.json({ activity: rows("SELECT * FROM activity WHERE organization_id = ? ORDER BY created_at DESC LIMIT 200", access.organizationId) }); });
+businessRoutes.get("/activity",c=>{
+  const access=c.get("access");requirePermission(access,"reports:read");
+  const page=z.object({page:z.coerce.number().int().min(1).max(100000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(50)}).parse(c.req.query());
+  const total=row<{total:number}>("SELECT COUNT(*) AS total FROM activity WHERE organization_id=?",access.organizationId)!.total;
+  const activity=rows("SELECT * FROM activity WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",access.organizationId,page.pageSize,(page.page-1)*page.pageSize);
+  return c.json({activity,...page,total,hasMore:page.page*page.pageSize<total});
+});

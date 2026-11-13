@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { getDb, transaction } from "../src/server/db";
 import { encrypt } from "../src/server/identity/crypto";
 import { getRecipient, saveVersion } from "../src/server/identity/recipients";
-import { ownPayment, ownPaymentPage, ownRequestPage } from "../src/server/recipient-workspace/service";
+import { companyRequestPage, ownPayment, ownPaymentPage, ownRequestPage } from "../src/server/recipient-workspace/service";
 
 process.env.DATABASE_PATH=":memory:";
 process.env.DATA_ENCRYPTION_KEY="36".repeat(32);
@@ -42,6 +42,10 @@ test("invoice request pages retain older submissions without admitting another s
   assert.equal(ownRequestPage(f.user,1,50).total,251);
   assert.equal(ownRequestPage(f.user,6,50).requests.length,1);
   assert.equal(ownRequestPage(f.other,1,50).total,0);
+  const access={userId:f.user,organizationId:f.org,permissions:["payments:read"]};
+  assert.equal(companyRequestPage(access,6,50).requests.length,1);
+  assert.equal(companyRequestPage(access,1,50).total,251);
+  assert.throws(()=>companyRequestPage({...access,permissions:["company:read"]},1,50),/permission/);
 });
 
 test("terminal partial receipts preserve attested output and decimals independently of provider reports",()=>{

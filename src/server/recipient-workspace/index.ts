@@ -6,7 +6,7 @@ import { requireOrganization, requireUser } from "../identity";
 import { getRecipient, PreferenceInput, saveVersion, validateProfile } from "../identity/recipients";
 import { audit } from "../identity/session";
 import { BACKUP_NETWORKS } from "../payments/policy";
-import { companyRequests, invoiceInput, ownPayment, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
+import { companyRequestPage, invoiceInput, ownPayment, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
 
 export const recipientWorkspaceRoutes=new Hono<AppEnv>();
 recipientWorkspaceRoutes.use("*",requireUser);
@@ -51,5 +51,5 @@ recipientWorkspaceRoutes.post("/invoices",async c=>c.json({request:submitInvoice
 
 export const companyInvoiceIntakeRoutes=new Hono<AppEnv>();
 companyInvoiceIntakeRoutes.use("*",requireUser);
-companyInvoiceIntakeRoutes.get("/",requireOrganization("payments:read"),c=>c.json({requests:companyRequests(c.get("access"))}));
+companyInvoiceIntakeRoutes.get("/",requireOrganization("payments:read"),c=>{const page=Page.parse(c.req.query());return c.json(companyRequestPage(c.get("access"),page.page,page.pageSize));});
 companyInvoiceIntakeRoutes.post("/:id/prepare",requireOrganization("payments:prepare"),async c=>c.json(prepareInvoiceRequest(c.get("access"),c.req.param("id"),reviewInput.parse(await c.req.json()))));
