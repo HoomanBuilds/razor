@@ -28,6 +28,12 @@ import { fundingRefundRoutes } from "./funding-refunds";
 import { partialSettlementRoutes } from "./partial-settlement";
 
 export const app = new Hono<AppEnv>().basePath("/api");
+app.use("*", async (c, next) => {
+  c.header("Cache-Control", "private, no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("X-Content-Type-Options", "nosniff");
+  await next();
+});
 app.use(
   "*",
   bodyLimit({
