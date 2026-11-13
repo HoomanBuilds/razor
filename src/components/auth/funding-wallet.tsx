@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPublicClient, createWalletClient, custom, decodeFunctionResult, encodeFunctionData, erc20Abi, formatUnits, getAddress, http, isAddress, type Chain, type EIP1193Provider } from "viem";
 import { mainnet, base, arbitrum, polygon, optimism, bsc, avalanche, gnosis, aurora, berachain, monad, plasma, scroll, linea, mantle, blast, celo, zkSync, abstract } from "viem/chains";
 import { Copy, ExternalLink, Wallet } from "lucide-react";
@@ -11,6 +11,7 @@ export interface FundingWalletActionProps {
   token:{assetId:string;symbol:string;blockchain:string;decimals:number;contractAddress?:string|null};
   onSubmitted:(txHash:string)=>Promise<void>;
   beforeSend?:()=>Promise<void>;
+  depositAllowed?:boolean;
   onBroadcast?:(txHash:string)=>Promise<void>;
 }
 
@@ -169,7 +170,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   useEffect(()=>{if(funding.source_tx_hash)setHash(funding.source_tx_hash);},[funding.source_tx_hash]);
   let invalid:string|null=null,quote:BoundQuote|null=null;
   try {quote=validateFundingQuote(funding,token);} catch(error){invalid=walletErrorMessage(error);}
-  const supported=Boolean(EVM_CHAINS[token.blockchain] || token.blockchain==="near" || token.blockchain==="sol"),pending=phase==="signing"||phase==="confirming",canSend=supported&&!invalid&&!hash&&!pending&&!funding.deposit_memo;
+  const supported=Boolean(EVM_CHAINS[token.blockchain] || token.blockchain==="near" || token.blockchain==="sol"),pending=phase==="signing"||phase==="confirming",canSend=props.depositAllowed!==false&&supported&&!invalid&&!hash&&!pending&&!funding.deposit_memo;
   const amount=/^\d+$/.test(funding.amount_in)&&token.decimals>=0&&token.decimals<=38?formatUnits(BigInt(funding.amount_in),token.decimals):"Unavailable";
   async function send() {
     if(busy.current || !canSend || !quote)return;
@@ -188,6 +189,26 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
     } finally {busy.current=false;}
   }
   async function check() {if(!hash||busy.current)return;busy.current=true;setPhase("confirming");setError(null);try{await onSubmitted(hash);}catch(error){setError(walletErrorMessage(error));}finally{busy.current=false;setPhase("idle");}}
+  async function trackManual(event:FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if(busy.current)return;
+    const value=String(new FormData(event.currentTarget).get("sourceHash")||"").trim();
+    if(!/^[A-Za-z0-9:_-]{8,160}$/.test(value)){setError("Enter the exact source transaction hash from your wallet or exchange.");return;}
+    busy.current=true;setError(null);setHash(value);setPhase("confirming");
+    try{sessionStorage.setItem(storageKey(funding.id),value);}catch{}
+    try{await onSubmitted(value);}catch(error){setError(walletErrorMessage(error));}finally{busy.current=false;setPhase("idle");}
+  }
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
-  return <section className="space-y-4 rounded-lg border border-border bg-card p-4"><div><p className="text-sm font-semibold">Fund from your wallet</p><p className="mt-1 text-xs text-muted-foreground">Send exactly {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div><dl className="grid gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Deposit address</dt><dd className="mt-1 flex items-start gap-2"><code className="break-all">{funding.deposit_address}</code><button type="button" aria-label="Copy deposit address" className="shrink-0 p-1" onClick={async()=>{try{await navigator.clipboard.writeText(funding.deposit_address);setCopied(true);}catch{setError("Copy the deposit address manually from the instructions.");}}}><Copy size={14}/></button>{copied?<span className="text-xs">Copied</span>:null}</dd></div>{funding.deposit_memo?<div><dt className="text-xs text-muted-foreground">Required deposit memo</dt><dd><code className="break-all">{funding.deposit_memo}</code></dd></div>:null}</dl>{invalid&&!hash?<p role="alert" className="text-sm text-destructive">{invalid}</p>:null}{!supported||funding.deposit_memo?<p className="text-xs leading-5 text-muted-foreground">Use a wallet or exchange that supports {token.symbol} on {token.blockchain}. Send the exact amount to this deposit address{funding.deposit_memo?" and include the required memo":""} before the quote expires. Razor will check the deposit through NEAR Intents.</p>:null}{!hash?<button type="button" disabled={!canSend} onClick={()=>void send()} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"><Wallet size={16}/>{phase==="signing"?"Confirm source transfer...":phase==="confirming"?"Waiting for source confirmation...":`Send ${amount} ${token.symbol}`}</button>:<div className="space-y-2"><p role="status" className="text-sm">{phase==="confirming"?"Waiting for source confirmation...":phase==="confirmed"?"Source transfer confirmed. Checking the NEAR deposit.":"Source transaction recorded. Check the deposit status."}</p><div className="flex flex-wrap items-center gap-3">{txUrl?<a href={txUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm underline">View source transaction <ExternalLink size={13}/></a>:<code className="break-all text-xs">{hash}</code>}<button type="button" disabled={pending} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50" onClick={()=>void check()}>Check deposit status</button></div></div>}{error?<p role="alert" className="text-sm text-destructive">{error}</p>:null}<p className="text-xs text-muted-foreground">A source transfer confirms funding was sent. Payment delivery is shown after NEAR Intents and treasury reconciliation.</p></section>;
+  const tracking=props.depositAllowed===false||!!hash;
+  return <section className="space-y-4 rounded-lg border border-border bg-card p-4">
+    <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
+    {props.depositAllowed===false&&<p role="status" className="text-sm">New deposits are blocked for this saved quote. Check wallet activity and track any submitted source transfer below.</p>}
+    <dl className="grid gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Original deposit address</dt><dd className="mt-1 flex items-start gap-2"><code className="break-all">{funding.deposit_address}</code><button type="button" aria-label="Copy deposit address" className="shrink-0 p-1" onClick={async()=>{try{await navigator.clipboard.writeText(funding.deposit_address);setCopied(true);}catch{setError("Copy the deposit address manually from the instructions.");}}}><Copy size={14}/></button>{copied?<span className="text-xs">Copied</span>:null}</dd></div>{funding.deposit_memo?<div><dt className="text-xs text-muted-foreground">Required deposit memo</dt><dd><code className="break-all">{funding.deposit_memo}</code></dd></div>:null}</dl>
+    {invalid&&!hash&&props.depositAllowed!==false?<p role="alert" className="text-sm text-destructive">{invalid}</p>:null}
+    {props.depositAllowed!==false&&(!supported||funding.deposit_memo)?<p className="text-xs leading-5 text-muted-foreground">Use a wallet or exchange that supports {token.symbol} on {token.blockchain}. Send the exact amount to this deposit address{funding.deposit_memo?" and include the required memo":""} before the quote expires. Then record its source transaction hash below. A manual transfer is not automatically detected by your browser.</p>:null}
+    {!hash&&supported&&!funding.deposit_memo&&props.depositAllowed!==false?<button type="button" disabled={!canSend} onClick={()=>void send()} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"><Wallet size={16}/>{phase==="signing"?"Confirm source transfer...":phase==="confirming"?"Waiting for source confirmation...":`Send ${amount} ${token.symbol}`}</button>:null}
+    {hash&&<div className="space-y-2"><p role="status" className="text-sm">{phase==="confirming"?"Checking the recorded source transfer...":phase==="confirmed"?"Source transfer confirmed. Checking the NEAR deposit.":"Source transaction recorded. Check the deposit status."}</p><div className="flex flex-wrap items-center gap-3">{txUrl?<a href={txUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm underline">View source transaction <ExternalLink size={13}/></a>:<code className="break-all text-xs">{hash}</code>}<button type="button" disabled={pending} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50" onClick={()=>void check()}>Check deposit status</button></div></div>}
+    {!hash&&["pending_deposit","source_unknown","unknown","processing","recovery_pending","reported_delivered","closed_unsent","cancelled"].includes(funding.status)&&<form className="grid gap-3 border-t pt-4" onSubmit={event=>void trackManual(event)}><label className="grid gap-2 text-sm"><span>Already sent from a wallet or exchange?</span><input name="sourceHash" required maxLength={160} className="min-h-10 w-full rounded-md border bg-card px-3 py-2 text-sm" placeholder="Paste the source transaction hash"/></label><button type="submit" disabled={pending} className="justify-self-start rounded-lg border px-3 py-2 text-sm disabled:opacity-50">Track existing transfer</button><p className="text-xs text-muted-foreground">Recording a hash does not prove payment or company credit. Do not send another deposit while the original is being checked.</p></form>}
+    {error?<p role="alert" className="text-sm text-destructive">{error}</p>:null}<p className="text-xs text-muted-foreground">Source confirmation and NEAR treasury credit are checked separately. Recipient delivery appears after payout reconciliation.</p>
+  </section>;
 }
