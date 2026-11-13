@@ -4,7 +4,7 @@ import { after, test } from "node:test";
 import { getDb } from "../src/server/db";
 import type { AccessContext } from "../src/server/context";
 import { PERMISSIONS } from "../src/server/identity/session";
-import { createPayment, cancelPayment, getPayment, revalidatePaymentRecipient, approvePayment } from "../src/server/payments/service";
+import { createPayment, cancelPayment, getPayment, revalidatePaymentRecipient, approvePayment, assertPaymentLiabilityApproved } from "../src/server/payments/service";
 import { createBill } from "../src/server/business/service";
 import { NATIVE_USDC } from "../src/server/payments/policy";
 import { encrypt } from "../src/server/identity/crypto";
@@ -68,6 +68,8 @@ test("replacement and legacy descendant approval cannot reassign an earlier owne
   db.prepare("INSERT INTO payment_replacements(old_payment_id,new_payment_id,organization_id,liability_kind,liability_id,reason_ciphertext,created_by,created_at) VALUES(?,?,?,'payment',?,?,?,?)").run(old.id, legacy.id, f.access.organizationId, old.id, encrypt("Legacy replacement"), f.access.userId, f.savedAt);
   assert.throws(() => approvePayment(f.access, legacy.id), /different person/);
   assert.equal(getPayment(f.access, legacy.id).approved_at, null);
+  db.prepare("UPDATE payments SET approved_at=?,approved_by=?,status='approved_unfunded' WHERE id=?").run(f.savedAt, f.access.userId, legacy.id);
+  assert.throws(() => assertPaymentLiabilityApproved(f.access, getPayment(f.access, legacy.id)), /different person/);
 });
 
 test("new installments retain the beneficiary of the existing invoice debt", () => {

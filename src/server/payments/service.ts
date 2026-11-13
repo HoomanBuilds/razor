@@ -218,6 +218,7 @@ export function reserveApprovedPayment(access: AccessContext, paymentId: string)
 }
 
 export function assertPaymentLiabilityApproved(access: AccessContext, payment: Payment) {
+  assertSameRecipientOwner(access.organizationId, payment);
   const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string; partialOf?: string };
   if (metadata.billId) {
     const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, payment.id);
@@ -236,7 +237,6 @@ function applyApprovalReservation(access: AccessContext, paymentId: string, exis
   assertRunning(access);
   return transaction(() => {
     const payment = getPayment(access, paymentId);
-    assertSameRecipientOwner(access.organizationId, payment);
     if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
     assertPaymentLiabilityApproved(access, payment);
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
