@@ -26,6 +26,20 @@ The browser check covered the overview, payroll review, client earmark panel and
 
 ## Implemented areas and remaining gates
 
+The product is not feature-complete. Missing implementation and missing live evidence are separate issues; configuring credentials will not close all remaining requirements.
+
+| Known implementation gap | Affected requirements | Current behavior |
+| --- | --- | --- |
+| Integrated social-user NEAR signer setup and recovery | `WAL-04`, `AUTH-09`, `OPS-05` | Social authentication is wired, but treasury creation still requires a separately linked NEAR owner wallet. A complete account and signer recovery journey has not been implemented and demonstrated |
+| Amount-dependent approval requirements | `ORG-03` | Financial roles, per-payment limits, daily limits and fee ceilings exist. The contract accepts one authorized approver; configurable thresholds and differing approver requirements are absent |
+| Complete receiving metadata and network validation | `REC-03`, `REC-05` | Recipient snapshots store token, network and address, without destination memo/tag fields. Address checks cover the integrated NEAR, EVM and Solana families rather than every network in the live catalog. Source deposit memo handling does not fill this destination gap |
+| Route exceptions in batch approval previews | `PAY-03` | Reviews show entitlement, profile versions, consent, fee ceilings and cash coverage. Live asset/route availability is checked later at execution, rather than shown for each recipient in the payroll preview |
+| Recipient change and payment notifications | `REC-06`, `ROUTE-09`, `OPS-04` | Recipient changes are versioned and operations have company-scoped in-app notices. Recipient-change, delivery and backup notifications are not fully connected; email invitations are explicitly copy-link only |
+| Bill project and cost-center references | `BILL-05` | Due dates, batch approval and invoice references exist. Structured project and cost-center attribution is absent |
+| Optional netting and retained-asset views | `NET-01` through `NET-06`, `TRE-08`, `DATA-08` | No business clearing-round workflow, original-asset treasury holding view or project profitability view is implemented. Client cash earmarks are implemented and do not substitute for these optional features |
+
+Separate live gates remain for deployed NEAR contracts, confirmed funding and payout, backup/refund recovery, scheduled restricted-key execution, configured Privy login and successfully verified NEAR AI inference. The 50 application checks, compiled contracts and local browser workflow do not establish those live journeys. This is a targeted source comparison, not an exhaustive security audit or an implementation percentage.
+
 | Area | Present in the reviewed source | Still needed before the full requirements can be checked |
 | --- | --- | --- |
 | Identity and company access | Signed wallet challenges, sessions, verified social-token handling, company creation, role permissions, invitations, company scoping and wallet links | Real configured social login, NEAR signing, return access, recovery, invitation lifecycle and full role/privacy matrix. `AUTH-01`, `AUTH-05` through `AUTH-10`, `WAL-01` through `WAL-08`, `ORG-01` through `ORG-05` remain open |
