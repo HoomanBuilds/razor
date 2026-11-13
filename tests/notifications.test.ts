@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getDb, row } from "../src/server/db";
-import { dispatchNotifications, listRecipientNotices, readRecipientNotice, saveNotificationPreferences } from "../src/server/notifications/service";
+import { dispatchNotifications, listRecipientNotices, recipientNoticeHistory, readRecipientNotice, saveNotificationPreferences } from "../src/server/notifications/service";
 import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { createPayment } from "../src/server/payments/service";
 import type { AccessContext } from "../src/server/context";
@@ -26,7 +26,8 @@ test("destination and payment notices are transactional, personal and never repo
   db.prepare("UPDATE recipients SET version=version+1,updated_at=? WHERE id=?").run(new Date().toISOString(), recipientId);
   assert.equal(listRecipientNotices(receiver).length, 1);
   assert.equal(listRecipientNotices(access.userId).length, 0);
-  const first = listRecipientNotices(receiver)[0] as { id: string };
+  const first = listRecipientNotices(receiver)[0];
+  assert.equal(first.companyName,"Company");assert.equal(first.organization_id,access.organizationId);assert.equal(first.recipient_id,recipientId);assert.equal(first.entity_id,recipientId);
   assert.throws(() => readRecipientNotice(access.userId, first.id), /not found/);
   assert.deepEqual(readRecipientNotice(receiver, first.id), { read: true });
   const payment = createPayment(access, { recipientId, reference: "Notice fixture", amount: "1000000" });
@@ -91,4 +92,19 @@ test("historical payment notices stay with their confirmed recipient after profi
   assert.ok(!(listRecipientNotices(other) as {entity_id:string}[]).some(notice=>notice.entity_id===original.id));
   assert.throws(()=>readRecipientNotice(other,old.id),/not found/);
   assert.deepEqual(readRecipientNotice(receiver,old.id),{read:true});
+});
+
+test("personal notice pages reveal older unread events only after ownership filtering",()=>{
+  const {access,receiver,recipientId}=fixture(),db=getDb(),now=Date.now(),prefix=randomUUID();
+  const insert=db.prepare("INSERT INTO recipient_notices(id,organization_id,user_id,recipient_id,entity_id,event_key,title,body,read_at,created_at) VALUES(?,?,?,?,?,?,'Account update',?,?,?)");
+  for(let index=0;index<130;index++)insert.run(`${prefix}-${index}`,access.organizationId,receiver,recipientId,recipientId,`${prefix}-${index}`,"Your profile changed",index<100?new Date(now).toISOString():null,new Date(now-index*1000).toISOString());
+  const otherProfile=randomUUID(),payment=randomUUID(),created=new Date(now).toISOString();
+  db.prepare("INSERT INTO recipients(id,organization_id,user_id,name,kind,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,?,'Other recipient','employee','near','other.near','confirmed',?,?,?)").run(otherProfile,access.organizationId,access.userId,created,created,created);
+  db.prepare("INSERT INTO payments(id,organization_id,recipient_id,kind,reference,amount,max_fee,status,recipient_version,recipient_snapshot,created_at,updated_at) VALUES(?,?,?,'payment','Other private payment','1','0','draft',1,'{}',?,?)").run(payment,access.organizationId,otherProfile,created,created);
+  for(let index=0;index<110;index++)insert.run(`${prefix}-wrong-${index}`,access.organizationId,receiver,otherProfile,payment,`${prefix}-wrong-${index}`,"Unrelated private event",null,created);
+  const first=recipientNoticeHistory(receiver,{filter:"unread",page:1,pageSize:25}),second=recipientNoticeHistory(receiver,{filter:"unread",page:2,pageSize:25});
+  assert.equal(first.totalAll,130);assert.equal(first.unreadCount,30);assert.equal(first.total,30);assert.equal(first.notices.length,25);assert.equal(second.notices.length,5);
+  assert.ok(first.notices.every(notice=>notice.body==="Your profile changed"));
+  assert.equal(new Set([...first.notices,...second.notices].map(notice=>notice.id)).size,30);
+  assert.equal(recipientNoticeHistory(access.userId).total,0);
 });
