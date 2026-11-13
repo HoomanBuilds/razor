@@ -11,6 +11,7 @@ import { setupPreflight } from "../src/server/setup/preflight";
 
 const hashes = { treasury: base58.encode(new Uint8Array(32).fill(1)), factory: base58.encode(new Uint8Array(32).fill(2)), clearing: base58.encode(new Uint8Array(32).fill(3)) };
 const env: NodeJS.ProcessEnv = {
+  NODE_ENV: "production",
   APP_URL: "https://razor.example", DATABASE_PATH: ".data/razor.sqlite", DATA_ENCRYPTION_KEY: "af".repeat(32),
   PRIVY_APP_ID: "app-one", NEXT_PUBLIC_PRIVY_APP_ID: "app-one", PRIVY_JWKS_URL: "https://auth.example/jwks.json", PRIVY_APP_SECRET: "private-profile-secret",
   NEAR_NETWORK: "mainnet", NEAR_FACTORY_ID: "factory.near", NEAR_CLEARING_ID: "clearing.near",
