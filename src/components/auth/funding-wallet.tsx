@@ -5,6 +5,7 @@ import { createPublicClient, createWalletClient, custom, decodeFunctionResult, e
 import { mainnet, base, arbitrum, polygon, optimism, bsc, avalanche, gnosis, aurora, berachain, monad, plasma, scroll, linea, mantle, blast, celo, zkSync, abstract } from "viem/chains";
 import { Copy, ExternalLink, Wallet } from "lucide-react";
 import { connectNearWallet, getNearConnector, walletErrorMessage } from "./wallets";
+import { AssetIdentity } from "@/components/assets/asset-identity";
 
 export interface FundingWalletActionProps {
   funding:{id:string;origin_asset:string;amount_in:string;deposit_address:string;deposit_memo:string|null;quote:string|object;status:string;source_tx_hash?:string|null};
@@ -201,7 +202,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
   const tracking=props.depositAllowed===false||!!hash;
   return <section className="space-y-4 rounded-lg border border-border bg-card p-4">
-    <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
+    <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><AssetIdentity symbol={token.symbol} network={token.blockchain} assetId={token.assetId} showAssetId className="my-3"/><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
     {props.depositAllowed===false&&<p role="status" className="text-sm">New deposits are blocked for this saved quote. Check wallet activity and track any submitted source transfer below.</p>}
     <dl className="grid gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Original deposit address</dt><dd className="mt-1 flex items-start gap-2"><code className="break-all">{funding.deposit_address}</code><button type="button" aria-label="Copy deposit address" className="shrink-0 p-1" onClick={async()=>{try{await navigator.clipboard.writeText(funding.deposit_address);setCopied(true);}catch{setError("Copy the deposit address manually from the instructions.");}}}><Copy size={14}/></button>{copied?<span className="text-xs">Copied</span>:null}</dd></div>{funding.deposit_memo?<div><dt className="text-xs text-muted-foreground">Required deposit memo</dt><dd><code className="break-all">{funding.deposit_memo}</code></dd></div>:null}</dl>
     {invalid&&!hash&&props.depositAllowed!==false?<p role="alert" className="text-sm text-destructive">{invalid}</p>:null}

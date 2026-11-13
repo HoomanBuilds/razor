@@ -3,6 +3,7 @@
 import { CheckCircle2, Circle, Wallet, Users, ReceiptText, CalendarDays } from "lucide-react";
 import { usd, dateLabel } from "@/lib/format";
 import { hasPermissions } from "@/lib/workspace-access";
+import { TokenLogo } from "@/components/assets/asset-identity";
 import { useWorkspace } from "./context";
 import { paymentLabel } from "@/lib/payment-label";
 import { useResource } from "./hooks";
@@ -51,7 +52,7 @@ export function Overview() {
   ];
   return <div className="grid gap-6">
     {(summary.error || balance.error) && <p role="alert" className="rounded-lg border p-4 text-sm text-destructive">{summary.error || balance.error} Use Refresh workspace to try again.</p>}
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(([label, value, detail]) => <div key={label} className="rounded-xl border bg-card p-5"><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">{value}</p><p className="mt-2 text-xs text-muted-foreground">{detail}</p></div>)}</div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(([label, value, detail]) => <div key={label} className="rounded-xl border bg-card p-5"><div className="flex items-center justify-between gap-3"><p className="text-xs font-medium text-muted-foreground">{label}</p><TokenLogo symbol="USDC" size={20} /></div><p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">{value}</p><p className="mt-2 text-xs text-muted-foreground">{detail}</p></div>)}</div>
     {summary.data && BigInt(summary.data.uncommittedInvoicePrincipal) > 0n && <p className="text-sm text-muted-foreground">{usd(summary.data.uncommittedInvoicePrincipal)} of invoice debt still needs future installments. It is included in outstanding liabilities and is separate from the current payment funding gap.</p>}
     {(canManage || canPrepare || canManageRecipients) && !visibleSteps.every(step => step.done) && <Panel title="Get your company ready" description="Prepare bills and payroll while treasury setup is in progress."><div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">{visibleSteps.map(step => <button key={step.title} className="rounded-lg border p-4 text-left hover:bg-muted/50" onClick={() => step.href ? window.location.assign(step.href) : navigate(step.section)}>{step.done ? <CheckCircle2 size={20} className="text-primary" /> : <Circle size={20} className="text-muted-foreground" />}<h3 className="mt-3 text-sm font-medium">{step.title}</h3><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{step.detail}</p></button>)}</div></Panel>}
     {actions.length > 0 && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{actions.map(action => <button key={action.title} className="flex items-center gap-4 rounded-xl border bg-card p-5 text-left hover:border-primary/40" onClick={() => navigate(action.section)}><action.icon size={22} className="text-primary" /><div><h3 className="text-sm font-semibold">{action.title}</h3><p className="mt-1 text-xs text-muted-foreground">{action.detail}</p></div></button>)}</div>}
