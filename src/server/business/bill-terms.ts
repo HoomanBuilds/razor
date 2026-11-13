@@ -4,6 +4,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { createPayment, getPayment, type Payment } from "../payments";
 import { activity } from "./service";
+import { liabilityPayments } from "../partial-settlement/model";
 
 interface TermsBill { id: string; recipient_id: string; amount: string; setoff_amount: string; status: string; payment_id: string | null; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
 function bill(access: AccessContext, id: string): TermsBill {
@@ -32,6 +33,15 @@ export function setBillTerms(access: AccessContext, id: string, input: { payment
     const payment = getPayment(access, current.payment_id);
     if (current.status === "disputed" || payment.status !== "draft" || payment.approved_at) throw new ApiError(409, "Only an undisputed, unapproved installment can change terms", "TERMS_LOCKED");
     const amount = positive(input.paymentAmount), maxFee = positive(input.maxFee, true);
+    if (amount !== payment.amount && liabilityPayments(access.organizationId, payment.id).some(item => item.status === "partially_paid")) throw new ApiError(409, "The partial-settlement remainder keeps its exact unpaid entitlement. Review fees separately", "PARTIAL_REMAINDER_FIXED");
+    const replacements = rows<Payment>(`WITH RECURSIVE ancestors(id) AS (
+      SELECT ? UNION SELECT r.old_payment_id FROM payment_replacements r JOIN ancestors a ON r.new_payment_id=a.id WHERE r.organization_id=?
+    ) SELECT p.* FROM payments p JOIN ancestors a ON a.id=p.id WHERE p.organization_id=? ORDER BY p.created_at,p.id`, payment.id, access.organizationId, access.organizationId);
+    if (replacements.length > 1) {
+      const original = replacements.find(item => !row("SELECT old_payment_id FROM payment_replacements WHERE new_payment_id=? AND organization_id=?", item.id, access.organizationId))!;
+      const remainingFee = BigInt(original.max_fee) - replacements.reduce((sum, item) => sum + BigInt(item.total_spent), 0n);
+      if (BigInt(maxFee) > remainingFee) throw new ApiError(409, "The replacement must keep the original routing ceiling after prior costs", "REPLACEMENT_COST_EXHAUSTED");
+    }
     if (BigInt(amount) > BigInt(current.uncommitted) + BigInt(payment.amount)) throw new ApiError(409, "The installment exceeds the remaining invoice amount", "INSTALLMENT_EXCEEDS_BALANCE");
     db.prepare("UPDATE payments SET amount=?,max_fee=?,updated_at=? WHERE id=? AND status='draft' AND approved_at IS NULL").run(amount, maxFee, new Date().toISOString(), payment.id);
     db.prepare("UPDATE bills SET requires_acceptance=?,milestone_accepted_at=NULL,milestone_accepted_by=NULL,acceptance_evidence=NULL,updated_at=? WHERE id=?").run(Number(input.requiresAcceptance), new Date().toISOString(), id);
