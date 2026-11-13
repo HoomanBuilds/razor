@@ -1,5 +1,7 @@
 use super::*;
-use near_sdk::{RuntimeFeesConfig, test_utils::VMContextBuilder, test_vm_config, testing_env};
+use near_sdk::{
+    PromiseResult, RuntimeFeesConfig, test_utils::VMContextBuilder, test_vm_config, testing_env,
+};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const NOW: u64 = 1_800_000_000_000;
@@ -115,7 +117,7 @@ fn treasury(owner: &str, version: &str) -> serde_json::Value {
 fn request(contract: &mut Clearing, id: &str, company: &str, caller: &str) -> U64 {
     testing_env!(context(caller).build());
     let hash = contract.rounds.get(id).unwrap().hash.clone();
-    contract.consent(id.into(), hash, company.into());
+    contract.consent(id.into(), hash, company.into()).detach();
     *contract
         .rounds
         .get(id)
@@ -223,9 +225,9 @@ fn finalization_rechecks_all_authorities_and_fences_callback_replays() {
     );
     consent(&mut contract, &id, "company-b", "bob.testnet");
     testing_env!(context("alice.testnet").build());
-    contract.finalize_round(id.clone(), hash.clone());
+    contract.finalize_round(id.clone(), hash.clone()).detach();
     let old = contract.rounds.get(&id).unwrap().finalize_request.unwrap();
-    contract.finalize_round(id.clone(), hash);
+    contract.finalize_round(id.clone(), hash).detach();
     let latest = contract.rounds.get(&id).unwrap().finalize_request.unwrap();
     callbacks(vec![
         treasury("alice.testnet", "1"),

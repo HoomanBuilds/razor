@@ -1,5 +1,5 @@
 use near_sdk::{
-    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseResult, env, ext_contract,
+    AccountId, Gas, NearToken, PanicOnDefault, Promise, env, ext_contract,
     json_types::{U64, U128},
     near, require, serde_json,
     store::IterableMap,
@@ -148,7 +148,7 @@ impl Clearing {
         let mut calls: Option<Promise> = None;
         for party in &manifest.participants {
             let factory = Promise::new(self.factory_id.clone()).function_call(
-                "get_creation".into(),
+                "get_creation",
                 serde_json::to_vec(&serde_json::json!({"account_id": party.treasury_id})).unwrap(),
                 NearToken::from_yoctonear(0),
                 Gas::from_tgas(4),
@@ -450,17 +450,16 @@ impl Clearing {
 }
 fn treasury_call(account: &AccountId) -> Promise {
     Promise::new(account.clone()).function_call(
-        "get_config".into(),
+        "get_config",
         b"{}".to_vec(),
         NearToken::from_yoctonear(0),
         Gas::from_tgas(4),
     )
 }
 fn result<T: near_sdk::serde::de::DeserializeOwned>(index: u64) -> Option<T> {
-    match env::promise_result(index) {
-        PromiseResult::Successful(bytes) => serde_json::from_slice(&bytes).ok(),
-        _ => None,
-    }
+    env::promise_result_checked(index, 65536)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
 fn digest(value: &str) -> String {
     env::sha256(value.as_bytes())
