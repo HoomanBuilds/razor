@@ -21,7 +21,7 @@ export function TreasuryStorage() {
   const unresolved = pending?.companyId === data.companyId && BigInt(data.storage.storage_credit) < BigInt(pending.credit);
   const manage = organization.permissions?.includes("company:manage");
   return <Panel title="Company storage allowance" description="Treasury code is deployed once. This NEAR allowance covers this company's growing onchain records and keeps them separate from spendable USDC.">
-    <p className="text-sm">Available: {formatUnits(data.storage.storage_available, 24)} NEAR. Used: {formatUnits(data.storage.storage_used, 24)} NEAR.</p>
+    <p className="text-sm">Unused: {formatUnits(data.storage.storage_available, 24)} NEAR. Used: {formatUnits(data.storage.storage_used, 24)} NEAR. Part of the unused allowance remains reserved for transfer callbacks.</p>
     {manage && <form className="mt-4 grid gap-4" onSubmit={event => { event.preventDefault(); void run("prepare", async () => { setPrepared(null); setPrepared(await api<Prepared>(`${base}/treasury-policy/storage/prepare`, { deposit: parseUnits(amount, 24) })); }); }}>
       <Field label="Add storage allowance in NEAR" hint="This funds company records, not a new contract deployment. Wallet gas is additional."><input className={control} inputMode="decimal" value={amount} disabled={!!busy || unresolved} onChange={event => { setAmount(event.target.value); setPrepared(null); }}/></Field>
       <div><Action busy={busy === "prepare"} disabled={!!busy || unresolved}>Review storage funding</Action></div>
