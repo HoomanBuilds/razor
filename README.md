@@ -22,7 +22,7 @@ SQLite migrations run automatically into `.data/razor.sqlite`. Use persistent lo
 
 Company treasury ownership is separate from application login. Link the NEAR owner wallet, create or connect a Razor treasury, register its native USDC token storage and refresh the confirmed balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
 
-Build the NEAR contracts with `bash contracts/build.sh`. The serialized build writes treasury, factory, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints four public code-hash pins for the corresponding `.env.example` fields. The factory embeds that exact treasury WASM. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
+Build the NEAR contracts with `bash contracts/build.sh`, using Binaryen `wasm-opt` version 130 alongside Rust. The guarded, serialized build optimizes treasury, factory, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints four public code-hash pins for the corresponding `.env.example` fields. The factory embeds the exact optimized treasury WASM. Use those published artifacts and hashes rather than raw Cargo output. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
 
 Prepare an unsigned deployment plan with the account names you intend to create and fund:
 
@@ -59,6 +59,6 @@ npm test
 npm run build
 ```
 
-Builds and type checks use a 1.5 GB Node heap cap, and Next.js uses one worker. A shared worktree lock serializes compilers and prevents compilation alongside a Razor development server. Compilation requires 4 GB of available memory to start and stops if available memory stays below 3 GB. Run Rust builds with one job and serialize them with application builds. Stop the development server before a production build.
+Application builds and type checks use a 1.5 GB Node heap cap, and Next.js uses one worker. A shared worktree lock serializes application and contract builds and prevents compilation alongside a Razor development server. Compilation requires 4 GB of available memory to start and stops if available memory stays below 3 GB. The contract script uses one Cargo job and one Binaryen thread. Run other Rust checks with one job and serialize them with application builds. Stop the development server before a production build.
 
 The [product specifications](docs/README.md), [build checklist](docs/build-checklist.md) and [source notices](THIRD_PARTY_NOTICES.md) describe intended behavior, verified progress and reused source. An implemented screen is not evidence of a live payment. Public deployment, provider credentials, onchain setup and real settlement verification must be completed before advertising those integrations as live.

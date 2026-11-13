@@ -92,6 +92,8 @@ Earlier evidence files are local and ignored: `.data/razor-final-tests.log`, `.d
 
 ## Remaining live and production gates
 
+The contract optimization candidate `9d49013` preserves financial features and state while reducing actual treasury/factory/clearing/billing WASMs to 385,796 / 576,814 / 252,887 / 181,483 bytes. The build now optimizes the treasury before factory embedding and stages/validates the final artifacts. Fifty actual-Wasm comparisons through the official local NEAR runtime, 41 native contract checks, seven artifact/deployment checks and the full typecheck passed. The SDK configuration limitation is documented in the optional Wasm checker. Fresh mainnet byte pricing lowers the computed three-company code/creation capital from 40.14920 to 22.14292 NEAR; no onchain deployment or transfer was performed. New optimized artifact hashes must be used when preparing deployments.
+
 Subscription collection additionally needs a fresh reviewed billing contract, registered six-decimal token storage, a dedicated matching issuer and real final checkout/renewal/refund evidence. Follow [billing operations](../billing-operations.md). No live subscription has been collected in this implementation review.
 
 1. Configure Privy and demonstrate Google/email signup, linked NEAR owner setup, return access and provider recovery. The external wallet-provider guide is implemented; successful provider recovery has not been demonstrated.
