@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { ApiError } from "../context";
-import type { TreasuryConfig } from "./types";
+import type { TreasuryConfig, WalletTransaction } from "./types";
 import { atomic } from "../../lib/money";
 
 const ACCOUNT = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
@@ -17,8 +18,44 @@ async function rpc<T>(network: "mainnet" | "testnet", method: string, params: un
   return payload.result as T;
 }
 
-export async function view<T>(config: Pick<TreasuryConfig, "near_account_id" | "network">, method: string, args: unknown = {}): Promise<T> {
-  const result = await rpc<{ result: number[] }>(config.network, "query", { request_type: "call_function", finality: "final", account_id: config.near_account_id, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
+type TreasuryTarget = Pick<TreasuryConfig, "near_account_id" | "network"> & Partial<Pick<TreasuryConfig, "organization_id" | "token_contract" | "architecture" | "company_id">>;
+
+export function deriveSharedCompanyId(organizationId: string, initialOwnerAccount: string): string {
+  if (!organizationId || organizationId.length > 96 || !validNearAccount(initialOwnerAccount)) throw new ApiError(422, "Use a valid company and verified NEAR owner", "TREASURY_COMPANY_MISMATCH");
+  return `${organizationId}:${createHash("sha256").update(initialOwnerAccount).digest("hex").slice(0, 16)}`;
+}
+
+export function isCompanyBinding(organizationId: string | undefined, companyId: string | null | undefined): boolean {
+  return !!organizationId && !!companyId && companyId.startsWith(`${organizationId}:`) && /^[a-f0-9]{16}$/.test(companyId.slice(organizationId.length + 1));
+}
+
+export function treasuryArgs(config: TreasuryTarget, args: unknown = {}): Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new ApiError(422, "Contract arguments must be an object", "CONTRACT_ARGUMENTS_INVALID");
+  const value = args as Record<string, unknown>;
+  if (config.architecture !== "shared_v1") return value;
+  if (!isCompanyBinding(config.organization_id, config.company_id)) throw new ApiError(409, "The shared treasury binding does not match this company", "TREASURY_COMPANY_MISMATCH");
+  if (value.company_id !== undefined && value.company_id !== config.company_id) throw new ApiError(409, "Contract arguments name a different company", "TREASURY_COMPANY_MISMATCH");
+  return { ...value, company_id: config.company_id };
+}
+
+function scopedArgs(config: TreasuryTarget, method: string, args: unknown) {
+  if (config.near_account_id === config.token_contract || method.startsWith("storage_") || method.startsWith("ft_") || method === "get_platform_config" || method === "quote_registration") return args;
+  return treasuryArgs(config, args);
+}
+
+export function treasuryAction(config: TreasuryConfig, methodName: string, args: unknown = {}, deposit = "0", gas = "100000000000000"): WalletTransaction {
+  return { receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName, args: scopedArgs(config, methodName, args), gas, deposit } }] };
+}
+
+export function sharedFundingMessage(config: TreasuryConfig, depositId: string, kind: "funding" | "retained" = "funding"): string {
+  if (config.architecture !== "shared_v1") return kind === "retained" ? "razor:retain" : "razor:funding";
+  if (!depositId || depositId.length > 128) throw new ApiError(422, "Use a valid funding identifier", "FUNDING_ID_INVALID");
+  const company = treasuryArgs(config).company_id;
+  return JSON.stringify({ company_id: company, deposit_id: depositId, kind });
+}
+
+export async function view<T>(config: TreasuryTarget, method: string, args: unknown = {}): Promise<T> {
+  const result = await rpc<{ result: number[] }>(config.network, "query", { request_type: "call_function", finality: "final", account_id: config.near_account_id, method_name: method, args_base64: Buffer.from(JSON.stringify(scopedArgs(config, method, args))).toString("base64") });
   try { return JSON.parse(Buffer.from(result.result).toString()) as T; } catch { throw new ApiError(502, "The NEAR contract returned invalid data", "CONTRACT_RESPONSE_INVALID"); }
 }
 
@@ -48,6 +85,22 @@ export interface TokenReceiptProof {
   events: TokenReceiptEvent[];
 }
 
+export interface SharedDepositCredit {
+  company_id: string;
+  deposit_id: string;
+  token_contract: string;
+  sender_id: string;
+  amount: string;
+  kind: "funding" | "retained";
+  credited_at_ms: string;
+}
+
+export function tokenReceiptIdentity(proof: TokenReceiptProof): string {
+  if (!proof.events.length) throw new ApiError(409, "A final token receipt is required", "DELIVERY_UNVERIFIED");
+  const entries = proof.events.map(event => `${event.receiptId}:${event.logIndex}:${event.dataIndex}`).sort();
+  return `sha256:${createHash("sha256").update(JSON.stringify({ network: proof.network, token: proof.tokenContract, events: entries })).digest("hex")}`;
+}
+
 export interface NearAction { FunctionCall?: { method_name: string; args: string } }
 
 export interface FinalTransaction {
@@ -57,6 +110,35 @@ export interface FinalTransaction {
   transaction_outcome?: { outcome: { receipt_ids: string[] } };
   receipts?: { receipt_id: string; receiver_id: string; predecessor_id: string; receipt?: { Action?: { actions: NearAction[] } } }[];
   receipts_outcome?: { id: string; block_hash: string; outcome: { executor_id: string; logs: string[]; status: Record<string, unknown>; receipt_ids?: string[] } }[];
+}
+
+export function inspectSharedDeposit(result: FinalTransaction, config: TreasuryConfig, proof: TokenReceiptProof, depositId?: string, kind: "funding" | "retained" = "funding"): SharedDepositCredit {
+  const companyId = treasuryArgs(config).company_id;
+  if (config.architecture !== "shared_v1" || !companyId || !proof.events.length || proof.receiver !== config.near_account_id || result.final_execution_status !== "FINAL" || result.transaction?.hash !== proof.transactionHash || result.transaction.signer_id !== proof.senderAccountId || !result.status || !("SuccessValue" in result.status)) throw new ApiError(409, "Shared funding requires a final transaction bound to this company", "SHARED_DEPOSIT_UNVERIFIED");
+  const credits: SharedDepositCredit[] = [];
+  for (const receipt of result.receipts_outcome ?? []) {
+    if (receipt.outcome.executor_id !== config.near_account_id || !("SuccessValue" in receipt.outcome.status || "SuccessReceiptId" in receipt.outcome.status)) continue;
+    for (const log of receipt.outcome.logs) {
+      if (!log.startsWith("EVENT_JSON:")) continue;
+      let event;
+      try { event = JSON.parse(log.slice(11)); } catch { continue; }
+      if (!event || event.standard !== "razor" || event.event !== "deposit_credited" || !Array.isArray(event.data)) continue;
+      for (const credit of event.data) {
+        if (!credit || typeof credit !== "object") continue;
+        if (credit.company_id === companyId && typeof credit.deposit_id === "string" && (!depositId || credit.deposit_id === depositId) && credit.token_contract === proof.tokenContract && credit.amount === proof.amount && credit.kind === kind && typeof credit.credited_at_ms === "string" && proof.events.every(transfer => transfer.sender === credit.sender_id)) credits.push(credit);
+      }
+    }
+  }
+  if (credits.length !== 1) throw new ApiError(409, "The transaction does not prove exactly one matching company deposit credit", "SHARED_DEPOSIT_UNVERIFIED");
+  return credits[0];
+}
+
+export async function verifySharedDeposit(config: TreasuryConfig, proof: TokenReceiptProof, depositId?: string, kind: "funding" | "retained" = "funding"): Promise<SharedDepositCredit> {
+  const result = await nearTransactionStatus(config, proof.transactionHash, proof.senderAccountId);
+  const credit = inspectSharedDeposit(result, config, proof, depositId, kind);
+  const stored = await view<SharedDepositCredit | null>(config, "get_deposit", { deposit_id: credit.deposit_id });
+  if (!stored || (["company_id", "deposit_id", "token_contract", "sender_id", "amount", "kind", "credited_at_ms"] as const).some(key => stored[key] !== credit[key])) throw new ApiError(409, "The shared treasury ledger does not match the final deposit credit", "SHARED_DEPOSIT_UNVERIFIED");
+  return credit;
 }
 
 export function inspectTokenReceipt(result: FinalTransaction, config: TreasuryConfig, txHash: string, senderAccountId: string, receiver: string, expected: string, receiptId?: string, excludedEvents: string[] = []): TokenReceiptProof {
