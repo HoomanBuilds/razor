@@ -15,13 +15,13 @@ Product: a NEAR-based company payments and payroll platform with easy onboarding
 
 Current catalog coverage: **90 feature requirements: 82 core and 8 optional**. End-to-end, recovery and track checks below are additional verification gates, not extra features to inflate that count.
 
-The evidence review on 13 November 2026 verifies **11 of 127 checks: 10 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
+The evidence review on 13 November 2026 verifies **12 of 127 checks: 11 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
 
 | Review field | Current value |
 | --- | --- |
 | Last full build review | Pending; targeted local production-build review passed on 2026-11-13 |
 | Build or deployment reviewed | Local production candidate `26ced9d`; no deployed payment or private-inference evidence |
-| Selected optional features | Project/cost-center reporting integrated; retained assets and consented netting in development. None of the optional requirements is fully verified |
+| Selected optional features | Project/cost-center reporting, retained assets and consented netting integrated. None of the optional requirements is fully verified |
 | Target track evidence | Planned: Real-World Money, Autonomous Business, Privacy & Private AI; live demonstrations pending |
 
 ## 1. A new payer can arrive and start working
@@ -93,7 +93,7 @@ The evidence review on 13 November 2026 verifies **11 of 127 checks: 10 of 82 co
 
 - [x] `BILL-01` Invoice or structured-request intake records supplier, reference, amount, settlement unit, line items and due date.
 - [ ] `BILL-02` NEAR AI Cloud produces a private draft extraction with missing or inconsistent fields flagged; human review precedes approved liability creation.
-- [ ] `BILL-03` Reused invoice references, document fingerprints and suspiciously similar local requests are flagged before another payment.
+- [x] `BILL-03` Reused invoice references, document fingerprints and suspiciously similar local requests are flagged before another payment.
 - [ ] `BILL-04` A milestone payout links to approved terms and acceptance evidence; missing acceptance prevents release.
 - [ ] `BILL-05` Bills can be queued and approved individually or in a batch with due dates and project or cost-center references.
 - [ ] `BILL-06` Recurring vendor mandates remain bounded; amount or destination changes trigger the applicable policy.
@@ -225,5 +225,7 @@ Append a row for each meaningful review. Use the same IDs as the checkboxes. Evi
 | 2026-11-12 | Integrator follow-ups after `6f3edfa` | `AUTH-04`, `DATA-03`, `TRE-05`, `PAY-03`, `PAY-04`, `BILL-05`, `UX-02` | Changes integrated; final verification pending | Payment-management routes and panel were wired; plaintext dispute text was removed from ordinary activity; resumed unsigned public funding quotes now revalidate the frozen treasury target and can disable deposits while preserving tracking. Integrator reports TypeScript checks passing. Combined HTTP, test and production-build checks for the final candidate remain pending; planner and client-reserve gates stay open. |
 | 2026-11-13 | `26ced9d`, local production server with fresh signed wallet sessions | `AUTH-02`, `AUTH-04`, `REC-02`, `REC-04`, `PAY-02`, `PAY-03`, `BILL-01`; partial `BILL-04`, `BILL-05`, `TRE-04`, `DATA-06`, `UX-02` | Targeted local verification passed | `npm run typecheck`, all 50 application tests and the serialized memory-capped `npm run build` passed. `.data/final-workflow-result.json` and `.data/final-browser-result.json` record the source commit. Fresh company setup, employee and contractor confirmation, recipient isolation, exact payroll changes, stale-review rejection, milestone acceptance and human-agreed foreign-currency intake worked. A 204 USDC payroll with a 1 USDC ceiling showed a 205 USDC shortfall before unfunded approval. All newly integrated routes responded; zero-cash earmarks were rejected; scoped CSV exports retained payroll references and earmark columns. Browser review covered payroll, Treasury and recipient history with no exceptions or 390 px overflow. No source funding, deployment, payout or private inference was executed. |
 | 2026-11-13 | `26ced9d`, checklist correction | `AUTH-03` | Cleared prior checkbox | Company creation, ownership and editable time zones work. The settlement denomination is fixed at USDC; the literal requirement also includes an editable asset default, so this requirement is not fully satisfied. No requirement was narrowed to preserve the earlier count. |
+
+| 2026-11-13 | `8fc1f9b`, local focused review | `BILL-03`; partial `DATA-07`, `NET-06`, `TRE-09` | Duplicate safeguards verified locally; integrations remain open | Invoice intake rejects changed reused references and source-document copies; similar requests appear in the exact approval review and a new warning invalidates an older review token. Thirteen focused invoice/reconciliation checks passed. Cleared-debt reports have nine passing project/clearing checks; six clearing contract VM checks passed. Pay-from-wallet has twelve passing focused checks and its mounted integration passes TypeScript. These are local checks, not live funding, refund, clearing or payout evidence. |
 
 Record in-progress, blocked or failed work in the log while leaving its checkbox unchecked. When a failure is corrected, add a new verification entry rather than rewriting history.

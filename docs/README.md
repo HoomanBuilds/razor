@@ -15,6 +15,10 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | [Receiving metadata](specs/recipient-destinations.md) | Validated address families, XRP tags and unsupported destination metadata |
 | [Account notifications](specs/notifications.md) | Personal/company updates, optional email preferences and honest provider acceptance |
 | [Project reporting](specs/project-reporting.md) | Classified receipts, client-fund protection, costs, commitments and cost-center views |
+| [Pay from wallet](specs/pay-from-wallet.md) | Resumable obligation funding, linked cash, shortfall quotes and payout recovery |
+| [Retained assets](specs/retained-assets.md) | Separate NEAR token holdings, owner controls and indicative valuations |
+| [Business clearing](specs/business-clearing.md) | Exact company consents, conserved setoff and residual payments |
+| [Implementation status](specs/implementation-status.md) | Integrated features, local evidence and remaining live gates |
 | [Company operations](specs/operations.md) | Recurring drafts, bounded execution, worker setup and recovery |
 | [Private inference](specs/private-inference.md) | NEAR AI Cloud verification, privacy boundaries and retained draft handling |
 | [NEAR track alignment](specs/near-track-alignment.md) | Official prompt findings, target tracks and evidence needed to support each track |
@@ -22,3 +26,4 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 These documents describe the intended product. They do not claim the features have been implemented or integrations tested. The features are organized by product responsibility, without using the hackathon deadline to reduce their depth.
 
 The core product works for one company. Business invoice netting is an optional feature. Receivable financing is a later extension with separate credit and collateral requirements.
+
