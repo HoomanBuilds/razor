@@ -5,7 +5,7 @@ import { getDb, row } from "../src/server/db";
 import type { AccessContext } from "../src/server/context";
 import { PERMISSIONS } from "../src/server/identity/session";
 import { createBill, approveBill, createPayrollRun, approvePayrollRun, getPayrollRun } from "../src/server/business/service";
-import { getBillTerms } from "../src/server/business/bill-terms";
+import { getBillTerms, setBillTerms } from "../src/server/business/bill-terms";
 import { getPayment, reconcilePayment, prepareSettlement, preparePaymentQuote, revalidatePaymentRecipient, getTreasury } from "../src/server/payments/service";
 import { createRemainder, partialReview, approveRemainder } from "../src/server/partial-settlement/service";
 import { completeDelivery, deliveryOutput, outputAmount, spentSource } from "../src/server/partial-settlement/model";
@@ -118,6 +118,11 @@ test("canceled payroll and invoice remainders follow fresh replacements without 
     await cancelManagedPayment(f.access,child.id);
     const replacement=await replaceCancelledPayment(f.access,child.id,"Recipient profile requires a freshly reviewed remainder");
     assert.equal(replacement.payment.amount,"60000000");assert.equal(partialReview(f.access,f.paymentId).remainder?.id,replacement.payment.id);
+    if(f.billId){
+      assert.throws(()=>setBillTerms(f.access,f.billId!,{paymentAmount:"50000000",maxFee:"1000000",requiresAcceptance:false}),/exact unpaid entitlement/);
+      assert.throws(()=>setBillTerms(f.access,f.billId!,{paymentAmount:"60000000",maxFee:"2000000",requiresAcceptance:false}),/original routing ceiling/);
+      assert.equal(getPayment(f.access,replacement.payment.id).amount,"60000000");assert.equal(getPayment(f.access,replacement.payment.id).max_fee,"1000000");
+    }
     approveRemainder(f.access,f.paymentId,partialReview(f.access,f.paymentId).reviewToken);
     if(f.runId)assert.equal(row<{status:string}>("SELECT status FROM payroll_runs WHERE id=?",f.runId)!.status,"draft");
     if(f.billId){const terms=getBillTerms(f.access,f.billId);assert.equal(terms.amount,"100000000");assert.equal(terms.paid,"40000000");assert.equal(terms.uncommitted,"0");assert.equal(projectReports(f.access).projects[0].sourceSpent,"104000000");}

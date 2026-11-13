@@ -6,6 +6,9 @@ import { createBill, createPayrollRun } from "../src/server/business/service";
 import { setBillTerms } from "../src/server/business/bill-terms";
 import { approvePayment, createPayment, getPayment } from "../src/server/payments/service";
 import { adjustPayrollItem, approveBillBatch, approveReviewedPayrollRun, cancelManagedPayment, payrollReview, previewBillBatch, replaceCancelledPayment } from "../src/server/payment-management/service";
+import { createClientReserve } from "../src/server/client-reserves/service";
+import { paymentTermsHash } from "../src/server/client-reserves/accounting";
+import { NATIVE_USDC } from "../src/server/payments/policy";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "22".repeat(32);
@@ -41,6 +44,27 @@ test("approval funding previews account for existing reservations and hold unkno
   assert.equal(unknown.unreserved, "0");
   assert.equal(unknown.awaitingReconciliation, "1001000");
   getDb().prepare("UPDATE treasury_balances SET balance='0',reserved='0' WHERE organization_id='org'").run();
+});
+
+test("approval previews apply protected cash only to its linked payroll liability", () => {
+  const organizationId = `earmarked-${next()}`, recipientId = `earmarked-recipient-${next()}`, now = new Date().toISOString(), db = getDb();
+  const scoped = { ...access, organizationId };
+  db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,'Company','finance',?,?)").run(organizationId, now, now);
+  db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,'Employee','employee','near','employee.near','confirmed',?,?,?)").run(recipientId, organizationId, now, now, now);
+  db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,'mainnet',?,?)").run(organizationId, `${organizationId}.near`, NATIVE_USDC.near, now);
+  db.prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,onchain_reserved,updated_at) VALUES(?,'100','0','0',?)").run(organizationId, now);
+  const create = () => createPayrollRun(scoped, { reference: `run-${next()}`, periodStart: "2026-11-01", periodEnd: "2026-11-30", items: [{ recipientId, amount: "100", maxFee: "1" }] });
+  const run = create(), paymentId = run.items[0].payment_id!;
+  createClientReserve(scoped, { idempotencyKey: `earmark-reserve-${next()}`, amount: "100", purpose: "Client payroll", paymentId });
+  let review = payrollReview(scoped, run.id);
+  assert.equal(review.funding.available, "0"); assert.equal(review.funding.protectedFunding, "100"); assert.equal(review.funding.shortfall, "1");
+  assert.equal(payrollReview(scoped, create().id).funding.shortfall, "101");
+  approveReviewedPayrollRun(scoped, run.id, review.reviewToken);
+  const payment = getPayment(scoped, paymentId);
+  db.prepare("INSERT INTO payment_funding_tasks(payment_id,organization_id,terms_hash,cash_committed,created_by,created_at,updated_at) VALUES(?,?,?,'1','finance',?,?)").run(paymentId, organizationId, paymentTermsHash(payment), now, now);
+  db.prepare("UPDATE treasury_balances SET balance='101' WHERE organization_id=?").run(organizationId);
+  review = payrollReview(scoped, run.id);
+  assert.equal(review.funding.protectedFunding, "101"); assert.equal(review.funding.shortfall, "0");
 });
 
 test("draft net adjustments invalidate old approval reviews and lock after approval", () => {

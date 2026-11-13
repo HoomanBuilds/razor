@@ -17,6 +17,7 @@ export interface Payment {
   id: string;
   organization_id: string;
   recipient_id: string;
+  recipientName?: string;
   kind: string;
   reference: string;
   amount: string;

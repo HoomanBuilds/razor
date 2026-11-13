@@ -8,6 +8,8 @@ import { encrypt } from "../src/server/identity/crypto";
 import { createPayment, listPayments, paymentPage, paymentSummary } from "../src/server/payments/service";
 import { createClientReserve } from "../src/server/client-reserves/service";
 import { NATIVE_USDC } from "../src/server/payments/policy";
+import { createBill } from "../src/server/business/service";
+import { addBillInstallment, setBillTerms } from "../src/server/business/bill-terms";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "b2".repeat(32);
@@ -91,4 +93,24 @@ test("unresolved source money is not requested twice and recorded recipient vers
   const summary = paymentSummary(f.access);
   assert.equal(summary.openPrincipal, "100"); assert.equal(summary.unreservedBudget, "0"); assert.equal(summary.fundingGap, "0");
   assert.equal(summary.attention[0].recipientName, "Original recipient");
+  assert.equal(paymentPage(f.access, 1, 50).payments[0].recipientName, "Original recipient");
+});
+
+test("invoice face liabilities remain visible beyond a smaller installment without inventing a payable budget", () => {
+  const f = fixture(), bill = createBill(f.access, { recipientId: f.recipientId, reference: randomUUID(), title: "Services", amount: "25000000", maxFee: "1000000" });
+  setBillTerms(f.access, bill.id, { paymentAmount: "10000000", maxFee: "1000000", requiresAcceptance: false });
+  let summary = paymentSummary(f.access);
+  assert.equal(summary.openPrincipal, "25000000"); assert.equal(summary.uncommittedInvoicePrincipal, "15000000");
+  assert.equal(summary.unreservedBudget, "11000000"); assert.equal(summary.openCount, 1);
+  getDb().prepare("UPDATE payments SET status='paid',delivered_amount=amount WHERE id=?").run(bill.payment_id!);
+  summary = paymentSummary(f.access);
+  assert.equal(summary.openPrincipal, "15000000"); assert.equal(summary.unreservedBudget, "0");
+  assert.equal(summary.openCount, 1); assert.equal(summary.attention[0].state, "needs_installment");
+  const installment = addBillInstallment(f.access, bill.id, { amount: "15000000", maxFee: "1000000" });
+  summary = paymentSummary(f.access);
+  assert.equal(summary.openPrincipal, "15000000"); assert.equal(summary.uncommittedInvoicePrincipal, "0");
+  assert.equal(summary.unreservedBudget, "16000000"); assert.equal(summary.openCount, 1);
+  getDb().prepare("UPDATE payments SET status='paid',delivered_amount=amount WHERE id=?").run(installment.payment_id!);
+  summary = paymentSummary(f.access);
+  assert.equal(summary.openPrincipal, "0"); assert.equal(summary.openCount, 0);
 });

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { atomic as parseAtomic, usdToToken } from "../../lib/money";
@@ -15,6 +16,7 @@ import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 import { buildPaymentSummary } from "./summary";
+import { recordedRecipientName } from "./recipient-names";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -45,7 +47,8 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
 export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
   requirePermission(access, "payments:read");
   const query = "SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC,p.id DESC";
-  return page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
+  const payments = page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
+  return payments.map(payment => ({ ...payment, recipientName: recordedRecipientName(access.organizationId, payment) }));
 }
 
 export function paymentPage(access: AccessContext, page: number, pageSize: number) {
@@ -177,7 +180,7 @@ export function createPayment(access: AccessContext, input: CreatePaymentInput):
   return transaction(() => {
     const existing = row<Payment>("SELECT * FROM payments WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);
     if (existing) {
-      if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment")) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
+      if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment") || existing.scheduled_for !== (input.scheduledFor ?? null) || !isDeepStrictEqual(JSON.parse(existing.metadata), JSON.parse(json(input.metadata ?? {})))) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
       return existing;
     }
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id = ? AND organization_id = ?", input.recipientId, access.organizationId);
@@ -270,7 +273,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
   transaction(() => {
     const latest = getPayment(access, paymentId);
     if (latest.status === "cancelled") return;
-    if (row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')", paymentId)) throw new ApiError(409, "An attempt was prepared while cancelling", "ATTEMPT_ACTIVE");
+    if (["paid", "partially_paid"].includes(latest.status) || BigInt(latest.delivered_amount) > 0n || row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered','reported_partial')", paymentId)) throw new ApiError(409, "Payment delivery changed while cancelling. Reconcile it before cancellation", "ATTEMPT_ACTIVE");
     const current = balance(access.organizationId);
     const remaining = BigInt(current.reserved) - BigInt(latest.reserved_amount);
     if (remaining < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");
