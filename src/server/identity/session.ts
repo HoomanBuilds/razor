@@ -68,7 +68,7 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
 export function getAccess(userId: string, orgId: string): AccessContext {
   const membership = row<{ permissions_json: string }>(
     `SELECT r.permissions_json FROM memberships m JOIN organization_roles r ON r.id = m.role_id AND r.organization_id = m.organization_id
-     WHERE m.organization_id = ? AND m.user_id = ? AND m.status = 'active'`, orgId, userId,
+     WHERE m.organization_id = ? AND m.user_id = ? AND m.status = 'active' AND r.archived_at IS NULL`, orgId, userId,
   );
   if (!membership) throw new ApiError(403, "You do not have access to this company", "COMPANY_ACCESS_DENIED");
   return { userId, organizationId: orgId, permissions: JSON.parse(membership.permissions_json) as string[] };
@@ -90,7 +90,7 @@ export function requireOrganization(permission: string): MiddlewareHandler<AppEn
 }
 
 export function organizationsFor(userId: string) {
-  return rows<{permissions_json:string}>("SELECT o.*, r.name AS role,r.permissions_json FROM organizations o JOIN memberships m ON m.organization_id = o.id JOIN organization_roles r ON r.id = m.role_id AND r.organization_id = o.id WHERE m.user_id = ? AND m.status = 'active' ORDER BY o.created_at", userId).map(({permissions_json,...organization})=>({...organization,permissions:JSON.parse(permissions_json) as string[]}));
+  return rows<{permissions_json:string}>("SELECT o.*, r.name AS role,r.permissions_json FROM organizations o JOIN memberships m ON m.organization_id = o.id JOIN organization_roles r ON r.id = m.role_id AND r.organization_id = o.id WHERE m.user_id = ? AND m.status = 'active' AND r.archived_at IS NULL ORDER BY o.created_at", userId).map(({permissions_json,...organization})=>({...organization,permissions:JSON.parse(permissions_json) as string[]}));
 }
 
 export function audit(userId: string, organizationId: string | null, action: string, entityId?: string, details: Record<string, unknown> = {}): void {

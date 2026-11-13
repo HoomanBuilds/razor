@@ -113,3 +113,55 @@ test("recipient fallback requires recipient proof and confirmation, then resets 
   const versions=await(await request(`/organizations/${organization.id}/recipients/${recipient.id}/versions`,undefined,payer.cookie)).json();
   assert.equal(versions.versions.length,3);
 });
+
+test("wallet-targeted invitations require verified ownership and retries cannot change or restore membership",async()=>{
+  const owner=await signIn(),member=await signIn(),stranger=await signIn();
+  const {organization}=await(await request("/organizations",{name:"Wallet team"},owner.cookie)).json();
+  const {roles}=await(await request(`/organizations/${organization.id}/roles`,undefined,owner.cookie)).json();
+  const viewer=roles.find((role:{name:string})=>role.name==="Viewer"),operator=roles.find((role:{name:string})=>role.name==="Operator");
+  const created=await request(`/organizations/${organization.id}/invitations`,{wallet:{family:"evm",address:member.account.address,network:"base"},roleId:viewer.id},owner.cookie);
+  assert.equal(created.status,201);
+  const invitation=await created.json(),token=new URL(invitation.invitationUrl).searchParams.get("token")!;
+  assert.equal(invitation.invitation.wallet.network,"evm");
+  assert.equal((await(await request(`/invitations/${token}`,undefined,stranger.cookie)).json()).canAccept,false);
+  assert.equal((await request("/invitations/accept",{token},stranger.cookie)).status,403);
+  assert.equal((await(await request(`/invitations/${token}`,undefined,member.cookie)).json()).canAccept,true);
+  assert.equal((await request("/invitations/accept",{token},member.cookie)).status,200);
+  assert.equal((await request("/invitations/accept",{token},member.cookie)).status,200);
+  const memberId=(await(await request("/auth/session",undefined,member.cookie)).json()).user.id;
+  await request(`/organizations/${organization.id}/members/${memberId}`,{roleId:operator.id},owner.cookie,"PATCH");
+  assert.equal((await request("/invitations/accept",{token},member.cookie)).status,200);
+  assert.equal(row<{role_id:string}>("SELECT role_id FROM memberships WHERE organization_id=? AND user_id=?",organization.id,memberId)!.role_id,operator.id);
+  await request(`/organizations/${organization.id}/members/${memberId}`,undefined,owner.cookie,"DELETE");
+  assert.equal((await request("/invitations/accept",{token},member.cookie)).status,409);
+  assert.equal((await request(`/organizations/${organization.id}`,undefined,member.cookie)).status,403);
+  const next=await(await request(`/organizations/${organization.id}/invitations`,{wallet:{family:"evm",address:member.account.address},roleId:viewer.id},owner.cookie)).json();
+  const nextToken=new URL(next.invitationUrl).searchParams.get("token");
+  await request(`/organizations/${organization.id}/invitations/${next.invitation.id}`,undefined,owner.cookie,"DELETE");
+  assert.equal((await request("/invitations/accept",{token:nextToken},member.cookie)).status,404);
+  const expired=await(await request(`/organizations/${organization.id}/invitations`,{wallet:{family:"evm",address:member.account.address},roleId:viewer.id},owner.cookie)).json();
+  getDb().prepare("UPDATE organization_invitations SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(expired.invitation.id);
+  assert.equal((await request("/invitations/accept",{token:new URL(expired.invitationUrl).searchParams.get("token")},member.cookie)).status,404);
+});
+
+test("custom roles require usable permission dependencies and can be archived without deleting access history",async()=>{
+  const owner=await signIn(),member=await signIn();
+  const {organization}=await(await request("/organizations",{name:"Role lifecycle"},owner.cookie)).json(),base=`/organizations/${organization.id}`;
+  assert.equal((await request(`${base}/roles`,{name:"No workspace",permissions:["payments:read"]},owner.cookie)).status,422);
+  assert.equal((await request(`${base}/roles`,{name:"Cannot prepare",permissions:["company:read","payments:prepare"]},owner.cookie)).status,422);
+  const role=(await(await request(`${base}/roles`,{name:"Temporary viewer",permissions:["company:read","payments:read"]},owner.cookie)).json()).role;
+  const invite=await(await request(`${base}/invitations`,{wallet:{family:"evm",address:member.account.address},roleId:role.id},owner.cookie)).json();
+  assert.equal((await request(`${base}/roles/${role.id}`,undefined,owner.cookie,"DELETE")).status,409);
+  const token=new URL(invite.invitationUrl).searchParams.get("token");
+  await request("/invitations/accept",{token},member.cookie);
+  const memberId=(await(await request("/auth/session",undefined,member.cookie)).json()).user.id;
+  await request(`${base}/members/${memberId}`,undefined,owner.cookie,"DELETE");
+  assert.equal((await request(`${base}/roles/${role.id}`,undefined,owner.cookie,"DELETE")).status,200);
+  const catalog=await(await request(`${base}/roles`,undefined,owner.cookie)).json();
+  assert.ok(!catalog.roles.some((entry:{id:string})=>entry.id===role.id));
+  assert.ok(catalog.archivedRoles.some((entry:{id:string})=>entry.id===role.id));
+  assert.equal(row<{status:string}>("SELECT status FROM memberships WHERE organization_id=? AND user_id=?",organization.id,memberId)!.status,"removed");
+  assert.equal((await request(`${base}/roles/${role.id}/restore`,{name:role.name,permissions:role.permissions},owner.cookie)).status,200);
+  assert.equal((await request("/invitations/accept",{token},member.cookie)).status,409);
+  assert.equal((await request(`${base}`,undefined,member.cookie)).status,403);
+});
