@@ -15,6 +15,7 @@ export interface SessionRecord {
   organization_id: string | null;
   created_at: string;
   expires_at: string;
+  authentication_method: string;
 }
 
 export function appOrigin(): string {
@@ -32,12 +33,22 @@ export function currentSession(c: Context<AppEnv>): SessionRecord | undefined {
   return row<SessionRecord>("SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?", hashToken(token), new Date().toISOString());
 }
 
-export function issueSession(c: Context<AppEnv>, userId: string): void {
+export function issueSession(c: Context<AppEnv>, userId: string, method="verified_sign_in"): void {
   const token = newToken();
   const now = new Date().toISOString();
-  getDb().prepare("INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(randomUUID(), userId, hashToken(token), new Date(Date.now() + HOURS * 3600000).toISOString(), now);
+  const current=currentSession(c),id=randomUUID();
+  getDb().prepare("INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at,authentication_method,organization_id) VALUES (?, ?, ?, ?, ?,?,?)")
+    .run(id, userId, hashToken(token), new Date(Date.now() + HOURS * 3600000).toISOString(), now,method,current?.user_id===userId?current.organization_id:null);
+  if(current)getDb().prepare("DELETE FROM sessions WHERE id=?").run(current.id);
   setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Strict", secure: appOrigin().startsWith("https:"), path: "/", maxAge: HOURS * 3600 });
+}
+
+export function requireFreshSession(c:Context<AppEnv>,maxAgeMs=900000):SessionRecord {
+  const session=currentSession(c);
+  if(!session)throw new ApiError(401,"Sign in to continue","UNAUTHENTICATED");
+  const age=Date.now()-Date.parse(session.created_at);
+  if(!Number.isFinite(age)||age<0||age>maxAgeMs)throw new ApiError(403,"Verify a linked sign-in method again before changing account security","FRESH_SIGN_IN_REQUIRED");
+  return session;
 }
 
 export function revokeSession(c: Context<AppEnv>): void {

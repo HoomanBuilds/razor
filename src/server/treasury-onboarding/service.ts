@@ -8,6 +8,7 @@ import { validNearAccount } from "../payments/near";
 import { atomic } from "../../lib/money";
 import { reviewedArtifactHash } from "../near-artifacts";
 import type { WalletTransaction } from "../payments/types";
+import { ownerWalletProviders } from "../account-recovery/providers";
 
 const Account=z.string().refine(validNearAccount,"Enter a valid NEAR account");
 const Amount=z.string().refine(value=>{try{atomic(value);return true;}catch{return false;}},"Use a positive microUSDC amount within the supported range");
@@ -83,10 +84,10 @@ export async function getOnboardingConfig(access:AccessContext) {
   const network=process.env.NEAR_NETWORK || "testnet",verifiedWallets=rows<{address:string;network:string}>("SELECT address,network FROM linked_wallets WHERE user_id = ? AND family = 'near' AND network = ?",access.userId,network);
   try {
     const {config,factory}=await verifiedFactory();
-    return {ready:!factory.paused,network,factoryId:config.factoryId,verifiedWallets,settlementEnabled:network==="mainnet",factory,reason:factory.paused?"New treasury creation is paused by the factory operator. Existing creation recovery is still available.":null};
+    return {ready:!factory.paused,network,factoryId:config.factoryId,verifiedWallets,ownerWalletSetup:{...ownerWalletProviders(network),needsWallet:!verifiedWallets.length,mode:"external_owner_wallet"},settlementEnabled:network==="mainnet",factory,reason:factory.paused?"New treasury creation is paused by the factory operator. Existing creation recovery is still available.":null};
   } catch(error) {
     if(!(error instanceof ApiError))throw error;
-    return {ready:false,network,factoryId:process.env.NEAR_FACTORY_ID || null,verifiedWallets,settlementEnabled:false,reason:error.message,code:error.code};
+    return {ready:false,network,factoryId:process.env.NEAR_FACTORY_ID || null,verifiedWallets,ownerWalletSetup:{...ownerWalletProviders(network),needsWallet:!verifiedWallets.length,mode:"external_owner_wallet"},settlementEnabled:false,reason:error.message,code:error.code};
   }
 }
 

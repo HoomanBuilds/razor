@@ -7,6 +7,7 @@ import { usd } from "@/lib/format";
 import { authenticateWallet, connectNearWallet, getNearConnector } from "@/components/auth/wallets";
 import type { NearWalletAction } from "@/lib/near-actions";
 import { useWorkspace } from "./context";
+import { OwnerWalletOnboarding } from "@/components/account/owner-wallet-onboarding";
 import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Field, Panel, Status } from "./shared";
 
@@ -63,6 +64,7 @@ export function TreasuryCreation() {
   const recorded=result?.creation || quoted?.creation,canCreate=Boolean(config?.ready&&ownerAccount&&quoted&&acknowledged&&(!recorded||recorded.status==="refunded"));
   return <Panel title="Create your company treasury" description="Create a NEAR contract from your own wallet. You stay its owner; the deployed treasury has no access keys."><div className="grid gap-5">
     {loading?<p className="text-sm text-muted-foreground">Checking treasury creation infrastructure...</p>:null}
+    {config&&!config.verifiedWallets.length?<OwnerWalletOnboarding revision={revision} onChanged={refresh}/>:null}
     {configError?<p role="alert" className="text-sm text-destructive">{configError}</p>:null}
     {config&&!config.ready?<p role="status" className="rounded-lg bg-muted p-4 text-sm">{config.reason}</p>:null}
     {config?.network==="testnet"?<p className="text-sm text-muted-foreground">Testnet creation supports development. Live NEAR Intents funding requires a mainnet treasury.</p>:null}

@@ -1,0 +1,23 @@
+"use client";
+
+import { useState } from "react";
+import { api } from "@/lib/api";
+import { authenticateWallet } from "@/components/auth/wallets";
+import { useAction, useResource } from "@/components/workspace/hooks";
+import { Action, Address, control, Field, Panel } from "@/components/workspace/shared";
+import type { AccountStatus } from "./types";
+
+export function OwnerWalletOnboarding({onChanged,revision:externalRevision=0}:{onChanged?:()=>void;revision?:number}) {
+  const [revision,setRevision]=useState(0),{data:status,error:loadError}=useResource<AccountStatus>("/account/status",revision+externalRevision),{busy,error,run}=useAction(),[choice,setChoice]=useState("");
+  const providerId=choice || status?.onboarding?.wallet_provider || status?.preferredProvider || "",provider=status?.providers.find(value=>value.id===providerId) || status?.providers[0];
+  function changed(){setRevision(value=>value+1);onChanged?.();}
+  return <Panel title="Set up your NEAR owner wallet" description="Google or email signs you in to Razor. A separate owner-controlled NEAR account signs treasury actions. You can create a new wallet without importing an existing seed.">
+    {loadError?<p role="alert" className="text-sm text-destructive">{loadError}</p>:null}
+    {status?<div className="grid gap-4"><Field label={`Wallet provider for NEAR ${status.network}`}><select className={control} value={provider?.id || ""} disabled={!!busy} onChange={event=>{setChoice(event.target.value);void run("provider",async()=>{await api("/account/onboarding",{provider:event.target.value},"PUT");changed();});}}>{status.providers.map(value=><option key={value.id} value={value.id}>{value.name}</option>)}</select></Field>
+      {provider?<><p className="text-sm leading-6">{provider.custody}</p><ol className="list-decimal space-y-2 pl-5 text-sm leading-6"><li>Open the wallet provider and create a regular NEAR account on {status.network}. No existing seed import is required.</li><li>Complete its recovery setup. Keep recovery material in that provider or your own backup, never in Razor.</li><li>Return here and approve an ownership message. Razor verifies the account and its full-access public key on NEAR before linking it.</li></ol><div className="flex flex-wrap gap-3"><a href={provider.creationUrl} target="_blank" rel="noreferrer" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Create or restore in {provider.name}</a><Action disabled={!!busy||!status.freshSignIn} busy={busy==="link"} onClick={()=>void run("link",async()=>{await authenticateWallet("near",{link:true,walletId:provider.id});changed();})}>Connect and verify owner wallet</Action></div><p className="text-xs leading-5 text-muted-foreground">{provider.recovery} <a href={provider.recoveryUrl} target="_blank" rel="noreferrer" className="underline">Official recovery guide</a></p></>:null}
+      {!status.freshSignIn?<p className="text-sm text-amber-900">Verify a linked sign-in method again in <a href="/account" className="underline">Account and recovery</a> before linking another wallet.</p>:null}
+      {status.ownerWallet?<div className="space-y-3 rounded-lg border p-4"><p className="text-sm font-semibold">Linked owner wallet</p><Address value={status.ownerWallet.address} network={status.ownerWallet.network}/><label className="flex items-start gap-2 text-sm leading-6"><input type="checkbox" className="mt-1.5" checked={!!status.backupAcknowledgedAt} disabled={!!busy||!status.freshSignIn} onChange={event=>void run("backup",async()=>{await api("/account/onboarding",{provider:provider?.id,ownerWalletId:status.ownerWallet!.id,backupAcknowledged:event.target.checked},"PUT");changed();})}/>I reviewed the wallet provider's recovery method and saved the required backup. This is my acknowledgement; Razor has not tested or stored my recovery material.</label>{!status.hasAlternateSignIn?<p className="text-xs text-muted-foreground">Add a second verified sign-in method in Account and recovery so losing one Razor login does not lock you out of your records.</p>:null}</div>:null}
+      <p className="text-xs text-muted-foreground">Wallet creation and recovery run in the provider. Razor does not provision a NEAR key from an OAuth token. Treasury deployment, storage and network fees require native NEAR; provider onboarding and recovery availability are external services.</p>
+    </div>:<p className="text-sm text-muted-foreground">Loading owner-wallet setup...</p>}{error?<p role="alert" className="mt-4 text-sm text-destructive">{error}</p>:null}
+  </Panel>;
+}
