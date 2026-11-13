@@ -15,7 +15,6 @@ interface Check { id: string; stage: "configuration" | "remote" | "workflow"; st
 interface Options { env?: NodeJS.ProcessEnv; nodeVersion?: string; artifactDirectory?: string; remote?: boolean; fetch?: typeof fetch }
 const artifacts = [
   ["treasury", "NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm"],
-  ["factory", "NEAR_FACTORY_CODE_HASH", "razor_factory.wasm"],
   ["clearing", "NEAR_CLEARING_CODE_HASH", "razor_clearing.wasm"],
 ] as const;
 
@@ -66,24 +65,24 @@ export async function setupPreflight(options: Options = {}) {
       add(`${id}-artifact`, "pass", env[key] ? `${key} is a valid pin and matches the local artifact when present.` : `The local reviewed artifact supplies ${key}; include this exact artifact or configure its hash in production.`);
     } catch { add(`${id}-artifact`, "blocked", `Build the reviewed contract or configure ${key}; a configured pin must match any local artifact.`); }
   }
-  for (const [id, key] of [["factory", "NEAR_FACTORY_ID"], ["clearing", "NEAR_CLEARING_ID"]] as const) {
+  for (const [id, key] of [["treasury", "NEAR_TREASURY_ID"], ["clearing", "NEAR_CLEARING_ID"]] as const) {
     add(`${id}-account`, env[key] && validNearAccount(env[key]) ? "pass" : "blocked", `Configure a deployed, initialized ${key} on the selected network.`);
   }
-  if (env.NEAR_FACTORY_ID && env.NEAR_FACTORY_ID === env.NEAR_CLEARING_ID) add("contract-accounts", "blocked", "Factory and clearing require distinct deployment accounts.");
+  if (env.NEAR_TREASURY_ID && env.NEAR_TREASURY_ID === env.NEAR_CLEARING_ID) add("contract-accounts", "blocked", "Shared treasury and clearing require distinct deployment accounts.");
   try {
     const ai = privateAiConfig(env, nodeVersion);
     add("private-ai", ai.missing.length ? "blocked" : "pass", ai.missing.length ? `Configure valid private inference settings: ${ai.missing.join(", ")}.` : "Private inference configuration is present. Required model/gateway verification must still succeed on a real request.");
   } catch { add("private-ai", "blocked", "Private inference retention must be 0-30 days and attestation age 10000-300000 ms, using integer settings."); }
 
-  const executorFields = ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY"];
+  const executorFields = ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY", "RAZOR_EXECUTOR_COMPANY_ID"];
   let workerReady = executorFields.every(key => Boolean(env[key]));
   if (workerReady) {
     try {
       const key = env.RAZOR_EXECUTOR_PRIVATE_KEY!;
-      workerReady = validNearAccount(env.RAZOR_EXECUTOR_ACCOUNT_ID!) && validNearAccount(env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!) && env.RAZOR_EXECUTOR_ACCOUNT_ID !== env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID && env.RAZOR_EXECUTOR_NETWORK === network && key.startsWith("ed25519:") && base58.decode(key.slice(8)).length === 64;
+      workerReady = validNearAccount(env.RAZOR_EXECUTOR_ACCOUNT_ID!) && validNearAccount(env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!) && env.RAZOR_EXECUTOR_ACCOUNT_ID !== env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID && env.RAZOR_EXECUTOR_NETWORK === network && env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID === env.NEAR_TREASURY_ID && /^[a-zA-Z0-9_-]{8,100}:[a-f0-9]{16}$/.test(env.RAZOR_EXECUTOR_COMPANY_ID!) && key.startsWith("ed25519:") && base58.decode(key.slice(8)).length === 64;
     } catch { workerReady = false; }
   }
-  add("executor", workerReady ? "pass" : "blocked", "Automatic execution requires a dedicated executor account, its exact treasury account, matching network and an ed25519 key. Only an execute_payment function-call key is accepted remotely.");
+  add("executor", workerReady ? "pass" : "blocked", "Automatic execution requires a dedicated executor account, the shared treasury account, exact company ID, matching network and an ed25519 key. Only an execute_payment function-call key is accepted remotely.");
   if (!env.RESEND_API_KEY && !env.NOTIFICATION_FROM_EMAIL) add("email", "disabled", "Optional email transport is disabled; in-app notifications remain available.");
   else add("email", env.RESEND_API_KEY && env.NOTIFICATION_FROM_EMAIL ? "pass" : "blocked", "Optional email requires both RESEND_API_KEY and NOTIFICATION_FROM_EMAIL. Domain verification and actual delivery remain separate.");
 
@@ -93,7 +92,7 @@ export async function setupPreflight(options: Options = {}) {
   if(billingMode==="enforced" || ["RAZOR_BILLING_CONTRACT_ID","RAZOR_BILLING_CODE_HASH","RAZOR_BILLING_ISSUER_PRIVATE_KEY","RAZOR_BILLING_TESTNET_TOKEN_CONTRACT"].some(key=>Boolean(env[key]))) {
     try {
       const settings=billingSettings(env,artifactDirectory),{publicKey}=billingIssuer(env);
-      if([env.NEAR_FACTORY_ID,env.NEAR_CLEARING_ID].includes(settings.billingContract))throw new Error();
+      if([env.NEAR_TREASURY_ID,env.NEAR_CLEARING_ID].includes(settings.billingContract))throw new Error();
       const path=resolve(artifactDirectory,"razor_billing.wasm");
       if(existsSync(path) && base58.encode(createHash("sha256").update(readFileSync(path)).digest())!==settings.codeHash)throw new Error();
       billingExpected={...settings,issuerPublicKey:publicKey};
@@ -110,8 +109,8 @@ export async function setupPreflight(options: Options = {}) {
       if (payload.error || payload.result === undefined) throw new Error();
       return payload.result;
     };
-    const view = async <T>(account: string, method: string): Promise<T> => {
-      const value = await rpc<{result:number[]}>("query", { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: "e30=" });
+    const view = async <T>(account: string, method: string, args: object = {}): Promise<T> => {
+      const value = await rpc<{result:number[]}>("query", { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
       return JSON.parse(Buffer.from(value.result).toString()) as T;
     };
     let networkMatches = false;
@@ -131,32 +130,36 @@ export async function setupPreflight(options: Options = {}) {
           add("remote-billing","pass","At one final NEAR block, billing code, network, token, quote issuer and token-storage registration match. No checkout or subscription payment was sent.","remote");
         }catch{add("remote-billing","blocked","The billing deployment, invoice issuer, pause state or token storage could not be verified. Do not enable paid checkout until these match.","remote");}
       }else add("remote-billing","not_checked","Complete billing checkout configuration before reading its deployment.","remote");
-      let factoryToken: string | undefined;
-      if (!failed("factory-account") && pins.has("factory") && pins.has("treasury")) {
+      let treasuryToken: string | undefined;
+      if (!failed("treasury-account") && pins.has("treasury")) {
         try {
-          const account = env.NEAR_FACTORY_ID!;
+          const account = env.NEAR_TREASURY_ID!;
           const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:account});
-          const factory = await view<{owner_id:string; token_contract:string; treasury_wasm_hash:string; paused:boolean; minimum_deposit:string; treasury_funding:string; factory_storage_fee:string}>(account, "get_config");
-          if (code.code_hash !== pins.get("factory") || factory.treasury_wasm_hash !== pins.get("treasury") || !validNearAccount(factory.owner_id) || !validNearAccount(factory.token_contract) || typeof factory.paused !== "boolean" || network === "mainnet" && factory.token_contract !== NATIVE_USDC.near || !/^[1-9]\d*$/.test(factory.minimum_deposit) || !/^\d+$/.test(factory.treasury_funding) || !/^\d+$/.test(factory.factory_storage_fee) || BigInt(factory.minimum_deposit) !== BigInt(factory.treasury_funding) + BigInt(factory.factory_storage_fee)) throw new Error();
-          factoryToken = factory.token_contract;
-          add("remote-factory", factory.paused ? "blocked" : "pass", factory.paused ? "The reviewed factory is initialized but paused." : "Factory code, initialized configuration, embedded treasury hash, token and creation deposit match the reviewed deployment.", "remote");
-        } catch { add("remote-factory", "blocked", "Factory code or initialized settings could not be matched to the reviewed artifact, token and deposit. Inspect deployment and initialization.", "remote"); }
-      } else add("remote-factory", "not_checked", "Valid factory and artifact configuration is required before deployment verification.", "remote");
-      if (!failed("clearing-account") && pins.has("clearing") && factoryToken) {
+          const keys = await rpc<{keys:unknown[]}>("query", {request_type:"view_access_key_list",finality:"final",account_id:account});
+          if (!Array.isArray(keys.keys) || keys.keys.length !== 0) throw new Error();
+          const platform = await view<{architecture:string;version:number;owner_id:string; token_contract:string; paused:boolean; minimum_registration_deposit:string}>(account, "get_platform_config");
+          if (code.code_hash !== pins.get("treasury") || platform.architecture !== "shared_v1" || platform.version !== 1 || !validNearAccount(platform.owner_id) || platform.owner_id === account || !validNearAccount(platform.token_contract) || typeof platform.paused !== "boolean" || network === "mainnet" && platform.token_contract !== NATIVE_USDC.near || !/^[1-9]\d*$/.test(platform.minimum_registration_deposit)) throw new Error();
+          const storage = await view<{total:string}|null>(platform.token_contract, "storage_balance_of", {account_id:account});
+          if (!storage || !/^[1-9]\d*$/.test(storage.total)) throw new Error();
+          treasuryToken = platform.token_contract;
+          add("remote-treasury", platform.paused ? "blocked" : "pass", platform.paused ? "The reviewed shared treasury is initialized but paused." : "Shared treasury code, keyless account, architecture, settlement token, registration allowance and token-storage registration match. No per-company code deployment is required.", "remote");
+        } catch { add("remote-treasury", "blocked", "Shared treasury code, absence of access keys, initialized platform configuration or token-storage registration could not be verified.", "remote"); }
+      } else add("remote-treasury", "not_checked", "Valid shared treasury account and artifact configuration are required before deployment verification.", "remote");
+      if (!failed("clearing-account") && pins.has("clearing") && treasuryToken) {
         try {
           const account = env.NEAR_CLEARING_ID!;
           const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:account});
-          const clearing = await view<{factory_id:string; token_contract:string; paused:boolean}>(account, "get_config");
-          if (code.code_hash !== pins.get("clearing") || clearing.factory_id !== env.NEAR_FACTORY_ID || clearing.token_contract !== factoryToken || typeof clearing.paused !== "boolean") throw new Error();
-          add("remote-clearing", clearing.paused ? "blocked" : "pass", clearing.paused ? "The reviewed clearing contract is initialized but paused." : "Clearing code, factory binding and settlement token match the reviewed deployment.", "remote");
-        } catch { add("remote-clearing", "blocked", "Clearing code or initialized settings could not be matched to the factory and settlement token.", "remote"); }
-      } else add("remote-clearing", "not_checked", "Verified factory and clearing configuration is required before clearing deployment verification.", "remote");
+          const clearing = await view<{treasury_id:string; token_contract:string; paused:boolean}>(account, "get_config");
+          if (code.code_hash !== pins.get("clearing") || clearing.treasury_id !== env.NEAR_TREASURY_ID || clearing.token_contract !== treasuryToken || typeof clearing.paused !== "boolean") throw new Error();
+          add("remote-clearing", clearing.paused ? "blocked" : "pass", clearing.paused ? "The reviewed clearing contract is initialized but paused." : "Clearing code, shared treasury binding and settlement token match the reviewed deployment.", "remote");
+        } catch { add("remote-clearing", "blocked", "Clearing code or initialized settings could not be matched to the shared treasury and settlement token.", "remote"); }
+      } else add("remote-clearing", "not_checked", "Verified shared treasury and clearing configuration are required before clearing deployment verification.", "remote");
       if (workerReady && pins.has("treasury")) {
         try {
           const treasury = env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!, executor = env.RAZOR_EXECUTOR_ACCOUNT_ID!;
           const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:treasury});
-          const config = await view<{owner_id:string; token_contract:string; executors:string[]; approvers:string[]; paused:boolean}>(treasury, "get_config");
-          if (code.code_hash !== pins.get("treasury") || config.owner_id === executor || !config.executors.includes(executor) || config.approvers.includes(executor) || config.paused || !validNearAccount(config.token_contract) || network === "mainnet" && config.token_contract !== NATIVE_USDC.near) throw new Error();
+          const config = await view<{architecture:string;company_id:string;owner_id:string; token_contract:string; executors:string[]; approvers:string[]; paused:boolean}>(treasury, "get_config", {company_id:env.RAZOR_EXECUTOR_COMPANY_ID});
+          if (code.code_hash !== pins.get("treasury") || config.architecture !== "shared_v1" || config.company_id !== env.RAZOR_EXECUTOR_COMPANY_ID || config.owner_id === executor || !config.executors.includes(executor) || config.approvers.includes(executor) || config.paused || !validNearAccount(config.token_contract) || network === "mainnet" && config.token_contract !== NATIVE_USDC.near) throw new Error();
           const { KeyPairSigner } = await import("near-api-js");
           const publicKey = await KeyPairSigner.fromSecretKey(env.RAZOR_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`).getPublicKey();
           const key = await rpc<{permission:unknown}>("query", {request_type:"view_access_key", finality:"final", account_id:executor, public_key:publicKey.toString()});

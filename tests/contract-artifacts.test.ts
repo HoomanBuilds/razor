@@ -15,18 +15,18 @@ function moduleBytes(payload: Uint8Array) {
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "razor-artifact-manifest-"));
   const treasury = moduleBytes(Buffer.from("distinct treasury fixture"));
-  const files = { "razor_treasury.wasm": treasury, "razor_factory.wasm": moduleBytes(treasury), "razor_clearing.wasm": moduleBytes(Buffer.from("clearing")), "razor_billing.wasm": moduleBytes(Buffer.from("billing")) };
+  const files = { "razor_treasury.wasm": treasury, "razor_clearing.wasm": moduleBytes(Buffer.from("clearing")), "razor_billing.wasm": moduleBytes(Buffer.from("billing")) };
   for (const [name, bytes] of Object.entries(files)) writeFileSync(join(directory, name), bytes);
   const args = ["--max-old-space-size=192", "scripts/contract-manifest.mjs", directory];
   return { directory, files, args };
 }
 
-test("artifact publication validates exact modules and records hashes for the optimized treasury embedded in the factory", () => {
+test("shared artifact publication validates modules and records exact hashes without a factory", () => {
   const { directory, files, args } = fixture();
   try {
     execFileSync(process.execPath, args, { env: { ...process.env, WASM_OPT_BUILD_VERSION: "optimizer fixture" }, stdio: "pipe" });
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
-    assert.equal(manifest.optimizer, "optimizer fixture"); assert.equal(manifest.artifacts.length, 4);
+    assert.equal(manifest.optimizer, "optimizer fixture"); assert.equal(manifest.artifacts.length, 3); assert.equal(manifest.architecture,"shared_v1");
     for (const [name, bytes] of Object.entries(files)) {
       const item = manifest.artifacts.find((entry: { file: string }) => entry.file === name);
       assert.equal(item.bytes, bytes.length);
@@ -35,7 +35,7 @@ test("artifact publication validates exact modules and records hashes for the op
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("invalid modules and a valid factory carrying another treasury cannot replace the published manifest", () => {
+test("invalid shared modules cannot replace the published manifest", () => {
   const { directory, files, args } = fixture();
   try {
     execFileSync(process.execPath, args, { stdio: "pipe" });
@@ -45,9 +45,9 @@ test("invalid modules and a valid factory carrying another treasury cannot repla
     assert.notEqual(invalid.status, 0); assert.match(invalid.stderr, /Invalid WebAssembly/);
     assert.equal(readFileSync(join(directory, "manifest.json"), "utf8"), original);
     writeFileSync(join(directory, "razor_billing.wasm"), files["razor_billing.wasm"]);
-    writeFileSync(join(directory, "razor_factory.wasm"), moduleBytes(Buffer.from("different treasury")));
+    writeFileSync(join(directory, "razor_treasury.wasm"), Buffer.from("invalid treasury"));
     const changed = spawnSync(process.execPath, args, { encoding: "utf8" });
-    assert.notEqual(changed.status, 0); assert.match(changed.stderr, /exact optimized treasury/);
+    assert.notEqual(changed.status, 0); assert.match(changed.stderr, /Invalid WebAssembly/);
     assert.equal(readFileSync(join(directory, "manifest.json"), "utf8"), original);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -23,23 +23,17 @@ staging_dir="$(mktemp -d "$artifact_dir/.build.XXXXXX")"
 trap 'rm -rf -- "$staging_dir"' EXIT
 
 optimize() {
-  local extra=()
-  # Deployment checks need the embedded treasury bytes to stay contiguous.
-  if [[ "$1" == "razor_factory.wasm" ]]; then extra+=(--skip-pass=memory-packing); fi
-  BINARYEN_CORES=1 "$optimizer" "$build_target/wasm32-unknown-unknown/release/$1" -Oz --strip-debug --strip-producers "${extra[@]}" -o "$staging_dir/$1"
+  BINARYEN_CORES=1 "$optimizer" "$build_target/wasm32-unknown-unknown/release/$1" -Oz --strip-debug --strip-producers -o "$staging_dir/$1"
 }
 
 CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-treasury/Cargo.toml" --target wasm32-unknown-unknown --release
 optimize razor_treasury.wasm
-treasury_wasm="$staging_dir/razor_treasury.wasm"
-RAZOR_TREASURY_WASM="$treasury_wasm" CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-factory/Cargo.toml" --target wasm32-unknown-unknown --release
-optimize razor_factory.wasm
 CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-clearing/Cargo.toml" --target wasm32-unknown-unknown --release
 optimize razor_clearing.wasm
 CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-billing/Cargo.toml" --target wasm32-unknown-unknown --release
 optimize razor_billing.wasm
 WASM_OPT_BUILD_VERSION="$optimizer_version" node "$project_root/scripts/contract-manifest.mjs" "$staging_dir"
-for file in razor_treasury.wasm razor_factory.wasm razor_clearing.wasm razor_billing.wasm manifest.json; do
+for file in razor_treasury.wasm razor_clearing.wasm razor_billing.wasm manifest.json; do
   mv -- "$staging_dir/$file" "$artifact_dir/$file"
 done
-printf 'Built and optimized treasury, factory, clearing and billing artifacts in %s\n' "$artifact_dir"
+printf 'Built and optimized shared treasury, clearing and billing artifacts in %s\n' "$artifact_dir"

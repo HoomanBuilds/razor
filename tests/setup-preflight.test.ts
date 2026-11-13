@@ -15,10 +15,10 @@ const env: NodeJS.ProcessEnv = {
   NODE_ENV: "production",
   APP_URL: "https://razor.example", DATABASE_PATH: ".data/razor.sqlite", DATA_ENCRYPTION_KEY: "af".repeat(32),
   PRIVY_APP_ID: "app-one", NEXT_PUBLIC_PRIVY_APP_ID: "app-one", PRIVY_JWKS_URL: "https://auth.example/jwks.json", PRIVY_APP_SECRET: "private-profile-secret",
-  NEAR_NETWORK: "mainnet", NEAR_FACTORY_ID: "factory.near", NEAR_CLEARING_ID: "clearing.near",
-  NEAR_FACTORY_CODE_HASH: hashes.factory, NEAR_TREASURY_CODE_HASH: hashes.treasury, NEAR_CLEARING_CODE_HASH: hashes.clearing,
+  NEAR_NETWORK: "mainnet", NEAR_TREASURY_ID: "treasury.near", NEAR_CLEARING_ID: "clearing.near",
+  NEAR_TREASURY_CODE_HASH: hashes.treasury, NEAR_CLEARING_CODE_HASH: hashes.clearing,
   NEAR_AI_API_KEY: "private-inference-secret", NEAR_AI_MODEL: "private-model", NEAR_AI_MODEL_COMPOSE_SHA256: "12".repeat(32), NEAR_AI_GATEWAY_COMPOSE_SHA256: "34".repeat(32),
-  RAZOR_EXECUTOR_ACCOUNT_ID: "executor.near", RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID: "company.factory.near", RAZOR_EXECUTOR_NETWORK: "mainnet", RAZOR_EXECUTOR_PRIVATE_KEY: `ed25519:${base58.encode(new Uint8Array(64).fill(9))}`,
+  RAZOR_EXECUTOR_ACCOUNT_ID: "executor.near", RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID: "treasury.near", RAZOR_EXECUTOR_COMPANY_ID: "company-one:aaaaaaaaaaaaaaaa", RAZOR_EXECUTOR_NETWORK: "mainnet", RAZOR_EXECUTOR_PRIVATE_KEY: `ed25519:${base58.encode(new Uint8Array(64).fill(9))}`,
 };
 const absentArtifacts = join(tmpdir(), "razor-absent-preflight-artifacts");
 const status = (report: Awaited<ReturnType<typeof setupPreflight>>, id: string) => report.checks.find(check => check.id === id)?.status;
@@ -34,7 +34,7 @@ test("billing setup validates its isolated contract, actual issuer and local art
     const valid = await setupPreflight({ env: configured, artifactDirectory: directory });
     assert.equal(status(valid, "billing-checkout"), "pass");
     assert(!JSON.stringify(valid).includes(configured.RAZOR_BILLING_ISSUER_PRIVATE_KEY!));
-    const reused = await setupPreflight({ env: { ...configured, RAZOR_BILLING_CONTRACT_ID: configured.NEAR_FACTORY_ID }, artifactDirectory: directory });
+    const reused = await setupPreflight({ env: { ...configured, RAZOR_BILLING_CONTRACT_ID: configured.NEAR_TREASURY_ID }, artifactDirectory: directory });
     assert.equal(status(reused, "billing-checkout"), "blocked");
     const invalid = await setupPreflight({ env: { ...configured, RAZOR_BILLING_ISSUER_PRIVATE_KEY: `ed25519:${base58.encode(new Uint8Array(64).fill(8))}` }, artifactDirectory: directory });
     assert.equal(status(invalid, "billing-checkout"), "blocked");
@@ -50,7 +50,7 @@ test("remote billing setup binds code, token, issuer and storage to one final bl
   const remote: typeof fetch = async (url, init) => {
     const request = JSON.parse(init!.body as string), params = request.params;
     if (request.method === "block") return Response.json({ result: { header: { hash: "billing-final" } } });
-    if (params.account_id === configured.RAZOR_BILLING_CONTRACT_ID || params.account_id === NATIVE_USDC.near) {
+    if (params.account_id === configured.RAZOR_BILLING_CONTRACT_ID || params.account_id === NATIVE_USDC.near && params.block_id === "billing-final") {
       assert.equal(params.block_id, "billing-final"); billingReads++;
       if (params.request_type === "view_account") return Response.json({ result: { code_hash: configured.RAZOR_BILLING_CODE_HASH } });
       const value = params.method_name === "storage_balance_of" ? { total: "1000" } : { version: 1, owner_id: "operator.near", network: "mainnet", token_contract: NATIVE_USDC.near, issuer_public_key: issuer, paused };
@@ -64,20 +64,22 @@ test("remote billing setup binds code, token, issuer and storage to one final bl
   assert.equal(status(await setupPreflight({ env: configured, artifactDirectory: absentArtifacts, remote: true, fetch: remote }), "remote-billing"), "blocked");
 });
 
-function transport(options: { network?: string; factoryCode?: string; uninitialized?: boolean; permission?: unknown } = {}): typeof fetch {
+function transport(options: { network?: string; treasuryCode?: string; uninitialized?: boolean; permission?: unknown; treasuryKeys?: unknown[] } = {}): typeof fetch {
   return async (_url, init) => {
     const request = JSON.parse(init!.body as string), params = request.params;
     let result: unknown;
     if (request.method === "status") result = { chain_id: options.network || "mainnet" };
-    else if (params.request_type === "view_account") result = { code_hash: params.account_id === env.NEAR_FACTORY_ID ? options.factoryCode || hashes.factory : params.account_id === env.NEAR_CLEARING_ID ? hashes.clearing : hashes.treasury };
+    else if (params.request_type === "view_account") result = { code_hash: params.account_id === env.NEAR_TREASURY_ID ? options.treasuryCode || hashes.treasury : params.account_id === env.NEAR_CLEARING_ID ? hashes.clearing : hashes.treasury };
+    else if (params.request_type === "view_access_key_list") result = {keys:options.treasuryKeys ?? []};
     else if (params.request_type === "view_access_key") result = { permission: options.permission ?? { FunctionCall: { receiver_id: env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID, method_names: ["execute_payment"], allowance: "1000" } } };
-    else if (params.method_name === "get_config") {
+    else if (params.method_name === "get_config" || params.method_name === "get_platform_config" || params.method_name === "storage_balance_of") {
       if (options.uninitialized) return Response.json({ error: { message: "RPC error contains private-inference-secret" } });
-      const value = params.account_id === env.NEAR_FACTORY_ID
-        ? { owner_id: "admin.near", token_contract: NATIVE_USDC.near, treasury_wasm_hash: hashes.treasury, paused: false, minimum_deposit: "300", treasury_funding: "200", factory_storage_fee: "100" }
-        : params.account_id === env.NEAR_CLEARING_ID
-          ? { factory_id: env.NEAR_FACTORY_ID, token_contract: NATIVE_USDC.near, paused: false }
-          : { owner_id: "owner.near", token_contract: NATIVE_USDC.near, paused: false, executors: [env.RAZOR_EXECUTOR_ACCOUNT_ID], approvers: [] };
+      const value = params.method_name === "storage_balance_of" ? {total:"1250000000000000000000"}
+        : params.method_name === "get_platform_config"
+          ? { architecture:"shared_v1",version:1,owner_id: "admin.near", token_contract: NATIVE_USDC.near, paused: false, minimum_registration_deposit:"81920000000000000000000" }
+          : params.account_id === env.NEAR_CLEARING_ID
+            ? { treasury_id: env.NEAR_TREASURY_ID, token_contract: NATIVE_USDC.near, paused: false }
+            : { architecture:"shared_v1",company_id:env.RAZOR_EXECUTOR_COMPANY_ID,owner_id: "owner.near", token_contract: NATIVE_USDC.near, paused: false, executors: [env.RAZOR_EXECUTOR_ACCOUNT_ID], approvers: [] };
       result = { result: [...Buffer.from(JSON.stringify(value))] };
     } else throw new Error("Unexpected read-only request");
     return Response.json({ result });
@@ -98,7 +100,7 @@ test("local preflight does not call providers, create a database or expose secre
 });
 
 test("incomplete or invalid capability groups remain blocked instead of claiming readiness", async () => {
-  const report = await setupPreflight({ env: { ...env, NEXT_PUBLIC_PRIVY_APP_ID: "another-app", PRIVY_APP_SECRET: "", NEAR_NETWORK: "testnet", RAZOR_EXECUTOR_NETWORK: "mainnet", DATA_ENCRYPTION_KEY: "bad", RESEND_API_KEY: "private-mail-secret", NEAR_AI_RETENTION_DAYS: "31" }, artifactDirectory: absentArtifacts, nodeVersion: "22.0.0" });
+  const report = await setupPreflight({ env: { ...env, NEXT_PUBLIC_PRIVY_APP_ID: "another-app", PRIVY_APP_SECRET: "", NEAR_NETWORK: "testnet", RAZOR_EXECUTOR_COMPANY_ID: "company-one:aaaaaaaaaaaaaaaa", RAZOR_EXECUTOR_NETWORK: "mainnet", DATA_ENCRYPTION_KEY: "bad", RESEND_API_KEY: "private-mail-secret", NEAR_AI_RETENTION_DAYS: "31" }, artifactDirectory: absentArtifacts, nodeVersion: "22.0.0" });
   for (const id of ["runtime", "social-login", "social-profile", "intents-network", "executor", "encryption", "email", "private-ai"]) assert.equal(status(report, id), "blocked", id);
   assert.equal(report.configurationReady, false); assert(!JSON.stringify(report).includes("private-mail-secret"));
 });
@@ -122,23 +124,29 @@ test("configured contract pins cannot silently disagree with local artifacts", a
 
 test("remote preflight refuses another network before checking deployed accounts", async () => {
   const report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({ network: "testnet" }) });
-  assert.equal(status(report, "remote-network"), "blocked"); assert.equal(status(report, "remote-factory"), undefined);
+  assert.equal(status(report, "remote-network"), "blocked"); assert.equal(status(report, "remote-treasury"), undefined);
 });
 
 test("remote contract checks reject different code and uninitialized contract state without leaking errors", async () => {
-  let report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({ factoryCode: hashes.treasury }) });
-  assert.equal(status(report, "remote-factory"), "blocked"); assert.equal(status(report, "remote-clearing"), "not_checked");
+  let report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({ treasuryCode: hashes.clearing }) });
+  assert.equal(status(report, "remote-treasury"), "blocked"); assert.equal(status(report, "remote-clearing"), "not_checked");
   report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({ uninitialized: true }) });
-  assert.equal(status(report, "remote-factory"), "blocked"); assert(!JSON.stringify(report).includes("private-inference-secret"));
+  assert.equal(status(report, "remote-treasury"), "blocked"); assert(!JSON.stringify(report).includes("private-inference-secret"));
 });
 
 test("remote success establishes deployment and restricted key state, never completed payment workflows", async () => {
   const report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport() });
-  for (const id of ["remote-network", "remote-factory", "remote-clearing", "remote-executor"]) assert.equal(status(report, id), "pass", id);
+  for (const id of ["remote-network", "remote-treasury", "remote-clearing", "remote-executor"]) assert.equal(status(report, id), "pass", id);
   assert.equal(report.liveWorkflowsVerified, false); assert.equal(status(report, "settlement-journey"), "not_checked");
 });
 
 test("an unrestricted executor key is rejected without signing or broadcasting", async () => {
   const report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({ permission: "FullAccess" }) });
   assert.equal(status(report, "remote-executor"), "blocked");
+});
+
+test("shared treasury setup refuses a remaining deployment access key", async () => {
+  const report = await setupPreflight({ env, artifactDirectory: absentArtifacts, remote: true, fetch: transport({treasuryKeys:[{public_key:"ed25519:deployment-key",access_key:{permission:"FullAccess"}}]}) });
+  assert.equal(status(report,"remote-treasury"),"blocked");
+  assert.equal(status(report,"remote-clearing"),"not_checked");
 });
