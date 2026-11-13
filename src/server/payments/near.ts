@@ -87,10 +87,14 @@ export function inspectTokenReceipt(result: FinalTransaction, config: TreasuryCo
   return { network: config.network, tokenContract: config.token_contract, transactionHash: txHash, senderAccountId, receiver, finality: "FINAL", amount: required.toString(), events: selected };
 }
 
-export async function verifyTokenReceipt(config: TreasuryConfig, txHash: string, senderAccountId: string, receiver: string, expected: string, receiptId?: string, excludedEvents: string[] = []): Promise<TokenReceiptProof> {
-  if (!validNearAccount(senderAccountId) || !validNearAccount(receiver)) throw new ApiError(422, "Enter valid NEAR signer and destination account IDs", "INVALID_ACCOUNT");
-  const result = await nearTransactionStatus(config, txHash, senderAccountId);
-  return inspectTokenReceipt(result, config, txHash, senderAccountId, receiver, expected, receiptId, excludedEvents);
+export async function verifyTokenReceipt(config: TreasuryConfig, txHash: string, senderAccountId: string | undefined, receiver: string, expected: string, receiptId?: string, excludedEvents: string[] = []): Promise<TokenReceiptProof> {
+  if ((senderAccountId !== undefined && !validNearAccount(senderAccountId)) || !validNearAccount(receiver)) throw new ApiError(422, "Enter valid NEAR signer and destination account IDs", "INVALID_ACCOUNT");
+  const result = senderAccountId
+    ? await nearTransactionStatus(config, txHash, senderAccountId)
+    : await rpc<FinalTransaction>(config.network, "EXPERIMENTAL_tx_status", { tx_hash: txHash, sender_account_id: receiver, wait_until: "FINAL" });
+  const actualSigner = senderAccountId ?? result.transaction?.signer_id;
+  if (!actualSigner || !validNearAccount(actualSigner)) throw new ApiError(409, "The transaction signer could not be discovered. Open advanced verification and supply the signer shown by the NEAR explorer", "RECEIPT_SIGNER_REQUIRED");
+  return inspectTokenReceipt(result, config, txHash, actualSigner, receiver, expected, receiptId, excludedEvents);
 }
 
 export async function nearTransactionStatus(config: TreasuryConfig, txHash: string, senderAccountId: string): Promise<FinalTransaction> {

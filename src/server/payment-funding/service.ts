@@ -168,7 +168,8 @@ export async function reconcileTaskFunding(access: AccessContext, paymentId: str
     const leg = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=? AND payment_id=?", input.fundingId, access.organizationId, paymentId);
     if (!leg) throw new ApiError(404, "This funding leg does not belong to the selected obligation", "FUNDING_NOT_FOUND");
     await reconcileFunding(access, leg.id, input.sourceTxHash);
-    if (input.senderAccountId) await verifyFundingCredit(access, leg.id, { senderAccountId: input.senderAccountId, transactionHash: input.transactionHash });
+    const reconciled = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", leg.id, access.organizationId)!;
+    if (input.senderAccountId || reconciled.status === "reported_delivered") await verifyFundingCredit(access, leg.id, { senderAccountId: input.senderAccountId, transactionHash: input.transactionHash });
   }
   if (listAttempts(access, paymentId).length) await reconcilePayment(access, paymentId);
   await syncTreasury(access);

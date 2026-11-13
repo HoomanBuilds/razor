@@ -22,9 +22,9 @@ reconciliationRoutes.get("/", (c) => {
 reconciliationRoutes.get("/funding/:id", (c) => c.json(getFundingReceipt(c.get("access"), c.req.param("id"))));
 reconciliationRoutes.post("/funding/:id/verify", async (c) => {
   let input: unknown;
-  try { input = await c.req.json(); } catch { throw new ApiError(422, "Send the NEAR transaction signer as JSON", "INVALID_RECEIPT_INPUT"); }
-  const parsed = z.object({ senderAccountId: z.string().min(2).max(64), transactionHash: z.string().min(32).max(64).optional(), receiptId: z.string().min(32).max(64).optional() }).safeParse(input);
-  if (!parsed.success) throw new ApiError(422, "Enter the NEAR destination transaction signer and optional transaction hash", "INVALID_RECEIPT_INPUT");
+  try { input = await c.req.json(); } catch { throw new ApiError(422, "Send the receipt lookup options as JSON", "INVALID_RECEIPT_INPUT"); }
+  const parsed = z.object({ senderAccountId: z.string().min(2).max(64).optional(), transactionHash: z.string().min(32).max(64).optional(), receiptId: z.string().min(32).max(64).optional() }).safeParse(input);
+  if (!parsed.success) throw new ApiError(422, "Check the optional NEAR signer and transaction hash", "INVALID_RECEIPT_INPUT");
   return c.json(await verifyFundingCredit(c.get("access"), c.req.param("id"), parsed.data));
 });
 reconciliationRoutes.get("/export", (c) => {

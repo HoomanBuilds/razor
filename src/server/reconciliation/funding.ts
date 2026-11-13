@@ -33,7 +33,7 @@ export function getFundingReceipt(access: AccessContext, fundingId: string) {
   return { funding, receipts: receipts.map((receipt) => ({ ...receipt, evidence: JSON.parse(receipt.evidence) })), provenance: receipts.length ? "final_near_token_receipt" : funding.provider_status === "SUCCESS" ? "provider_report_only" : "unresolved" };
 }
 
-export async function verifyFundingCredit(access: AccessContext, fundingId: string, input: { senderAccountId: string; transactionHash?: string; receiptId?: string }) {
+export async function verifyFundingCredit(access: AccessContext, fundingId: string, input: { senderAccountId?: string; transactionHash?: string; receiptId?: string } = {}) {
   requirePermission(access, "payments:prepare");
   const funding = fundingFor(access, fundingId);
   if (["refunded_verified", "refunded_attested"].includes(funding.status)) throw new ApiError(409, "This source refund already has an audited closure. Any later credit requires a separate recovery review", "FUNDING_REFUND_CLOSED");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getDb, transaction } from "../src/server/db";
-import { inspectTokenReceipt, type FinalTransaction } from "../src/server/payments/near";
+import { inspectTokenReceipt, verifyTokenReceipt, type FinalTransaction } from "../src/server/payments/near";
 import { NATIVE_USDC } from "../src/server/payments/policy";
 import type { ChainAttempt, PayoutAttempt, TreasuryConfig } from "../src/server/payments/types";
 import { accountingExport, csvCell } from "../src/server/reconciliation/export";
@@ -118,5 +118,26 @@ test("resolved funding leaves reconciliation and existing jobs complete without 
   try {
     await tickOperations({ organizationId: "fund-org", maxJobs: 1 });
     assert.equal(db.prepare("SELECT status FROM operation_jobs WHERE id='old-confirmed-job'").get()!.status, "completed");
+  } finally { globalThis.fetch = original; }
+});
+
+
+test("automatic funding receipt lookup discovers the signer but still binds final hash, token and amount", async () => {
+  const original = globalThis.fetch;
+  let response = receipt();
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(init!.body as string);
+    assert.equal(request.params.sender_account_id, "treasury.near");
+    return Response.json({ result: response });
+  };
+  try {
+    const proof = await verifyTokenReceipt(config, "tx", undefined, "treasury.near", "1000000");
+    assert.equal(proof.senderAccountId, "solver.near");
+    response = { ...receipt(), transaction: { hash: "another", signer_id: "solver.near" } };
+    await assert.rejects(() => verifyTokenReceipt(config, "tx", undefined, "treasury.near", "1000000"), /hash and signer/);
+    response = { ...receipt(), final_execution_status: "EXECUTED_OPTIMISTIC" };
+    await assert.rejects(() => verifyTokenReceipt(config, "tx", undefined, "treasury.near", "1000000"), /final/);
+    response = receipt();
+    await assert.rejects(() => verifyTokenReceipt(config, "tx", undefined, "treasury.near", "1000001"), /matching this funding amount/);
   } finally { globalThis.fetch = original; }
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { verifyFundingCredit } from "../reconciliation/funding";
 import { dispatchNotifications } from "../notifications/service";
 import {
   addCompanyDays,
@@ -403,11 +404,15 @@ async function processJob(job: OperationJob): Promise<JobResult> {
     const before = row<{ status: string }>("SELECT status FROM funding_legs WHERE id=? AND organization_id=?", job.entity_id, job.organization_id);
     if (before && ["confirmed", "refunded_verified", "refunded_attested", "closed_unsent", "cancelled"].includes(before.status)) return { status: "completed", detail: { fundingId: job.entity_id, status: before.status } };
     const result = await reconcileFunding(access, job.entity_id);
-    const funding = row<{ status: string }>(
+    let funding = row<{ status: string }>(
       "SELECT status FROM funding_legs WHERE id=? AND organization_id=?",
       job.entity_id,
       job.organization_id,
     );
+    if (funding?.status === "reported_delivered") {
+      await verifyFundingCredit(access, job.entity_id);
+      funding = row<{ status: string }>("SELECT status FROM funding_legs WHERE id=? AND organization_id=?", job.entity_id, job.organization_id);
+    }
     return {
       status:
         funding &&
