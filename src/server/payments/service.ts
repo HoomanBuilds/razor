@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { atomic as parseAtomic, usdToToken } from "../../lib/money";
@@ -177,7 +178,7 @@ export function createPayment(access: AccessContext, input: CreatePaymentInput):
   return transaction(() => {
     const existing = row<Payment>("SELECT * FROM payments WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);
     if (existing) {
-      if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment")) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
+      if (existing.recipient_id !== input.recipientId || existing.amount !== amount || existing.max_fee !== maxFee || existing.kind !== (input.kind ?? "payment") || existing.scheduled_for !== (input.scheduledFor ?? null) || !isDeepStrictEqual(JSON.parse(existing.metadata), JSON.parse(json(input.metadata ?? {})))) throw new ApiError(409, "This reference is already used with different payment terms", "IDEMPOTENCY_CONFLICT");
       return existing;
     }
     const recipient = row<RecipientSnapshot>("SELECT * FROM recipients WHERE id = ? AND organization_id = ?", input.recipientId, access.organizationId);
@@ -270,7 +271,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
   transaction(() => {
     const latest = getPayment(access, paymentId);
     if (latest.status === "cancelled") return;
-    if (row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')", paymentId)) throw new ApiError(409, "An attempt was prepared while cancelling", "ATTEMPT_ACTIVE");
+    if (["paid", "partially_paid"].includes(latest.status) || BigInt(latest.delivered_amount) > 0n || row("SELECT id FROM payout_attempts WHERE payment_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered','reported_partial')", paymentId)) throw new ApiError(409, "Payment delivery changed while cancelling. Reconcile it before cancellation", "ATTEMPT_ACTIVE");
     const current = balance(access.organizationId);
     const remaining = BigInt(current.reserved) - BigInt(latest.reserved_amount);
     if (remaining < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");

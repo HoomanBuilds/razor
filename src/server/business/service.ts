@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { approvePayment, createPayment, getPayment } from "../payments";
@@ -70,7 +71,7 @@ export function createBill(access: AccessContext, input: {
   const existing = row<Bill>("SELECT * FROM bills WHERE organization_id = ? AND recipient_id = ? AND reference = ?", access.organizationId, input.recipientId, input.reference);
   if (existing) {
     const readable = readableBill(existing);
-    if (existing.amount !== value || existing.max_fee !== fee || readable.title !== input.title || existing.due_date !== (input.dueDate ?? null) || readable.project_reference !== projectReference || readable.cost_center_reference !== costCenterReference) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
+    if (existing.amount !== value || existing.max_fee !== fee || readable.title !== input.title || existing.due_date !== (input.dueDate ?? null) || readable.project_reference !== projectReference || readable.cost_center_reference !== costCenterReference || !isDeepStrictEqual(JSON.parse(readable.line_items), JSON.parse(JSON.stringify(input.lineItems ?? []))) || readable.evidence !== (input.evidence || null) || existing.document_hash !== (input.documentHash ?? null)) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
     return readableBill(existing);
   }
   if (input.documentHash && row("SELECT id FROM bills WHERE organization_id = ? AND document_hash = ?", access.organizationId, input.documentHash)) {
