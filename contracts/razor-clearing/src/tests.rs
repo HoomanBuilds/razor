@@ -114,6 +114,22 @@ fn treasury(owner: &str, version: &str) -> serde_json::Value {
     serde_json::json!({"owner_id": owner, "token_contract": "usdc.testnet", "paused": false, "policy_version": version})
 }
 
+#[test]
+fn typed_views_lookup_arguments_and_digests_preserve_exact_json_bytes() {
+    let contract = setup();
+    let expected = serde_json::json!({"factory_id":contract.factory_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32});
+    assert_eq!(serde_json::to_vec(&contract.get_config()).unwrap(), serde_json::to_vec(&expected).unwrap());
+    let account_id = account("a.factory.testnet");
+    assert_eq!(
+        serde_json::to_vec(&AccountLookup { account_id: &account_id }).unwrap(),
+        serde_json::to_vec(&serde_json::json!({"account_id":account_id})).unwrap(),
+    );
+    for value in ["", "approval terms", "quoted \"terms\" and unicode λ"] {
+        let expected: String = env::sha256(value.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(digest(value), expected);
+    }
+}
+
 fn request(contract: &mut Clearing, id: &str, company: &str, caller: &str) -> U64 {
     testing_env!(context(caller).build());
     let hash = contract.rounds.get(id).unwrap().hash.clone();

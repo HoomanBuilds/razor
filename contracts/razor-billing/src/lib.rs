@@ -41,6 +41,26 @@ pub struct Invoice {
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug)]
 pub struct Refund { pub id: String, pub invoice_id: String, pub amount: U128, pub status: String, pub nonce: U64 }
+#[near(serializers = [json])]
+pub struct BillingConfig {
+    pub owner_id: AccountId,
+    pub token_contract: AccountId,
+    pub network: String,
+    pub issuer_public_key: String,
+    pub paused: bool,
+    pub available: U128,
+    pub withdrawal_pending: bool,
+    pub version: u8,
+}
+#[derive(serde::Serialize)]
+struct InvoicePaidData<'a> { invoice_id: &'a str, amount: U128 }
+#[derive(serde::Serialize)]
+struct InvoicePaidEvent<'a> {
+    standard: &'static str,
+    version: &'static str,
+    event: &'static str,
+    data: [InvoicePaidData<'a>; 1],
+}
 #[ext_contract(ext_ft)]
 #[allow(dead_code)]
 trait FungibleToken { fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>); }
@@ -73,8 +93,8 @@ impl Billing {
         require!(public_key(&issuer_public_key).is_some(), "INVALID_ISSUER_KEY");
         Self { owner_id, token_contract, network, issuer_public_key, paused: false, available: 0, invoices: IterableMap::new(b"i"), refunds: IterableMap::new(b"r"), nonce: 0, withdrawal: None }
     }
-    pub fn get_config(&self) -> serde_json::Value {
-        serde_json::json!({"owner_id":self.owner_id,"token_contract":self.token_contract,"network":self.network,"issuer_public_key":self.issuer_public_key,"paused":self.paused,"available":U128(self.available),"withdrawal_pending":self.withdrawal.is_some(),"version":1})
+    pub fn get_config(&self) -> BillingConfig {
+        BillingConfig { owner_id: self.owner_id.clone(), token_contract: self.token_contract.clone(), network: self.network.clone(), issuer_public_key: self.issuer_public_key.clone(), paused: self.paused, available: U128(self.available), withdrawal_pending: self.withdrawal.is_some(), version: 1 }
     }
     pub fn get_invoice(&self, invoice_id: String) -> Option<Invoice> { self.invoices.get(&invoice_id).cloned() }
     pub fn get_refund(&self, refund_id: String) -> Option<Refund> { self.refunds.get(&refund_id).cloned() }
@@ -93,7 +113,7 @@ impl Billing {
         self.available = self.available.checked_add(offer.amount.0).expect("BALANCE_OVERFLOW");
         let invoice = Invoice { invoice_id: offer.invoice_id.clone(), company_id: offer.company_id, plan_version_id: offer.plan_version_id, payer_id: sender_id, amount: offer.amount, terms_hash: offer.terms_hash, quote_hash, paid_at_ms: U64(env::block_timestamp_ms()), paid_at_height: U64(env::block_height()), refunded_amount: U128(0), pending_refund: None };
         self.invoices.insert(offer.invoice_id.clone(), invoice);
-        env::log_str(&serde_json::json!({"standard":"razor-billing","version":"1.0.0","event":"invoice_paid","data":[{"invoice_id":offer.invoice_id,"amount":offer.amount}]}).to_string());
+        env::log_str(&serde_json::to_string(&InvoicePaidEvent { standard: "razor-billing", version: "1.0.0", event: "invoice_paid", data: [InvoicePaidData { invoice_id: &offer.invoice_id, amount: offer.amount }] }).unwrap());
         PromiseOrValue::Value(U128(amount.0 - offer.amount.0))
     }
     #[payable]
@@ -158,5 +178,13 @@ impl Billing {
 }
 fn valid_id(value: &str) -> bool { !value.is_empty() && value.len() <= 128 && value.bytes().all(|b|b.is_ascii_alphanumeric() || b == b'-' || b == b'_') }
 fn public_key(value: &str) -> Option<[u8;32]> { near_sdk::bs58::decode(value.strip_prefix("ed25519:")?).into_vec().ok()?.try_into().ok() }
-fn hex(bytes: &[u8]) -> String { bytes.iter().map(|byte|format!("{byte:02x}")).collect() }
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        output.push(DIGITS[(byte >> 4) as usize] as char);
+        output.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    output
+}
 #[cfg(test)] mod tests;

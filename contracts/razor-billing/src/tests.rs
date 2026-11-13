@@ -24,3 +24,25 @@ fn pause_does_not_block_refund_and_only_owner_can_move_revenue() { let mut billi
 fn withdrawal_failure_restores_available_once_and_never_unlocks_by_time() { let mut billing=setup();pay(&mut billing);call("owner.testnet",1);drop(billing.withdraw(U128(29_000_000)));assert_eq!(billing.available,0);assert!(catch_unwind(AssertUnwindSafe(||billing.withdraw(U128(1)))).is_err());callback(false);assert!(!billing.on_withdrawn(U64(9)));assert!(!billing.on_withdrawn(U64(1)));assert_eq!(billing.available,29_000_000);assert!(!billing.on_withdrawn(U64(1))); }
 #[test]
 fn wrong_token_and_unrecoverable_mainnet_configuration_are_rejected() { let mut billing=setup();call("fake.testnet",0);assert!(catch_unwind(AssertUnwindSafe(||billing.ft_on_transfer(account("payer.testnet"),U128(29_000_000),signed(offer())))).is_err());call("owner.testnet",0);assert!(catch_unwind(AssertUnwindSafe(||Billing::new(account("owner.testnet"),account("fake.near"),"mainnet".into(),billing.issuer_public_key.clone()))).is_err()); }
+
+#[test]
+fn typed_views_events_and_hex_preserve_exact_json_and_hash_bytes() {
+    let mut billing = setup();
+    billing.available = u128::MAX;
+    billing.paused = true;
+    billing.withdrawal = Some((1, 1));
+    let expected = serde_json::json!({"owner_id":billing.owner_id,"token_contract":billing.token_contract,"network":billing.network,"issuer_public_key":billing.issuer_public_key,"paused":billing.paused,"available":U128(billing.available),"withdrawal_pending":billing.withdrawal.is_some(),"version":1});
+    assert_eq!(serde_json::to_vec(&billing.get_config()).unwrap(), serde_json::to_vec(&expected).unwrap());
+    let invoice_id = "invoice-\"\\\n";
+    let event = InvoicePaidEvent {
+        standard: "razor-billing",
+        version: "1.0.0",
+        event: "invoice_paid",
+        data: [InvoicePaidData { invoice_id, amount: U128(u128::MAX) }],
+    };
+    let expected = serde_json::json!({"standard":"razor-billing","version":"1.0.0","event":"invoice_paid","data":[{"invoice_id":invoice_id,"amount":U128(u128::MAX)}]});
+    assert_eq!(serde_json::to_vec(&event).unwrap(), serde_json::to_vec(&expected).unwrap());
+    let bytes: Vec<u8> = (0..=255).collect();
+    assert_eq!(hex(&bytes), bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+    assert_eq!(hex(&[]), "");
+}
