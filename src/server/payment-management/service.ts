@@ -9,6 +9,8 @@ import { cancelPayment, createPayment, getPayment, getTreasury, listAttempts } f
 import { paymentBudget } from "../../lib/payment-budget";
 import { view } from "../payments/near";
 import type { ChainPayment, Payment, RecipientSnapshot, TreasuryConfig } from "../payments/types";
+import { getSupportedTokens, type Token } from "../payments/intents";
+import { recipientRouteReadiness } from "./routing";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
 interface Replacement { old_payment_id: string; new_payment_id: string; liability_kind: string; liability_id: string; reason_ciphertext: string; created_at: string }
@@ -40,8 +42,8 @@ function money(value: string, zero = false, signed = false): bigint {
 }
 
 function profile(recipient: RecipientRecord): RecipientSnapshot {
-  const { id, primary_asset, primary_network, primary_address, backup_network, backup_address, fallback_consent, version, preference_status, confirmed_at, archived } = recipient;
-  return { id, primary_asset, primary_network, primary_address, backup_network, backup_address, fallback_consent, version, preference_status, confirmed_at, archived };
+  const { id, primary_asset, primary_network, primary_address, primary_memo, backup_network, backup_address, fallback_consent, version, preference_status, confirmed_at, archived } = recipient;
+  return { id, primary_asset, primary_network, primary_address, primary_memo, backup_network, backup_address, fallback_consent, version, preference_status, confirmed_at, archived };
 }
 
 function paymentReview(access: AccessContext, payment: Payment) {
@@ -134,6 +136,26 @@ export function previewBillBatch(access: AccessContext, billIds: string[]) {
   });
   const result = { bills, total: bills.reduce((sum, bill) => sum + BigInt(bill.payment.amount), 0n).toString(), maxFees: bills.reduce((sum, bill) => sum + BigInt(bill.payment.max_fee), 0n).toString(), funding: fundingReview(access, bills.map(bill => bill.payment)) };
   return { ...result, reviewToken: digest(result) };
+}
+
+async function routingContext(access: AccessContext) {
+  requirePermission(access, "payments:read");
+  let tokens: Token[] | null = null;
+  try { tokens = await getSupportedTokens(); } catch {}
+  const disabled = new Set(rows<{ network: string }>("SELECT network FROM payment_networks WHERE organization_id=? AND enabled=0", access.organizationId).map(value => value.network));
+  return { tokens, disabled, catalog: { status: tokens ? "available" as const : "unavailable" as const, checkedAt: now(), maximumCacheAgeSeconds: 60, previewOnly: true as const } };
+}
+
+export async function payrollPreview(access: AccessContext, runId: string) {
+  payrollReview(access, runId);
+  const routing = await routingContext(access), review = payrollReview(access, runId);
+  return { ...review, routingCatalog: routing.catalog, items: review.items.map(item => ({ ...item, routeReadiness: recipientRouteReadiness(item.recordedProfile, routing.tokens, routing.disabled) })) };
+}
+
+export async function billBatchPreview(access: AccessContext, billIds: string[]) {
+  previewBillBatch(access, billIds);
+  const routing = await routingContext(access), review = previewBillBatch(access, billIds);
+  return { ...review, routingCatalog: routing.catalog, bills: review.bills.map(bill => ({ ...bill, routeReadiness: recipientRouteReadiness(bill.recordedProfile, routing.tokens, routing.disabled) })) };
 }
 
 export function approveBillBatch(access: AccessContext, billIds: string[], reviewToken: string) {

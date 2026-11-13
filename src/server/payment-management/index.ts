@@ -19,11 +19,11 @@ async function body<T extends z.ZodType>(request: Request, schema: T): Promise<z
 }
 
 paymentManagementRoutes.get("/", (c) => c.json(service.managementOverview(c.get("access"))));
-paymentManagementRoutes.get("/payroll/:id/review", (c) => c.json(service.payrollReview(c.get("access"), c.req.param("id"))));
+paymentManagementRoutes.get("/payroll/:id/review", async (c) => c.json(await service.payrollPreview(c.get("access"), c.req.param("id"))));
 paymentManagementRoutes.patch("/payroll/:id/items/:itemId", async (c) => c.json(service.adjustPayrollItem(c.get("access"), c.req.param("id"), c.req.param("itemId"), await body(c.req.raw, z.object({ expectedPaymentId: z.string().min(1), expectedTermsVersion: z.number().int().nonnegative(), baseAmount: micro, bonusAmount: micro, adjustmentAmount: signed, maxFee: micro, note: z.string().max(1000) })))));
 paymentManagementRoutes.post("/payroll/:id/approve", async (c) => c.json({ run: service.approveReviewedPayrollRun(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ reviewToken: token }))).reviewToken) }));
 paymentManagementRoutes.get("/payments/:id", (c) => c.json(service.managedPaymentReview(c.get("access"), c.req.param("id"))));
 paymentManagementRoutes.post("/payments/:id/cancel", async (c) => c.json(await service.cancelManagedPayment(c.get("access"), c.req.param("id"))));
 paymentManagementRoutes.post("/payments/:id/replace", async (c) => c.json(await service.replaceCancelledPayment(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ reason: z.string().trim().min(3).max(1000) }))).reason)));
-paymentManagementRoutes.post("/bills/preview", async (c) => c.json(service.previewBillBatch(c.get("access"), (await body(c.req.raw, z.object({ billIds: ids }))).billIds)));
+paymentManagementRoutes.post("/bills/preview", async (c) => c.json(await service.billBatchPreview(c.get("access"), (await body(c.req.raw, z.object({ billIds: ids }))).billIds)));
 paymentManagementRoutes.post("/bills/approve", async (c) => { const input = await body(c.req.raw, z.object({ billIds: ids, reviewToken: token })); return c.json(service.approveBillBatch(c.get("access"), input.billIds, input.reviewToken)); });
