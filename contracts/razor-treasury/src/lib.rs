@@ -1,4 +1,6 @@
+mod retained;
 mod types;
+pub use retained::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
 pub use types::*;
 
 use near_sdk::{
@@ -35,11 +37,20 @@ trait Callbacks {
     fn on_deposit_sync(&mut self, epoch: U64) -> U128;
     fn on_refund_verified(&mut self, payment_id: String, attempt_id: String, epoch: U64) -> bool;
     fn on_withdraw_result(&mut self, amount: U128) -> bool;
+    fn on_retained_balance_sync(&mut self, token_contract: AccountId, epoch: U64) -> bool;
+    fn on_retained_deposit_sync(&mut self, token_contract: AccountId, epoch: U64) -> U128;
+    fn on_retained_withdraw_result(
+        &mut self,
+        token_contract: AccountId,
+        withdrawal_id: U64,
+    ) -> bool;
 }
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Treasury {
+    retained_assets: IterableMap<AccountId, RetainedAsset>,
+    next_retained_withdrawal: u64,
     owner_id: AccountId,
     token_contract: AccountId,
     paused: bool,
@@ -54,6 +65,7 @@ pub struct Treasury {
     balance: u128,
     reserved: u128,
     in_flight: u128,
+    unsettled_payments: u64,
     balance_epoch: u64,
     confirmed_at_ms: u64,
     recipients: IterableMap<String, Recipient>,
@@ -82,6 +94,8 @@ impl Treasury {
         let mut backup_assets = IterableMap::new(b"b");
         backup_assets.insert("near".into(), format!("nep141:{token_contract}"));
         Self {
+            retained_assets: IterableMap::new(b"h"),
+            next_retained_withdrawal: 0,
             owner_id,
             token_contract,
             paused: false,
@@ -99,6 +113,7 @@ impl Treasury {
             balance: 0,
             reserved: 0,
             in_flight: 0,
+            unsettled_payments: 0,
             balance_epoch: 0,
             confirmed_at_ms: 0,
             recipients: IterableMap::new(b"r"),
@@ -110,6 +125,8 @@ impl Treasury {
 
     pub fn get_config(&self) -> ConfigView {
         ConfigView {
+            retained_assets_enabled: true,
+            max_retained_assets: retained::MAX_RETAINED_ASSETS,
             owner_id: self.owner_id.clone(),
             token_contract: self.token_contract.clone(),
             paused: self.paused,
@@ -313,9 +330,33 @@ impl Treasury {
     #[payable]
     pub fn transfer_ownership(&mut self, new_owner_id: AccountId) {
         self.assert_owner();
+        require!(self.paused, "OWNER_TRANSFER_REQUIRES_PAUSE");
+        require!(self.in_flight == 0, "OWNER_TRANSFER_SOURCE_PENDING");
+        require!(
+            self.unsettled_payments == 0,
+            "OWNER_TRANSFER_SETTLEMENT_PENDING"
+        );
+        require!(
+            self.retained_assets
+                .values()
+                .all(|asset| asset.in_flight.0 == 0),
+            "OWNER_TRANSFER_RETAINED_PENDING"
+        );
         require!(
             new_owner_id != env::current_account_id(),
             "OWNER_MUST_BE_RECOVERABLE"
+        );
+        let available = self
+            .approvers
+            .iter()
+            .filter(|account| *account != &new_owner_id)
+            .count()
+            + 1;
+        require!(
+            self.approval_tiers
+                .iter()
+                .all(|tier| tier.required_approvals as usize <= available),
+            "OWNER_TRANSFER_QUORUM_UNREACHABLE"
         );
         self.owner_id = new_owner_id.clone();
         self.policy_version = self
@@ -839,6 +880,10 @@ impl Treasury {
         payment.reservation = U128(0);
         self.balance -= amount;
         self.in_flight = add(self.in_flight, amount);
+        self.unsettled_payments = self
+            .unsettled_payments
+            .checked_add(1)
+            .expect("ACTIVE_PAYMENT_OVERFLOW");
         self.bump_epoch();
         payment.status = PaymentStatus::InFlight;
         self.payments.insert(payment_id.clone(), payment);
@@ -916,10 +961,12 @@ impl Treasury {
             if attempt.route.kind == RouteKind::Direct {
                 attempt.status = AttemptStatus::Delivered;
                 payment.status = PaymentStatus::Paid;
+                self.finish_unsettled_payment();
             } else {
                 attempt.status = AttemptStatus::SourceSent;
             }
         } else {
+            self.finish_unsettled_payment();
             self.balance = add(self.balance, amount);
             let spent = *self.spent_by_day.get(&attempt.sent_day.0).unwrap_or(&0);
             self.spent_by_day.insert(
@@ -975,6 +1022,7 @@ impl Treasury {
             SettlementOutcome::Delivered => {
                 attempt.status = AttemptStatus::Delivered;
                 payment.status = PaymentStatus::Paid;
+                self.finish_unsettled_payment();
             }
             SettlementOutcome::Uncertain => {
                 attempt.status = AttemptStatus::Uncertain;
@@ -1062,6 +1110,7 @@ impl Treasury {
         let lost = attempt.route.input_amount.0 - attempt.refund_amount.0;
         payment.incurred_cost = U128(add(payment.incurred_cost.0, lost));
         attempt.status = AttemptStatus::Refunded;
+        self.finish_unsettled_payment();
         if payment.incurred_cost.0 <= payment.max_fee.0 {
             let needed = add(payment.amount.0, payment.max_fee.0) - payment.incurred_cost.0;
             if self.balance >= add(self.reserved, needed) {
@@ -1110,10 +1159,11 @@ impl Treasury {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        require!(
-            env::predecessor_account_id() == self.token_contract,
-            "ONLY_TREASURY_TOKEN"
-        );
+        let token_contract = env::predecessor_account_id();
+        if token_contract != self.token_contract {
+            return self.retained_deposit(token_contract, sender_id, amount, msg);
+        }
+        require!(msg != retained::RETAIN_MESSAGE, "USDC_IS_PAYMENT_CASH");
         require!(msg.len() <= 1024, "DEPOSIT_MESSAGE_TOO_LONG");
         self.bump_epoch();
         emit(
@@ -1212,6 +1262,13 @@ impl Treasury {
 }
 
 impl Treasury {
+    fn finish_unsettled_payment(&mut self) {
+        self.unsettled_payments = self
+            .unsettled_payments
+            .checked_sub(1)
+            .expect("ACTIVE_PAYMENT_UNDERFLOW");
+    }
+
     fn is_approver(&self, account: &AccountId) -> bool {
         account == &self.owner_id || self.approvers.contains(account)
     }
