@@ -24,6 +24,25 @@ function payrun() {
   return createPayrollRun(access, { reference: `run-${next()}`, periodStart: "2026-11-01", periodEnd: "2026-11-30", items: [{ recipientId: "recipient", amount: "1000000", maxFee: "1000" }] });
 }
 
+test("approval funding previews account for existing reservations and hold unknown transfers", () => {
+  const run = payrun(), paymentId = run.items[0].payment_id;
+  const initial = payrollReview(access, run.id);
+  assert.equal(initial.funding.shortfall, "1001000");
+  const now = new Date().toISOString();
+  getDb().prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,updated_at) VALUES('org','1000000','0',?) ON CONFLICT(organization_id) DO UPDATE SET balance='1000000',reserved='0'").run(now);
+  assert.equal(payrollReview(access, run.id).funding.shortfall, "1000");
+  assert.throws(() => approveReviewedPayrollRun(access, run.id, initial.reviewToken), /changed after review/);
+  getDb().prepare("UPDATE payments SET reserved_amount='1001000',status='approved' WHERE id=?").run(paymentId);
+  const reserved = payrollReview(access, run.id).funding;
+  assert.equal(reserved.unreserved, "0");
+  assert.equal(reserved.alreadyReserved, "1001000");
+  getDb().prepare("UPDATE payments SET reserved_amount='0',status='unknown' WHERE id=?").run(paymentId);
+  const unknown = payrollReview(access, run.id).funding;
+  assert.equal(unknown.unreserved, "0");
+  assert.equal(unknown.awaitingReconciliation, "1001000");
+  getDb().prepare("UPDATE treasury_balances SET balance='0',reserved='0' WHERE organization_id='org'").run();
+});
+
 test("draft net adjustments invalidate old approval reviews and lock after approval", () => {
   const created = payrun(), review = payrollReview(access, created.id), item = review.items[0];
   const adjusted = adjustPayrollItem(access, created.id, item.id, { expectedPaymentId: item.payment.id, expectedTermsVersion: 0, baseAmount: "1000000", bonusAmount: "200000", adjustmentAmount: "-50000", maxFee: "1000", note: "Supplied bonus and net correction" });

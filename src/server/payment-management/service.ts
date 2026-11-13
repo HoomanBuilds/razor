@@ -5,7 +5,8 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { getRecipient, type RecipientRecord } from "../identity/recipients";
 import { approveBill, approvePayrollRun, getPayrollRun } from "../business/service";
 import { addBillInstallment } from "../business/bill-terms";
-import { cancelPayment, createPayment, getPayment, listAttempts } from "../payments/service";
+import { cancelPayment, createPayment, getPayment, getTreasury, listAttempts } from "../payments/service";
+import { paymentBudget } from "../../lib/payment-budget";
 import { view } from "../payments/near";
 import type { ChainPayment, Payment, RecipientSnapshot, TreasuryConfig } from "../payments/types";
 
@@ -15,6 +16,17 @@ interface Run { id: string; reference: string; period_start: string; period_end:
 interface Item { id: string; run_id: string; recipient_id: string; amount: string; max_fee: string; note: string | null; payment_id: string }
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const now = () => new Date().toISOString();
+
+function fundingReview(access: AccessContext, payments: Payment[]) {
+  const treasury = getTreasury(access);
+  const budgets = payments.map(paymentBudget);
+  const unreserved = budgets.reduce((sum, value) => sum + value.unreserved, 0n);
+  const awaitingReconciliation = budgets.reduce((sum, value) => sum + value.awaitingReconciliation, 0n);
+  const alreadyReserved = budgets.reduce((sum, value) => sum + value.remaining - value.unreserved - value.awaitingReconciliation, 0n);
+  const shortfall = unreserved - BigInt(treasury.available);
+  return { unreserved: unreserved.toString(), alreadyReserved: alreadyReserved.toString(), awaitingReconciliation: awaitingReconciliation.toString(),
+    available: treasury.available, shortfall: (shortfall > 0n ? shortfall : 0n).toString(), treasuryConfigured: !!treasury.config, lastSyncedAt: treasury.lastSyncedAt };
+}
 
 function audit(access: AccessContext, action: string, entityId: string, details: unknown) {
   getDb().prepare("INSERT INTO payment_management_audit(id,organization_id,actor_id,action,entity_id,details_ciphertext,created_at) VALUES(?,?,?,?,?,?,?)").run(randomUUID(), access.organizationId, access.userId, action, entityId, encrypt(JSON.stringify(details)), now());
@@ -71,7 +83,7 @@ export function payrollReview(access: AccessContext, runId: string) {
     const old = history(access, "payroll_item", item.id, payment);
     return { id: item.id, recipientId: item.recipient_id, amount: item.amount, maxFee: payment.max_fee, originalFeeBudget: item.max_fee, terms: itemTerms(item), ...review, canAdjust: run.status === "draft" && !run.approved_by && payment.status === "draft" && !payment.approved_at && !listAttempts(access, payment.id).length, history: old.payments.map((entry) => ({ id: entry.id, status: entry.status, amount: entry.amount, maxFee: entry.max_fee, spent: entry.total_spent, recipientVersion: entry.recipient_version, createdAt: entry.created_at })) };
   });
-  const result = { run, items, total: items.reduce((sum, item) => sum + BigInt(item.amount), 0n).toString(), maxFees: items.reduce((sum, item) => sum + BigInt(item.maxFee), 0n).toString() };
+  const result = { run, items, total: items.reduce((sum, item) => sum + BigInt(item.amount), 0n).toString(), maxFees: items.reduce((sum, item) => sum + BigInt(item.maxFee), 0n).toString(), funding: fundingReview(access, items.map(item => item.payment)) };
   return { ...result, reviewToken: digest(result) };
 }
 
@@ -120,7 +132,7 @@ export function previewBillBatch(access: AccessContext, billIds: string[]) {
     if (!bill || !bill.payment_id) throw new ApiError(404, "Invoice or its payment draft was not found", "BILL_NOT_FOUND");
     return { ...bill, title: decrypt(bill.title), acceptance_evidence: undefined, acceptanceEvidence: bill.acceptance_evidence ? decrypt(bill.acceptance_evidence) : null, ...paymentReview(access, getPayment(access, bill.payment_id)) };
   });
-  const result = { bills, total: bills.reduce((sum, bill) => sum + BigInt(bill.payment.amount), 0n).toString(), maxFees: bills.reduce((sum, bill) => sum + BigInt(bill.payment.max_fee), 0n).toString() };
+  const result = { bills, total: bills.reduce((sum, bill) => sum + BigInt(bill.payment.amount), 0n).toString(), maxFees: bills.reduce((sum, bill) => sum + BigInt(bill.payment.max_fee), 0n).toString(), funding: fundingReview(access, bills.map(bill => bill.payment)) };
   return { ...result, reviewToken: digest(result) };
 }
 
