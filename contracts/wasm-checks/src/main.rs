@@ -534,6 +534,354 @@ fn check_billing(baseline: &Path, optimized: &Path) -> Value {
     pair.report()
 }
 
+fn actual_call(
+    instance: &mut Instance,
+    calls: &mut usize,
+    caller: &str,
+    method: &str,
+    args: Value,
+    deposit: u128,
+    error: Option<&str>,
+    promise: Option<Result<Vec<u8>, ()>>,
+) -> Value {
+    let result = instance.call(caller, method, &args, deposit, promise);
+    if let Some(expected) = error {
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains(expected)),
+            "{method}: expected {expected}, got {:?}",
+            result.error
+        );
+    } else {
+        assert!(
+            result.error.is_none(),
+            "{method} failed: {:?}",
+            result.error
+        );
+    }
+    *calls += 1;
+    result.value
+}
+
+fn check_shared_treasury(directory: &Path) -> Value {
+    let mut instance = Instance::new(
+        "treasury.near".into(),
+        fs::read(directory.join("razor_treasury.wasm")).expect("Missing shared treasury artifact"),
+    );
+    let mut calls = 0;
+    let scope = |organization: &str, owner: &str| {
+        let suffix = Sha256::digest(owner.as_bytes())
+            .iter()
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!("{organization}:{suffix}")
+    };
+    let a = scope("11111111-1111-4111-8111-111111111111", "alice.near");
+    let b = scope("22222222-2222-4222-8222-222222222222", "bob.near");
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "operator.near",
+        "new",
+        json!({"owner_id":"operator.near","token_contract":TOKEN}),
+        0,
+        None,
+        None,
+    );
+    let platform = actual_call(
+        &mut instance,
+        &mut calls,
+        "operator.near",
+        "get_platform_config",
+        json!({}),
+        0,
+        None,
+        None,
+    );
+    assert_eq!(platform["architecture"], "shared_v1");
+    for (company, owner) in [(&a, "alice.near"), (&b, "bob.near")] {
+        let quote = actual_call(
+            &mut instance,
+            &mut calls,
+            owner,
+            "quote_registration",
+            json!({"company_id":company}),
+            0,
+            None,
+            None,
+        );
+        let deposit = quote["minimum_deposit"]
+            .as_str()
+            .unwrap()
+            .parse::<u128>()
+            .unwrap();
+        let args =
+            json!({"company_id":company,"per_payment_limit":"100000000","daily_limit":"200000000"});
+        actual_call(
+            &mut instance,
+            &mut calls,
+            "stranger.near",
+            "register_company",
+            args.clone(),
+            deposit,
+            Some("COMPANY_OWNER_BINDING_MISMATCH"),
+            None,
+        );
+        let config = actual_call(
+            &mut instance,
+            &mut calls,
+            owner,
+            "register_company",
+            args.clone(),
+            deposit,
+            None,
+            None,
+        );
+        assert_eq!(config["owner_id"], owner);
+        assert_eq!(config["company_id"], *company);
+        actual_call(
+            &mut instance,
+            &mut calls,
+            owner,
+            "register_company",
+            args,
+            deposit,
+            Some("COMPANY_ALREADY_REGISTERED"),
+            None,
+        );
+    }
+    let funding = |company: &str, id: &str, amount: &str| json!({"sender_id":"intents.near","amount":amount,"msg":json!({"company_id":company,"deposit_id":id,"kind":"funding"}).to_string()});
+    assert_eq!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            TOKEN,
+            "ft_on_transfer",
+            funding(&a, "deposit-one", "1000000"),
+            0,
+            None,
+            None
+        ),
+        "0"
+    );
+    assert_eq!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            TOKEN,
+            "ft_on_transfer",
+            funding(&b, "deposit-two", "2000000"),
+            0,
+            None,
+            None
+        ),
+        "0"
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        TOKEN,
+        "ft_on_transfer",
+        funding(&b, "deposit-one", "1000000"),
+        0,
+        Some("DEPOSIT_ID_REUSED"),
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "wrong-token.near",
+        "ft_on_transfer",
+        funding(&a, "deposit-three", "1000000"),
+        0,
+        Some("DEPOSIT_KIND_TOKEN_MISMATCH"),
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        TOKEN,
+        "ft_on_transfer",
+        json!({"sender_id":"intents.near","amount":"1","msg":""}),
+        0,
+        Some("SCOPED_DEPOSIT_MESSAGE_REQUIRED"),
+        None,
+    );
+    assert!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            "bob.near",
+            "get_deposit",
+            json!({"company_id":b,"deposit_id":"deposit-one"}),
+            0,
+            None,
+            None
+        )
+        .is_null()
+    );
+    assert_eq!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            "alice.near",
+            "get_deposit",
+            json!({"company_id":a,"deposit_id":"deposit-one"}),
+            0,
+            None,
+            None
+        )["amount"],
+        "1000000"
+    );
+    for (company, amount) in [(&a, "1000000"), (&b, "2000000")] {
+        assert_eq!(
+            actual_call(
+                &mut instance,
+                &mut calls,
+                "reader.near",
+                "get_balance",
+                json!({"company_id":company}),
+                0,
+                None,
+                None
+            )["balance"],
+            amount
+        );
+    }
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "alice.near",
+        "withdraw_available",
+        json!({"company_id":b,"receiver_id":"alice.near","amount":"1"}),
+        1,
+        Some("ONLY_OWNER"),
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "alice.near",
+        "withdraw_available",
+        json!({"company_id":a,"receiver_id":"alice.near","amount":"100000"}),
+        1,
+        None,
+        None,
+    );
+    let callback = json!({"company_id":a,"withdrawal_id":"1","amount":"100000"});
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "treasury.near",
+        "on_withdraw_result",
+        callback.clone(),
+        0,
+        None,
+        Some(Err(())),
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "treasury.near",
+        "on_withdraw_result",
+        callback,
+        0,
+        None,
+        Some(Err(())),
+    );
+    assert_eq!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            "reader.near",
+            "get_balance",
+            json!({"company_id":a}),
+            0,
+            None,
+            None
+        )["balance"],
+        "1000000"
+    );
+    assert_eq!(
+        actual_call(
+            &mut instance,
+            &mut calls,
+            "reader.near",
+            "get_balance",
+            json!({"company_id":b}),
+            0,
+            None,
+            None
+        )["balance"],
+        "2000000"
+    );
+    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_replay_protected":true,"withdrawal_callback_replay_protected":true})
+}
+
+fn check_shared_clearing(directory: &Path) -> Value {
+    let mut instance = Instance::new(
+        "clearing.near".into(),
+        fs::read(directory.join("razor_clearing.wasm")).expect("Missing clearing artifact"),
+    );
+    let mut calls = 0;
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "operator.near",
+        "new",
+        json!({"owner_id":"operator.near","treasury_id":"treasury.near","token_contract":TOKEN}),
+        0,
+        None,
+        None,
+    );
+    let config = actual_call(
+        &mut instance,
+        &mut calls,
+        "reader.near",
+        "get_config",
+        json!({}),
+        0,
+        None,
+        None,
+    );
+    assert_eq!(config["treasury_id"], "treasury.near");
+    assert!(config.get("factory_id").is_none());
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "stranger.near",
+        "set_paused",
+        json!({"paused":true}),
+        1,
+        Some("ONLY_OWNER"),
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "operator.near",
+        "set_paused",
+        json!({"paused":true}),
+        1,
+        None,
+        None,
+    );
+    actual_call(
+        &mut instance,
+        &mut calls,
+        "operator.near",
+        "register_round",
+        json!({"manifest_json":"{}","manifest_hash":"a".repeat(64)}),
+        YOCTO,
+        Some("PAUSED"),
+        None,
+    );
+    json!({"contract":"shared_clearing","actual_wasm_calls":calls})
+}
+
 fn main() {
     assert_eq!(
         env::var("RAYON_NUM_THREADS").as_deref(),
@@ -541,7 +889,25 @@ fn main() {
         "Run with RAYON_NUM_THREADS=1 to bound runtime compilation"
     );
     let mut args = env::args_os().skip(1);
-    let baseline = PathBuf::from(args.next().expect("Pass baseline artifact directory"));
+    let first = args
+        .next()
+        .expect("Pass --shared ARTIFACT_DIRECTORY or BASELINE OPTIMIZED");
+    if first == "--shared" {
+        let directory = PathBuf::from(args.next().expect("Pass shared artifact directory"));
+        assert!(
+            args.next().is_none(),
+            "Pass only --shared and its artifact directory"
+        );
+        let treasury = check_shared_treasury(&directory);
+        let clearing = check_shared_clearing(&directory);
+        let billing = check_billing(&directory, &directory);
+        println!(
+            "{}",
+            json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","architecture":"shared_v1","actual_wasm":true,"live_network":false,"results":[treasury,clearing,billing]})
+        );
+        return;
+    }
+    let baseline = PathBuf::from(first);
     let optimized = PathBuf::from(args.next().expect("Pass optimized artifact directory"));
     assert!(
         args.next().is_none(),

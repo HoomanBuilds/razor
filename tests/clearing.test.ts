@@ -15,9 +15,9 @@ process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "61".repeat(32);
 process.env.NEAR_NETWORK = "testnet";
 process.env.NEAR_CLEARING_ID = "clearing.testnet";
-process.env.NEAR_FACTORY_ID = "factory.testnet";
+process.env.NEAR_TREASURY_ID = "treasury.testnet";
 const codeHash = base58.encode(new Uint8Array(32).fill(6));
-for (const key of ["NEAR_CLEARING_CODE_HASH", "NEAR_FACTORY_CODE_HASH", "NEAR_TREASURY_CODE_HASH"]) process.env[key] = codeHash;
+for (const key of ["NEAR_CLEARING_CODE_HASH", "NEAR_TREASURY_CODE_HASH"]) process.env[key] = codeHash;
 let sequence = 0;
 const next = () => String(++sequence);
 const permissions = ["company:read", "company:manage", "payments:read", "payments:prepare", "payments:approve", "payments:execute", "reports:read"];
@@ -25,8 +25,8 @@ function company(): AccessContext {
   const id = `company-${next()}`, userId = `owner-${next()}`, now = new Date().toISOString(), db = getDb();
   db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(userId, userId, now);
   db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(id, id, userId, now, now);
-  db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,'testnet','usdc.testnet',?)").run(id, `${id}.testnet`, now);
-  db.prepare("INSERT INTO clearing_companies(organization_id,owner_user_id,treasury_id,owner_account_id,policy_version,network,token_contract,created_at,updated_at) VALUES(?,?,?,?,'1','testnet','usdc.testnet',?,?)").run(id, userId, `${id}.testnet`, `${userId}.testnet`, now, now);
+  db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,architecture,company_id,created_at) VALUES(?,'treasury.testnet','testnet','usdc.testnet','shared_v1',?,?)").run(id, `${id}:aaaaaaaaaaaaaaaa`, now);
+  db.prepare("INSERT INTO clearing_companies(organization_id,owner_user_id,treasury_id,owner_account_id,policy_version,network,token_contract,created_at,updated_at) VALUES(?,?,?,?,'1','testnet','usdc.testnet',?,?)").run(id, userId, "treasury.testnet", `${userId}.testnet`, now, now);
   return { organizationId: id, userId, permissions };
 }
 function invoice(access: AccessContext, amount: string, kind = "business", creditor?: AccessContext) {
@@ -115,10 +115,9 @@ test("only complete pinned final NEAR consent permits atomic setoff and ordinary
       else {
         let value:unknown;
         if(params.method_name==="get_round")value=chain;
-        else if(params.account_id==="clearing.testnet")value={factory_id:"factory.testnet",token_contract:"usdc.testnet",paused:false};
-        else if(params.method_name==="get_creation")value={account_id:JSON.parse(Buffer.from(params.args_base64,"base64").toString()).account_id,token_contract:"usdc.testnet",status:"ready"};
-        else if(params.account_id==="factory.testnet")value={token_contract:"usdc.testnet",treasury_wasm_hash:codeHash};
-        else {const party=local.manifest.participants.find(party=>party.treasury_id===params.account_id)!;value={owner_id:staleOwner?"stale-owner.testnet":party.owner_id,token_contract:"usdc.testnet",policy_version:party.policy_version,paused:false};}
+        else if(params.account_id==="clearing.testnet")value={treasury_id:"treasury.testnet",token_contract:"usdc.testnet",paused:false};
+        else if(params.method_name==="get_platform_config")value={architecture:"shared_v1",token_contract:"usdc.testnet"};
+        else {const companyId=JSON.parse(Buffer.from(params.args_base64,"base64").toString()).company_id,party=local.manifest.participants.find(party=>party.treasury_company_id===companyId)!;value={architecture:"shared_v1",company_id:companyId,owner_id:staleOwner?"stale-owner.testnet":party.owner_id,token_contract:"usdc.testnet",policy_version:party.policy_version,paused:false};}
         result={result:[...Buffer.from(JSON.stringify(value))]};
       }
     }
@@ -169,7 +168,7 @@ test("an unregistered proposal can publish an exact revocation tombstone and exp
     if(method==="status")result={chain_id:"testnet"};
     else if(method==="block")result={header:{hash:"fixture-expiry-block-not-live",height:101,timestamp_nanosec:String((expired?BigInt(local.manifest.expires_at_ms):BigInt(Date.now()))*1000000n)}};
     else if(params.request_type==="view_account")result={code_hash:codeHash};
-    else {const value=params.method_name==="get_round"?null:params.method_name==="registration_cost"?"20000":params.account_id==="clearing.testnet"?{factory_id:"factory.testnet",token_contract:"usdc.testnet",paused:false}:{token_contract:"usdc.testnet",treasury_wasm_hash:codeHash};result={result:[...Buffer.from(JSON.stringify(value))]};}
+    else {const value=params.method_name==="get_round"?null:params.method_name==="registration_cost"?"20000":params.account_id==="clearing.testnet"?{treasury_id:"treasury.testnet",token_contract:"usdc.testnet",paused:false}:{architecture:"shared_v1",token_contract:"usdc.testnet"};result={result:[...Buffer.from(JSON.stringify(value))]};}
     return Response.json({result});
   };
   try {

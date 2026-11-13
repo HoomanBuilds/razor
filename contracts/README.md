@@ -1,70 +1,54 @@
-# NEAR contracts and self-service setup
+# Shared NEAR treasury and company registration
 
-`razor-treasury` holds company USDC, enforces approvals and budgets, and funds exact NEAR Intents routes. `razor-factory` lets a payer create a treasury from their own NEAR wallet. The deployed child has no access keys; the caller's existing NEAR account becomes its contract owner. The factory receives no authority to spend its USDC.
+`razor-treasury` is deployed once. It holds separately accounted company balances and enforces each company's owner, approval policy, budgets, recipients, exact payment attempts and recovery states. Company activation registers state inside that contract, without creating another NEAR account or copying its WASM code.
 
-## Build
+`razor-clearing` verifies each participant's registration in that shared treasury before accepting invoice-setoff consent or finalization. Optional subscription collection uses `razor-billing`. The old `razor-factory` source is retained as legacy reference and is excluded from the supported build/deployment path. It must not be used to deploy the shared contract as an isolated child.
 
-```sh
-./contracts/build.sh
-```
+## Build and verify
 
-Requires Node 24.22.1 or later, Rust 1.86 or newer, the installed `wasm32-unknown-unknown` target and [Binaryen version 130](https://github.com/WebAssembly/binaryen/releases/tag/version_130). Put `wasm-opt` on PATH or set `WASM_OPT` to its executable. The contracts pin near-sdk to 5.26.1.
-
-The script builds and optimizes the treasury first, embeds those exact optimized bytes into the factory, then builds and optimizes factory, clearing and billing. Binaryen uses `-Oz`, strips debug/function names and producer metadata, and preserves the compiler's WebAssembly feature metadata. Factory memory packing is skipped so the embedded treasury remains byte-verifiable. Overflow checks, financial guards, serialized state and public methods remain intact.
-
-Artifacts are staged and validated before publication under ignored `.tools/wasm`. The manifest records the optimizer version and final deployment hashes. Use these optimized artifacts for deployment; raw Cargo target files have different sizes and hashes. The build shares the application compiler lock, uses one Cargo job and one optimizer thread, and applies the same available-memory guard. Set `CARGO_TARGET_DIR` to reuse a build cache. No binary needs to be committed.
-
-For focused checks:
+Use Rust with the `wasm32-unknown-unknown` target and Binaryen `wasm-opt` version 130. Check available memory and stop development servers before building. The guarded scripts serialize compiler activity and use one Rust build job.
 
 ```sh
-CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/razor-treasury/Cargo.toml --lib
-RAZOR_TREASURY_WASM="$PWD/.tools/wasm/razor_treasury.wasm" CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo test --locked --jobs 1 --manifest-path contracts/razor-factory/Cargo.toml --lib
+bash contracts/build.sh
+bash contracts/check.sh
 ```
 
-Run all four native suites through the shared memory/compilation guard with `bash contracts/check.sh`. Pass a baseline artifact directory as its optional argument to also run the actual-Wasm comparison.
+The build optimizes treasury, clearing and billing separately, validates the WASMs and publishes their hashes in `.tools/wasm/manifest.json` with architecture `shared_v1`. Artifacts and compiler caches remain ignored. Deployment planning verifies each exact file against this manifest; legacy manifests are rejected.
 
-Tests run locally with NEAR's SDK. They do not deploy or spend funds.
+The native checks exercise financial state machines and company isolation. The optional actual-WASM runtime tool is documented in [wasm-checks/README.md](wasm-checks/README.md). These are local checks, not live settlement or measured mainnet gas evidence.
 
-For changes to code generation or optimization, the optional [built Wasm compatibility tool](wasm-checks/README.md) compares real baseline and optimized modules using NEAR's local runtime. Its results supplement native unit checks and do not establish live mainnet execution.
+## Operator deployment
 
-The dedicated [billing contract](razor-billing/README.md) collects optional software subscriptions separately from company funds. Its deployment is optional in the planner until paid checkout is enabled.
+Choose distinct funded shared-treasury, clearing and owner accounts. Generate unsigned deployment commands with:
 
-## Platform setup
-
-An operator must deploy `razor_factory.wasm` to a funded NEAR account and initialize it atomically with:
-
-```json
-{
-  "owner_id": "factory-admin.testnet",
-  "token_contract": "verified-native-usdc.testnet"
-}
+```sh
+npm run prepare:deployment -- --network mainnet --treasury YOUR_TREASURY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near
 ```
 
-The token account above is a placeholder. Verify the genuine native USDC contract for the selected network and ensure the application uses the same network and token. The factory's token choice is fixed at initialization. Initialize the factory in the deployment transaction to avoid an uninitialized deployment being claimed by someone else.
+The treasury initializes atomically with `new({owner_id,token_contract})`. Clearing initializes with `new({owner_id,treasury_id,token_contract})`. The planner fixes mainnet to canonical native NEAR USDC. Testnet requires `--testnet-token`; it cannot establish live Intents support. Add the billing arguments documented in [billing operations](../docs/billing-operations.md) when using paid checkout.
 
-The operator must fund the factory's own deployed code/storage stake and native NEAR gas reserve. Configure its account in the application's environment for that network. This repository does not publish a factory address or claim that a factory has been deployed.
+Create fresh deployment accounts, review code-storage stake and gas, and deploy with initialization in the same transaction. Register the shared treasury on its USDC token once using the token's live `storage_balance_bounds` and `storage_deposit`. Verify code, configuration and registration with `npm run check:setup -- --remote`. No contract deployment or funds are created by the planner or preflight.
 
-## Payer setup
+Set `NEAR_TREASURY_ID`, `NEAR_TREASURY_CODE_HASH`, `NEAR_CLEARING_ID` and `NEAR_CLEARING_CODE_HASH` from the reviewed deployment. This is a new storage layout and ABI; do not deploy it over an existing isolated treasury, factory or clearing state. Existing funds require a separate explicit migration or withdrawal workflow.
 
-1. Connect the payer's NEAR wallet and call `get_config({})` on the configured factory. Verify its token, pause state and embedded treasury hash against the reviewed artifact. `treasury_wasm_hash` is base58 SHA-256, matching NEAR's RPC `code_hash` encoding.
-2. Call `quote_creation({owner_id,slug})` as a view. The owner must be the wallet account that will submit creation. Slugs contain 1 to 24 lowercase letters, digits or hyphens and cannot start or end with a hyphen. The generated account also contains an owner hash, and its full NEAR account ID must fit 64 characters.
-3. Sign `create_treasury({slug,per_payment_limit,daily_limit})` with the quoted `minimum_deposit` and 150 Tgas. Monetary limits are microUSDC strings. The owner is always the predecessor wallet, not a freely supplied argument.
-4. Poll `get_treasury({owner_id,slug})`. Only `status: "ready"` proves the account, code and initialization batch succeeded. Duplicate owner/slug requests are rejected before another deployment is scheduled.
-5. Query `storage_balance_bounds({})` on native USDC and `storage_balance_of({account_id})`. If unregistered, sign the token's `storage_deposit({account_id,registration_only:true})` with the live minimum. Treasury creation does not register token storage or prove cash has arrived.
-6. Verify the child with `get_config`, then save the company-to-treasury association. The owner can appoint approvers, executors and an optional trusted settlement reporter, then configure amount-dependent distinct-wallet approval tiers. Fresh treasuries require one approval until the owner changes that policy. Other NEAR and external-chain funding assets enter through NEAR Intents before becoming treasury USDC.
+A deployment account with a full-access key can replace contract code. After code/configuration verification, token registration and owner-role setup, review and remove every access key from the deployed contract accounts before company funding. Confirm an empty `view_access_key_list` at finality. This makes code immutable and removes future upgrade/account-deletion access; separate company and platform owner accounts retain their contract roles. Do not remove keys from those owner wallets. The unsigned planner includes this key-retirement checklist, and remote setup blocks a shared treasury with remaining keys. Shared code concentrates the impact of an implementation defect. Company isolation must be checked in both the contract and application.
 
-The creation quote returns `account_id`, `owner_id`, `token_contract`, `treasury_wasm_hash`, `minimum_deposit`, `treasury_funding` and `factory_storage_fee`. All deposit fields are decimal yoctoNEAR strings, including the minimum. The minimum covers deployed code bytes, 8 KiB of initial treasury state, a 0.05 NEAR operating reserve and 2 KiB of factory record storage. Code storage makes this larger than a token transfer. Quote the live amount in the UI. Gas and token storage registration are separate. Any amount above the minimum goes to the child; the factory retains its disclosed record-storage allowance.
+## Company activation
 
-## Creation recovery
+1. Sign in and create the application company, then link and verify its NEAR owner wallet.
+2. Razor binds the company to an onchain ID formed from its organization UUID and the hash suffix of its initial owner. The identifier stays fixed through ownership transfer.
+3. Read `get_platform_config()` and `quote_registration({company_id})`. Check the reviewed code hash, `architecture: "shared_v1"`, native settlement token, registration allowance and selected network.
+4. Sign `register_company({company_id,per_payment_limit,daily_limit})` with the quoted storage deposit. Limits are microUSDC strings. The owner comes from the transaction predecessor; it is not a client-supplied owner argument.
+5. Confirm the final `get_company({company_id})` record and save the shared account plus exact onchain company ID. Every later config, balance, payment and callback is company-scoped.
 
-`get_creation({account_id})` and `get_treasury({owner_id,slug})` return the same record: account, owner, slug, generation, token, monetary limits, `status`, `treasury_funding`, `factory_storage_fee`, `refund_amount` and `created_at_ms`. Status is `pending`, `ready`, `failed`, `refunding` or `refunded`.
+The registration deposit funds the company's initial state allowance. It excludes another code deployment or account creation. Gas remains additional. `get_storage({company_id})` reports storage credit, used and available values in yoctoNEAR; `add_storage({company_id})` funds further history. Neither operation deposits USDC or pays a software subscription.
 
-A failed atomic create/deploy/init batch records a claim for the full forwarded treasury funding. Its native NEAR refund may arrive after the callback. The owner calls `claim_refund({slug})` with exactly 1 yoctoNEAR and at least 40 Tgas once the factory has available cash. Only that owner's failed record can be claimed. A failed refund transfer restores the claim. The factory's record-storage allowance remains with the factory. After `refunded`, the same owner and slug can be created again with a new generation; stale callbacks cannot change it.
+## Funding, execution and recovery
 
-For a missing creation callback, `refresh_creation({owner_id,slug})` with zero deposit and at least 40 Tgas probes the child's initialized configuration. A matching owner, token and limits recover `ready`. A failed probe remains `pending`, since lack of a response cannot prove the original batch will never create the account. There is no automatic timeout refund. A missing refund-transfer callback remains `refunding` and needs operator investigation of its final NEAR receipt; the contract never unlocks a second refund on a timer.
+NEP-141 funding uses `ft_transfer_call` with a strict message identifying the company and unique deposit ID. Cross-chain funding asks NEAR Intents for the same `customRecipientMsg`. The provider quote must preserve that message and the shared destination. Credit is proven by the final token receipt plus `get_deposit({company_id,deposit_id})`, not a pooled account balance or client-submitted transaction hash alone.
 
-The factory admin can pause new creation with `set_paused({paused})` and exactly 1 yoctoNEAR. Pausing leaves status reads and recovery available. Private callback methods are internal.
+Direct transfers without attribution are not assigned to a company. Company refresh reads its contract ledger and never copies `ft_balance_of(shared-account)` into one company's cash. A duplicate deposit ID cannot credit a second company.
 
-Payment settlement, refund trust boundaries and the complete treasury ABI are documented in [razor-treasury/README.md](razor-treasury/README.md). Company balances remain public on NEAR. The factory creates immutable keyless children; changing their deployed code is not supported by this version.
+Approvals, execution, retained assets, callbacks, withdrawals and refunds carry the exact onchain company ID. The platform refund reporter is a trusted attribution role for unmatched external refunds; it must verify final evidence before submitting a globally deduplicated refund claim. Global liabilities and pending transfers remain protected. A missing callback or unknown route does not permit a second payout.
 
-Full external delivery calls now include `actual_output` in destination base units: `report_settlement({payment_id,attempt_id,outcome:"delivered",receipt,actual_output})`. Missing or short output cannot close a payment as paid. Terminal short delivery uses the separate `report_partial_settlement({payment_id,attempt_id,expected_quote_hash,actual_output,credited_amount,route_closed:true,receipt})` interface. `credited_amount` is an explicitly reviewed microUSDC entitlement credit. The application records this terminal result before preparing an independently approved remainder. See the treasury ABI for output bounds, reporter trust and deployment compatibility.
+Private payroll documents and identity records remain offchain. NEAR balances, calls and settlement amounts are public. See [treasury ABI](razor-treasury/README.md) for the complete financial methods and trust boundaries.

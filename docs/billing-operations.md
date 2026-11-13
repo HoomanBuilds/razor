@@ -10,7 +10,7 @@ The initial offers are 29 USDC/month with 10 finance seats and 50 shared private
 
 ## Dedicated NEAR deployment
 
-The billing owner is a merchant operator wallet. It is separate from company treasuries, the factory, the clearing account and the server's offer-signing key. Generate a dedicated issuer secret into a new ignored private file:
+The billing owner is a merchant operator wallet. It is separate from the shared company treasury, the clearing account and the server's offer-signing key. Generate a dedicated issuer secret into a new ignored private file:
 
 ```sh
 npm run billing:admin -- issuer-key --output .data/billing-issuer.env
@@ -21,7 +21,7 @@ This prints only the public key and secret file path. It writes a new file with 
 Build contracts serially with `bash contracts/build.sh`, then prepare an unsigned atomic deployment using valid accounts you control:
 
 ```sh
-npm run prepare:deployment -- --network mainnet --factory YOUR_FACTORY.near --clearing YOUR_CLEARING.near --owner YOUR_OPERATOR.near --billing YOUR_BILLING.near --issuer-public-key YOUR_ED25519_PUBLIC_KEY
+npm run prepare:deployment -- --network mainnet --treasury YOUR_TREASURY.near --clearing YOUR_CLEARING.near --owner YOUR_OPERATOR.near --billing YOUR_BILLING.near --issuer-public-key YOUR_ED25519_PUBLIC_KEY
 ```
 
 The public issuer uses the `ed25519:` prefix. Replace placeholders before using the command. The planner verifies all artifacts and never signs or sends. Fund deployment/storage and gas through your operator tooling. Register the billing contract's token storage on canonical native NEAR USDC, and register the operator and any payer that needs token storage before their transfer. The contract owner cannot be the billing contract itself. Configure:

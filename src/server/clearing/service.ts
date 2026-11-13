@@ -23,8 +23,8 @@ function registration(id: string): Registration {
   const value = row<Registration>("SELECT * FROM clearing_companies WHERE organization_id=? AND enabled=1", id);
   if (!value || row<{ owner_id: string }>("SELECT owner_id FROM organizations WHERE id=?", id)?.owner_id !== value.owner_user_id) throw new ApiError(409, "Every participant must opt in through its current company and treasury owner", "CLEARING_PARTICIPATION_REQUIRED");
   const treasury = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", id);
-  if (!treasury || treasury.near_account_id !== value.treasury_id || treasury.network !== value.network || treasury.token_contract !== value.token_contract) throw new ApiError(409, "A participant's treasury changed after registration", "CLEARING_REGISTRATION_STALE");
-  return value;
+  if (!treasury || treasury.near_account_id !== value.treasury_id || treasury.network !== value.network || treasury.token_contract !== value.token_contract || treasury.architecture !== "shared_v1" || !treasury.company_id?.startsWith(`${id}:`)) throw new ApiError(409, "A participant's treasury changed after registration", "CLEARING_REGISTRATION_STALE");
+  return {...value,treasury_company_id:treasury.company_id};
 }
 
 export async function setParticipation(access: AccessContext, enabled: boolean) {
@@ -32,9 +32,9 @@ export async function setParticipation(access: AccessContext, enabled: boolean) 
   if (!enabled) { getDb().prepare("UPDATE clearing_companies SET enabled=0,version=version+1,updated_at=? WHERE organization_id=?").run(now(), access.organizationId); return { enabled: false }; }
   const context = await finalContext(), treasury = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   if (!treasury) throw new ApiError(409, "Connect the company NEAR treasury before opting in", "TREASURY_SETUP_REQUIRED");
-  const config = await context.view<{ owner_id: string; policy_version: string }>(treasury.near_account_id, "get_config");
+  const config = await context.view<{ owner_id: string; policy_version: string }>(treasury.near_account_id, "get_config", {company_id: treasury.company_id});
   if (!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, config.owner_id, treasury.network)) throw new ApiError(403, "Verify the NEAR wallet that owns this treasury", "TREASURY_OWNER_UNVERIFIED");
-  const record: Registration = { organization_id: access.organizationId, owner_user_id: access.userId, treasury_id: treasury.near_account_id, owner_account_id: config.owner_id, policy_version: config.policy_version, token_contract: treasury.token_contract, network: treasury.network, enabled: 1, version: 1 };
+  const record: Registration = { organization_id: access.organizationId, owner_user_id: access.userId, treasury_id: treasury.near_account_id, treasury_company_id:treasury.company_id!, owner_account_id: config.owner_id, policy_version: config.policy_version, token_contract: treasury.token_contract, network: treasury.network, enabled: 1, version: 1 };
   await verifyRegistration(context, record);
   return transaction(db => {
     owner(access);
@@ -143,7 +143,7 @@ export function previewRound(access: AccessContext, input: PreviewInput) {
   if (parties.some(value => value.network !== parties[0].network || value.token_contract !== parties[0].token_contract)) throw new ApiError(409, "Round participants use incompatible settlement rails", "CLEARING_ASSET_MISMATCH");
   const calculation = computeClearing(links.map(link => ({ id: link.payment_id, debtor: link.debtor_id, creditor: link.creditor_id, amount: JSON.parse(decrypt(link.terms_ciphertext)).amount })));
   if (calculation.dischargedInvoiceValue === "0") throw new ApiError(422, "These obligations have no reciprocal or multi-company cycle to clear", "CLEARING_NO_CYCLE");
-  const participants = parties.map(value => ({ company_id: value.organization_id, treasury_id: value.treasury_id, owner_id: value.owner_account_id, version: String(value.version), policy_version: value.policy_version }));
+  const participants = parties.map(value => ({ company_id: value.organization_id, treasury_id: value.treasury_id, treasury_company_id:value.treasury_company_id, owner_id: value.owner_account_id, version: String(value.version), policy_version: value.policy_version }));
   const obligations = calculation.obligations.map(edge => ({ ...edge, terms_hash: links.find(link => link.payment_id === edge.id)!.terms_hash }));
   const reviewed = { asset: "USDC" as const, fee: "0", starts_at_ms: String(start), expires_at_ms: String(end), participants, obligations };
   return { ...calculation, reviewed, reviewToken: hash(reviewed), linkIds: links.map(link => link.id), network: parties[0].network, warning: "NEAR consent publishes opaque obligation IDs, treasury accounts and USDC amounts. Private invoice documents and descriptions remain offchain." };
@@ -179,7 +179,7 @@ function assertRoundTerms(round: Round, at = Date.now()) {
     const edge = manifest.obligations.find(edge => edge.id === link.payment_id);
     if (!edge || edge.terms_hash !== link.terms_hash || edge.debtor !== link.debtor_id || edge.creditor !== link.creditor_id || edge.original !== JSON.parse(decrypt(link.terms_ciphertext)).amount) throw new ApiError(409, "An accepted obligation differs from the NEAR commitment", "CLEARING_REVIEW_STALE");
   }
-  for (const party of manifest.participants) { const current = registration(party.company_id); if (current.treasury_id !== party.treasury_id || current.owner_account_id !== party.owner_id || String(current.version) !== party.version || current.policy_version !== party.policy_version) throw new ApiError(409, "Participant authority changed after proposal", "CLEARING_REVIEW_STALE"); }
+  for (const party of manifest.participants) { const current = registration(party.company_id); if (current.treasury_id !== party.treasury_id || current.treasury_company_id !== party.treasury_company_id || current.owner_account_id !== party.owner_id || String(current.version) !== party.version || current.policy_version !== party.policy_version) throw new ApiError(409, "Participant authority changed after proposal", "CLEARING_REVIEW_STALE"); }
   const calculation = computeClearing(manifest.obligations.map(edge => ({ id: edge.id, debtor: edge.debtor, creditor: edge.creditor, amount: edge.original })));
   for (const edge of manifest.obligations) { const actual = calculation.obligations.find(value => value.id === edge.id); if (actual?.reduction !== edge.reduction || actual.residual !== edge.residual) throw new ApiError(409, "The round no longer matches its exact conservation calculation", "CLEARING_REVIEW_STALE"); }
   return { manifest, links };
@@ -247,7 +247,7 @@ function applyFinalEvidence(access: AccessContext, id: string, evidence: FinalEv
     if (!chain || chain.status !== "finalized") { if (chain) db.prepare("UPDATE clearing_rounds SET status='registered',proof_ciphertext=? WHERE id=?").run(encrypt(JSON.stringify(evidence)), id); return roundDetail(access, id); }
     if (!["prepared", "registered"].includes(local.status)) throw new ApiError(409, "A closed local round cannot discharge invoice liabilities", "CLEARING_ROUND_CLOSED");
     if (!chain.finalized_at_ms || !chain.finalized_height || !/^\d+$/.test(chain.finalized_at_ms) || !/^\d+$/.test(chain.finalized_height) || BigInt(chain.finalized_at_ms) < BigInt(manifest.starts_at_ms) || BigInt(chain.finalized_at_ms) >= BigInt(manifest.expires_at_ms) || BigInt(chain.finalized_height) > BigInt(evidence.blockHeight) || chain.consents.length !== manifest.participants.length || new Set(chain.consents).size !== manifest.participants.length || !manifest.participants.every(party => chain.consents.includes(party.company_id))) throw new ApiError(409, "The finalized round lacks exact complete consent and settlement-window evidence", "CLEARING_CONSENTS_REQUIRED");
-    if (!evidence.authority?.blockHash || evidence.authority.blockHeight !== chain.finalized_height || hash(evidence.authority.participants) !== hash(manifest.participants.map(party => ({ companyId: party.company_id, treasuryId: party.treasury_id, ownerId: party.owner_id, policyVersion: party.policy_version })))) throw new ApiError(409, "Every participating treasury owner and policy must be verified at the finalized block", "CLEARING_AUTHORITY_UNVERIFIED");
+    if (!evidence.authority?.blockHash || evidence.authority.blockHeight !== chain.finalized_height || hash(evidence.authority.participants) !== hash(manifest.participants.map(party => ({ companyId: party.company_id, treasuryId: party.treasury_id, treasuryCompanyId:party.treasury_company_id, ownerId: party.owner_id, policyVersion: party.policy_version })))) throw new ApiError(409, "Every participating treasury owner and policy must be verified at the finalized block", "CLEARING_AUTHORITY_UNVERIFIED");
     const { links } = assertRoundTerms(local, Number(chain.finalized_at_ms));
     db.prepare("UPDATE clearing_rounds SET status='applying' WHERE id=? AND status IN ('prepared','registered')").run(id);
     for (const link of links) {

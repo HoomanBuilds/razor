@@ -22,12 +22,12 @@ SQLite migrations run automatically into `.data/razor.sqlite`. Use persistent lo
 
 Company treasury ownership is separate from application login. Link the NEAR owner wallet, create or connect a Razor treasury, register its native USDC token storage and refresh the confirmed balance. NEAR Intents uses mainnet; a testnet treasury cannot execute cross-chain settlement. The live asset catalog and signed route quotes are fetched from NEAR Intents rather than a fixed asset snapshot.
 
-Build the NEAR contracts with `bash contracts/build.sh`, using Binaryen `wasm-opt` version 130 alongside Rust. The guarded, serialized build optimizes treasury, factory, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints four public code-hash pins for the corresponding `.env.example` fields. The factory embeds the exact optimized treasury WASM. Use those published artifacts and hashes rather than raw Cargo output. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
+Build the NEAR contracts with `bash contracts/build.sh`, using Binaryen `wasm-opt` version 130 alongside Rust. The guarded, serialized build optimizes shared treasury, clearing and billing WASMs under `.tools/wasm/`, generates a build manifest and prints three public code-hash pins for the corresponding `.env.example` fields. Company activation registers isolated company state in the shared treasury without deploying another code copy. Use those published artifacts and hashes rather than raw Cargo output. These artifacts use the current storage layout and require fresh deployments; no legacy treasury migration is provided. Compiling artifacts does not deploy contracts or move funds.
 
 Prepare an unsigned deployment plan with the account names you intend to create and fund:
 
 ```sh
-npm run prepare:deployment -- --network mainnet --factory YOUR_FACTORY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near
+npm run prepare:deployment -- --network mainnet --treasury YOUR_TREASURY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near
 ```
 
 Replace the uppercase placeholders with valid lowercase account names. The planner validates the local WASM manifest and embedded treasury, then prints exact NEAR CLI deployment commands with initialization in the same transaction. It does not create accounts, sign, send or overwrite configuration. Its output includes the code pins to configure after successful deployment. Testnet requires an explicit `--testnet-token` and cannot establish Intents settlement.

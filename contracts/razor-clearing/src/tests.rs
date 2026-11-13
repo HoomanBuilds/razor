@@ -40,6 +40,7 @@ fn participant(company: &str, treasury: &str, owner: &str) -> Participant {
     Participant {
         company_id: company.into(),
         treasury_id: account(treasury),
+        treasury_company_id: format!("{}:{}", company, "a".repeat(16)),
         owner_id: account(owner),
         version: U64(1),
         policy_version: U64(1),
@@ -54,8 +55,8 @@ fn manifest(id: &str) -> Manifest {
         starts_at_ms: U64(NOW - 1_000),
         expires_at_ms: U64(NOW + 60_000),
         participants: vec![
-            participant("company-a", "a.factory.testnet", "alice.testnet"),
-            participant("company-b", "b.factory.testnet", "bob.testnet"),
+            participant("company-a", "treasury.testnet", "alice.testnet"),
+            participant("company-b", "treasury.testnet", "bob.testnet"),
         ],
         obligations: vec![
             Obligation {
@@ -105,27 +106,28 @@ fn setup() -> Clearing {
     testing_env!(context("alice.testnet").build());
     Clearing::new(
         account("operator.testnet"),
-        account("factory.testnet"),
+        account("treasury.testnet"),
         account("usdc.testnet"),
     )
 }
 
 fn treasury(owner: &str, version: &str) -> serde_json::Value {
-    serde_json::json!({"owner_id": owner, "token_contract": "usdc.testnet", "paused": false, "policy_version": version})
+    serde_json::json!({"architecture":"shared_v1","company_id":if owner == "alice.testnet" {"company-a:aaaaaaaaaaaaaaaa"} else {"company-b:aaaaaaaaaaaaaaaa"},"owner_id": owner, "token_contract": "usdc.testnet", "paused": false, "policy_version": version})
 }
 
 #[test]
 fn typed_views_lookup_arguments_and_digests_preserve_exact_json_bytes() {
     let contract = setup();
-    let expected = serde_json::json!({"factory_id":contract.factory_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32});
-    assert_eq!(serde_json::to_vec(&contract.get_config()).unwrap(), serde_json::to_vec(&expected).unwrap());
-    let account_id = account("a.factory.testnet");
+    let expected = serde_json::json!({"treasury_id":contract.treasury_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32});
     assert_eq!(
-        serde_json::to_vec(&AccountLookup { account_id: &account_id }).unwrap(),
-        serde_json::to_vec(&serde_json::json!({"account_id":account_id})).unwrap(),
+        serde_json::to_vec(&contract.get_config()).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
     );
     for value in ["", "approval terms", "quoted \"terms\" and unicode λ"] {
-        let expected: String = env::sha256(value.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        let expected: String = env::sha256(value.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         assert_eq!(digest(value), expected);
     }
 }
@@ -168,14 +170,12 @@ fn validates_exact_conservation_and_checked_amounts() {
 }
 
 #[test]
-fn registration_requires_current_factory_creation_owner_and_policy() {
+fn registration_requires_current_shared_company_owner_and_policy() {
     let mut contract = setup();
     let id = ready(&mut contract, manifest("round-register"));
     contract.rounds.get_mut(&id).unwrap().status = "verifying".into();
     callbacks(vec![
-        serde_json::json!({"account_id":"a.factory.testnet","token_contract":"usdc.testnet","status":"ready"}),
         treasury("alice.testnet", "1"),
-        serde_json::json!({"account_id":"b.factory.testnet","token_contract":"usdc.testnet","status":"ready"}),
         treasury("rotated.testnet", "2"),
     ]);
     assert!(!contract.on_registered(id.clone()));
@@ -187,8 +187,16 @@ fn creditor_consent_locks_only_its_own_payables() {
     let mut contract = setup();
     let id = ready(&mut contract, manifest("round-lock"));
     consent(&mut contract, &id, "company-b", "bob.testnet");
-    assert_eq!(contract.locks.get("b.factory.testnet:invoice-b"), Some(&id));
-    assert!(contract.locks.get("a.factory.testnet:invoice-a").is_none());
+    assert_eq!(
+        contract.locks.get("treasury.testnet:company-b:invoice-b"),
+        Some(&id)
+    );
+    assert!(
+        contract
+            .locks
+            .get("treasury.testnet:company-a:invoice-a")
+            .is_none()
+    );
     assert_eq!(
         contract.rounds.get(&id).unwrap().consents,
         vec!["company-b"]
@@ -266,7 +274,7 @@ fn finalization_rechecks_all_authorities_and_fences_callback_replays() {
     assert_eq!(finalized.finalized_height, Some(U64(100)));
     assert!(
         catch_unwind(AssertUnwindSafe(
-            || contract.require_free("a.factory.testnet:invoice-a", "other-round")
+            || contract.require_free("treasury.testnet:company-a:invoice-a", "other-round")
         ))
         .is_err()
     );
@@ -283,5 +291,37 @@ fn revocation_ignores_inflight_consent_and_releases_obligation_locks() {
     contract.revoke(id.clone(), hash);
     callbacks(vec![treasury("bob.testnet", "1")]);
     assert!(!contract.on_consented(id, "company-b".into(), account("bob.testnet"), request_id));
-    contract.require_free("a.factory.testnet:invoice-a", "next-round");
+    contract.require_free("treasury.testnet:company-a:invoice-a", "next-round");
+}
+
+#[test]
+fn shared_company_proofs_cannot_be_substituted_between_participants() {
+    let mut contract = setup();
+    let id = ready(&mut contract, manifest("round-shared-proof"));
+    contract.rounds.get_mut(&id).unwrap().status = "verifying".into();
+    callbacks(vec![
+        treasury("alice.testnet", "1"),
+        treasury("alice.testnet", "1"),
+    ]);
+    assert!(!contract.on_registered(id.clone()));
+    let next = ready(&mut contract, manifest("round-shared-valid"));
+    contract.rounds.get_mut(&next).unwrap().status = "verifying".into();
+    callbacks(vec![
+        treasury("alice.testnet", "1"),
+        treasury("bob.testnet", "1"),
+    ]);
+    assert!(contract.on_registered(next.clone()));
+    assert_eq!(contract.rounds.get(&next).unwrap().status, "ready");
+}
+
+#[test]
+fn shared_obligation_locks_include_company_identity() {
+    let _contract = setup();
+    let terms = manifest("round-shared-locks");
+    let mut other = terms.obligations[0].clone();
+    other.debtor = "company-b".into();
+    assert_ne!(
+        obligation_key(&terms, &terms.obligations[0]),
+        obligation_key(&terms, &other)
+    );
 }

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Participant {
     pub company_id: String,
     pub treasury_id: AccountId,
+    pub treasury_company_id: String,
     pub owner_id: AccountId,
     pub version: U64,
     pub policy_version: U64,
@@ -56,28 +57,20 @@ pub struct Round {
 }
 #[near(serializers = [json])]
 struct Treasury {
+    architecture: String,
+    company_id: String,
     owner_id: AccountId,
     token_contract: AccountId,
     paused: bool,
     policy_version: U64,
 }
 #[near(serializers = [json])]
-struct Creation {
-    account_id: AccountId,
-    token_contract: AccountId,
-    status: String,
-}
-#[near(serializers = [json])]
 pub struct ClearingConfig {
-    pub factory_id: AccountId,
+    pub treasury_id: AccountId,
     pub token_contract: AccountId,
     pub paused: bool,
     pub max_participants: u8,
     pub max_obligations: u8,
-}
-#[derive(serde::Serialize)]
-struct AccountLookup<'a> {
-    account_id: &'a AccountId,
 }
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
@@ -97,7 +90,7 @@ trait Callbacks {
 #[derive(PanicOnDefault)]
 pub struct Clearing {
     owner_id: AccountId,
-    factory_id: AccountId,
+    treasury_id: AccountId,
     token_contract: AccountId,
     paused: bool,
     rounds: IterableMap<String, Round>,
@@ -107,10 +100,10 @@ pub struct Clearing {
 #[near]
 impl Clearing {
     #[init]
-    pub fn new(owner_id: AccountId, factory_id: AccountId, token_contract: AccountId) -> Self {
+    pub fn new(owner_id: AccountId, treasury_id: AccountId, token_contract: AccountId) -> Self {
         Self {
             owner_id,
-            factory_id,
+            treasury_id,
             token_contract,
             paused: false,
             rounds: IterableMap::new(b"r"),
@@ -119,7 +112,7 @@ impl Clearing {
     }
     pub fn get_config(&self) -> ClearingConfig {
         ClearingConfig {
-            factory_id: self.factory_id.clone(),
+            treasury_id: self.treasury_id.clone(),
             token_contract: self.token_contract.clone(),
             paused: self.paused,
             max_participants: 8,
@@ -165,17 +158,14 @@ impl Clearing {
         );
         let mut calls: Option<Promise> = None;
         for party in &manifest.participants {
-            let factory = Promise::new(self.factory_id.clone()).function_call(
-                "get_creation",
-                serde_json::to_vec(&AccountLookup { account_id: &party.treasury_id }).unwrap(),
-                NearToken::from_yoctonear(0),
-                Gas::from_tgas(4),
+            require!(
+                party.treasury_id == self.treasury_id,
+                "SHARED_TREASURY_REQUIRED"
             );
-            let config = treasury_call(&party.treasury_id);
-            let pair = factory.and(config);
+            let config = treasury_call(&party.treasury_id, &party.treasury_company_id);
             calls = Some(match calls {
-                Some(previous) => previous.and(pair),
-                None => pair,
+                Some(previous) => previous.and(config),
+                None => config,
             });
         }
         let round_id = manifest.id.clone();
@@ -206,7 +196,7 @@ impl Clearing {
         if round.status != "verifying" {
             return false;
         }
-        let valid = env::promise_results_count() == round.manifest.participants.len() as u64 * 2
+        let valid = env::promise_results_count() == round.manifest.participants.len() as u64
             && !self.paused
             && round.manifest.expires_at_ms.0 > env::block_timestamp_ms()
             && round
@@ -215,14 +205,10 @@ impl Clearing {
                 .iter()
                 .enumerate()
                 .all(|(index, party)| {
-                    let creation: Option<Creation> = result(index as u64 * 2);
-                    let treasury: Option<Treasury> = result(index as u64 * 2 + 1);
-                    creation.is_some_and(|value| {
-                        value.account_id == party.treasury_id
-                            && value.token_contract == self.token_contract
-                            && value.status == "ready"
-                    }) && treasury.is_some_and(|value| {
-                        value.owner_id == party.owner_id
+                    result::<Treasury>(index as u64).is_some_and(|value| {
+                        value.architecture == "shared_v1"
+                            && value.company_id == party.treasury_company_id
+                            && value.owner_id == party.owner_id
                             && value.token_contract == self.token_contract
                             && value.policy_version.0 == party.policy_version.0
                             && !value.paused
@@ -254,6 +240,7 @@ impl Clearing {
             "ONLY_TREASURY_OWNER"
         );
         let treasury_id = party.treasury_id.clone();
+        let treasury_company_id = party.treasury_company_id.clone();
         let owner_id = party.owner_id.clone();
         round.request_nonce = U64(round
             .request_nonce
@@ -266,7 +253,7 @@ impl Clearing {
             .insert(company_id.clone(), request_id);
         round.finalize_request = None;
         self.rounds.insert(round_id.clone(), round);
-        treasury_call(&treasury_id).then(
+        treasury_call(&treasury_id, &treasury_company_id).then(
             ext_self::ext(env::current_account_id())
                 .with_static_gas(Gas::from_tgas(30))
                 .on_consented(round_id, company_id, owner_id, request_id),
@@ -297,7 +284,9 @@ impl Clearing {
             .expect("PARTICIPANT_REQUIRED");
         let treasury: Option<Treasury> = result(0);
         if !treasury.is_some_and(|value| {
-            value.owner_id == owner_id
+            value.architecture == "shared_v1"
+                && value.company_id == party.treasury_company_id
+                && value.owner_id == owner_id
                 && value.token_contract == self.token_contract
                 && value.policy_version.0 == party.policy_version.0
                 && !value.paused
@@ -349,7 +338,7 @@ impl Clearing {
             .manifest
             .participants
             .iter()
-            .map(|party| treasury_call(&party.treasury_id))
+            .map(|party| treasury_call(&party.treasury_id, &party.treasury_company_id))
             .reduce(|a, b| a.and(b))
             .unwrap();
         round.request_nonce = U64(round
@@ -386,7 +375,9 @@ impl Clearing {
                 .enumerate()
                 .all(|(index, party)| {
                     result::<Treasury>(index as u64).is_some_and(|value| {
-                        value.owner_id == party.owner_id
+                        value.architecture == "shared_v1"
+                            && value.company_id == party.treasury_company_id
+                            && value.owner_id == party.owner_id
                             && value.token_contract == self.token_contract
                             && value.policy_version.0 == party.policy_version.0
                             && !value.paused
@@ -466,10 +457,10 @@ impl Clearing {
         }
     }
 }
-fn treasury_call(account: &AccountId) -> Promise {
+fn treasury_call(account: &AccountId, company_id: &str) -> Promise {
     Promise::new(account.clone()).function_call(
         "get_config",
-        b"{}".to_vec(),
+        serde_json::to_vec(&serde_json::json!({"company_id": company_id})).unwrap(),
         NearToken::from_yoctonear(0),
         Gas::from_tgas(4),
     )
@@ -491,13 +482,14 @@ fn digest(value: &str) -> String {
 }
 fn obligation_key(manifest: &Manifest, edge: &Obligation) -> String {
     format!(
-        "{}:{}",
+        "{}:{}:{}",
         manifest
             .participants
             .iter()
             .find(|party| party.company_id == edge.debtor)
             .unwrap()
             .treasury_id,
+        edge.debtor,
         edge.id
     )
 }
@@ -520,14 +512,14 @@ fn validate(manifest: &Manifest) {
         .iter()
         .map(|party| party.company_id.clone())
         .collect();
-    let treasuries: BTreeSet<_> = manifest
+    let registrations: BTreeSet<_> = manifest
         .participants
         .iter()
-        .map(|party| party.treasury_id.clone())
+        .map(|party| &party.treasury_company_id)
         .collect();
     require!(
         companies.len() == manifest.participants.len()
-            && treasuries.len() == manifest.participants.len(),
+            && registrations.len() == manifest.participants.len(),
         "DUPLICATE_PARTICIPANT"
     );
     require!(
@@ -535,6 +527,13 @@ fn validate(manifest: &Manifest) {
             .participants
             .iter()
             .all(|party| (8..=100).contains(&party.company_id.len())
+                && party
+                    .treasury_company_id
+                    .strip_prefix(&format!("{}:", party.company_id))
+                    .is_some_and(|suffix| suffix.len() == 16
+                        && suffix
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
                 && party.version.0 > 0
                 && party.policy_version.0 > 0),
         "INVALID_PARTICIPANT"
