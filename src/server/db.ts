@@ -1,5 +1,5 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, closeSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 let database: DatabaseSync | undefined;
@@ -8,7 +8,16 @@ let transactionDepth = 0;
 export function getDb(): DatabaseSync {
   if (database) return database;
   const file = process.env.DATABASE_PATH ?? resolve(".data/razor.sqlite");
-  if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
+  if (file !== ":memory:") {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const descriptor = openSync(file, "a", 0o600);
+    try { fchmodSync(descriptor, 0o600); }
+    finally { closeSync(descriptor); }
+    for (const sidecar of [`${file}-wal`, `${file}-shm`]) {
+      try { chmodSync(sidecar, 0o600); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
+  }
   const connection = new DatabaseSync(file);
   connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
   connection.exec("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
