@@ -7,14 +7,14 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
-  return <section className="rounded-xl border bg-card p-5 sm:p-6"><div className="mb-5 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-base font-semibold">{title}</h2>{description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}</div>{action}</div>{children}</section>;
+  return <section className="min-w-0 rounded-xl border bg-card p-5 sm:p-6"><div className="mb-5 flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="text-base font-semibold">{title}</h2>{description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}</div>{action}</div>{children}</section>;
 }
 
 export function Field({ label, children, hint, as: Tag = "label" }: { label: string; children: ReactNode; hint?: string; as?: "label" | "div" }) {
-  return <Tag className="grid gap-2 text-sm font-medium"><span>{label}</span>{children}{hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}</Tag>;
+  return <Tag className="grid min-w-0 gap-2 text-sm font-medium"><span>{label}</span>{children}{hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}</Tag>;
 }
 
-export const control = "min-h-10 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-50";
+export const control = "min-h-10 min-w-0 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-50";
 
 export function Action({ busy, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
   return <Button {...props} aria-busy={!!busy} disabled={props.disabled || busy}>{busy && <LoaderCircle aria-hidden="true" className="animate-spin" />}{children}</Button>;
