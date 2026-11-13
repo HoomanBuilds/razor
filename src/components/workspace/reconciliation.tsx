@@ -8,6 +8,7 @@ import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Empty, Field, Panel, Status } from "./shared";
+import { PartialSettlementPanel, partialReviewId } from "./partial-settlement";
 import type { Payment } from "./types";
 
 interface Attempt { id: string; state: string; destination_network: string; destination_address: string; source_tx_hash: string | null; destination_tx_hash: string | null; provider_status: string | null; amount_in: string }
@@ -72,6 +73,7 @@ function ReconciliationWorkspace() {
         <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">{payment.reference}</p><p className="mt-1 text-sm text-muted-foreground">{recipients.find((recipient) => recipient.id === payment.recipient_id)?.name ?? "Recipient"} · {usd(payment.amount)} entitlement</p></div><Status value={payment.status} /></div>
         <p className="mt-3 text-xs text-muted-foreground">{provenance[source] ?? source.replaceAll("_", " ")}</p>{payment.hold_reason && <p className="mt-2 text-sm">{payment.hold_reason}</p>}
         {attempt && <div className="mt-3 grid gap-2 text-xs"><p>Destination: {attempt.destination_network}</p><Address value={attempt.destination_address} network={attempt.destination_network} />{attempt.source_tx_hash && <p className="break-all">NEAR source transaction: {attempt.source_tx_hash}</p>}{attempt.destination_tx_hash && <p className="break-all">Reported destination transaction: {attempt.destination_tx_hash}</p>}</div>}
+        {(attempt?.state === "reported_partial" || payment.status === "partially_paid" || partialReviewId(payment) !== payment.id) && <PartialSettlementPanel paymentId={partialReviewId(payment)}/>}
         <div className="mt-4 flex flex-wrap gap-3"><Action busy={busy === `${payment.id}:check`} disabled={!!busy} onClick={() => void run(`${payment.id}:check`, async () => { await api(`${base}/payments/${payment.id}/reconcile`, {}); refresh(); })}><RefreshCw size={14} />Check status</Action>
           {attempt?.state === "prepared" && allowed("payments:execute") && <><Action busy={busy === `${attempt.id}:resume`} disabled={!!busy} onClick={() => void prepare(`${attempt.id}:resume`, "Resume payment authorization", payment.id, attempt.id, `/attempts/${attempt.id}/resume`, {}, true)}>Review remaining steps</Action><button className="text-sm text-primary disabled:opacity-50" disabled={!!busy} onClick={() => void prepare(`${attempt.id}:close`, "Close an unsent route", payment.id, attempt.id, `/attempts/${attempt.id}/close`)}>Close unsent route</button></>}
         </div>

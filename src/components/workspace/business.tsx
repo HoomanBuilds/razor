@@ -473,7 +473,7 @@ export function Payroll() {
                       <span className="ml-auto tabular-nums">
                         {usd(item.amount)}
                       </span>
-                      <Status value={item.payment?.status ?? "draft"} />
+                      <Status value={item.remainingLiability === "0" ? "paid" : BigInt(item.deliveredAmount)>0n ? "partially_paid" : item.payment?.status ?? "draft"} /><p className="mt-1 text-xs text-muted-foreground">{usd(item.deliveredAmount)} delivered; {usd(item.remainingLiability)} remains</p>
                     </div>
                   ))}
                 </div>
