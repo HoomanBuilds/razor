@@ -15,12 +15,12 @@ Product: a NEAR-based company payments and payroll platform with easy onboarding
 
 Current catalog coverage: **90 feature requirements: 82 core and 8 optional**. End-to-end, recovery and track checks below are additional verification gates, not extra features to inflate that count.
 
-The first evidence review on 12 November 2026 verifies **9 of 127 checks: 8 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
+The evidence review on 13 November 2026 verifies **11 of 127 checks: 10 of 82 core requirements and 1 additional scenario**. None of the 8 optional requirements is verified. This is a partial implementation review, not a completion percentage: a requirement stays unchecked when only some of its behavior has evidence. See the [implementation status and remaining verification](specs/implementation-status.md) for the implemented areas behind the unchecked boxes.
 
 | Review field | Current value |
 | --- | --- |
-| Last full build review | Pending; partial source and recorded-evidence review on 2026-11-12 |
-| Build or deployment reviewed | Source snapshot `6f3edfa`, plus integrator follow-ups; earlier local workflow artifacts do not record a commit hash |
+| Last full build review | Pending; targeted local production-build review passed on 2026-11-13 |
+| Build or deployment reviewed | Local production candidate `26ced9d`; no deployed payment or private-inference evidence |
 | Selected optional features | No optional requirement verified; optional netting remains separate from core completion |
 | Target track evidence | Planned: Real-World Money, Autonomous Business, Privacy & Private AI; live demonstrations pending |
 
@@ -28,8 +28,8 @@ The first evidence review on 12 November 2026 verifies **9 of 127 checks: 8 of 8
 
 - [ ] `AUTH-01` A fresh user can sign up and return with Google or a simple email option without a company invitation, operator setup or pre-existing wallet.
 - [x] `AUTH-02` A supported wallet-first user authenticates through a verified, fresh, domain-bound challenge; a connected address alone cannot impersonate its owner.
-- [x] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews editable USDC and time-zone defaults without manual database setup.
-- [ ] `AUTH-04` A new company can add payees and prepare and preview payroll or bills before funding; execution clearly identifies missing authority or money.
+- [ ] `AUTH-03` A signed-in user creates a company, becomes its initial owner and reviews editable USDC and time-zone defaults without manual database setup.
+- [x] `AUTH-04` A new company can add payees and prepare and preview payroll or bills before funding; execution clearly identifies missing authority or money.
 - [ ] `AUTH-05` Social login and wallet linking require verified control and return the user to the same authorized workspaces without email-only account merging.
 - [ ] `AUTH-06` Invitations can be accepted, expired and revoked; assigned roles are enforced beyond the interface.
 - [ ] `AUTH-07` Switching between companies keeps records, drafts, approvals and payment attribution isolated to the chosen company.
@@ -81,8 +81,8 @@ The first evidence review on 12 November 2026 verifies **9 of 127 checks: 8 of 8
 ## 6. Employee payroll
 
 - [ ] `PAY-01` Pay periods, dates and time zones work consistently and preserve each employee's entitlement for the relevant period.
-- [ ] `PAY-02` Manual entry and CSV import handle approved amounts, bonuses, supplied adjustments and invalid rows with references.
-- [ ] `PAY-03` A pay-run preview shows entitlements, primary and backup destinations, exceptions, funding needs and maximum costs before approval.
+- [x] `PAY-02` Manual entry and CSV import handle approved amounts, bonuses, supplied adjustments and invalid rows with references.
+- [x] `PAY-03` A pay-run preview shows entitlements, primary and backup destinations, exceptions, funding needs and maximum costs before approval.
 - [ ] `PAY-04` Approval binds the exact run version and reserves both obligations and permitted costs.
 - [ ] `PAY-05` A durable scheduler initiates due approved payments and reports missed or blocked execution without changing their terms.
 - [ ] `PAY-06` Results are reported per recipient; a partly completed run is not presented as fully paid.
@@ -223,5 +223,7 @@ Append a row for each meaningful review. Use the same IDs as the checkboxes. Evi
 | 2026-11-12 | Payment policy, assistant checks and treasury VM tests reported passing | `ROUTE-06`, `AI-06` | Verified local rejection paths | Unresolved attempts block backup, provider success is only reported delivery, and source-sent is not paid. Missing private-inference configuration sends no document to a provider; invalid required evidence is rejected and manual invoice intake remains usable. These checks do not establish live settlement or successful private inference. |
 | 2026-11-12 | Earlier local API and browser candidate; later feature slices reviewed in source | All remaining core requirements, journeys and track gates | Partial or unverified | Recorded workflow reached invoice and payroll `approved_unfunded`, prevented an exact duplicate and returned 403 for an unrelated company. Treasury stayed zero. Browser overview and payroll rendered without console exceptions or horizontal overflow at 390 px. A live catalog returned 230 assets across 39 chains at that moment. No funds, contract deployment or private inference was executed. |
 | 2026-11-12 | Integrator follow-ups after `6f3edfa` | `AUTH-04`, `DATA-03`, `TRE-05`, `PAY-03`, `PAY-04`, `BILL-05`, `UX-02` | Changes integrated; final verification pending | Payment-management routes and panel were wired; plaintext dispute text was removed from ordinary activity; resumed unsigned public funding quotes now revalidate the frozen treasury target and can disable deposits while preserving tracking. Integrator reports TypeScript checks passing. Combined HTTP, test and production-build checks for the final candidate remain pending; planner and client-reserve gates stay open. |
+| 2026-11-13 | `26ced9d`, local production server with fresh signed wallet sessions | `AUTH-02`, `AUTH-04`, `REC-02`, `REC-04`, `PAY-02`, `PAY-03`, `BILL-01`; partial `BILL-04`, `BILL-05`, `TRE-04`, `DATA-06`, `UX-02` | Targeted local verification passed | `npm run typecheck`, all 50 application tests and the serialized memory-capped `npm run build` passed. `.data/final-workflow-result.json` and `.data/final-browser-result.json` record the source commit. Fresh company setup, employee and contractor confirmation, recipient isolation, exact payroll changes, stale-review rejection, milestone acceptance and human-agreed foreign-currency intake worked. A 204 USDC payroll with a 1 USDC ceiling showed a 205 USDC shortfall before unfunded approval. All newly integrated routes responded; zero-cash earmarks were rejected; scoped CSV exports retained payroll references and earmark columns. Browser review covered payroll, Treasury and recipient history with no exceptions or 390 px overflow. No source funding, deployment, payout or private inference was executed. |
+| 2026-11-13 | `26ced9d`, checklist correction | `AUTH-03` | Cleared prior checkbox | Company creation, ownership and editable time zones work. The settlement denomination is fixed at USDC; the literal requirement also includes an editable asset default, so this requirement is not fully satisfied. No requirement was narrowed to preserve the earlier count. |
 
 Record in-progress, blocked or failed work in the log while leaving its checkbox unchecked. When a failure is corrected, add a new verification entry rather than rewriting history.
