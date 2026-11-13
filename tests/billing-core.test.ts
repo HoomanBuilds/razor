@@ -127,7 +127,7 @@ test("receipt application is idempotent, company bound and preserves stale payme
   const { access } = fixture(), other = fixture(), at = "2026-08-01T00:00:00.000Z";
   const terms = quotePurchase(access.organizationId, latestPlan("pro").id, at), stale = quotePurchase(access.organizationId, latestPlan("business").id, at), invoice = randomUUID();
   const first = applyPurchase(access.organizationId, invoice, terms, at), replay = applyPurchase(access.organizationId, invoice, terms, at);
-  assert.equal(first.status, "activated"); assert.equal(replay.alreadyApplied, true);
+  assert(first.status === "activated"); assert(replay.status === "activated"); assert.equal(replay.alreadyApplied, true);
   assert.equal(first.period?.id, replay.period?.id);
   assert.equal(applyPurchase(access.organizationId, randomUUID(), stale, at).status, "credit_required");
   assert.throws(() => applyPurchase(other.access.organizationId, invoice, terms, at), /another company/);

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { assertSeatCapacity } from "../billing/usage";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
@@ -173,7 +174,10 @@ organizationRoutes.post("/:orgId/invitations", requireOrganization("company:mana
   const network=input.wallet?(input.wallet.family==="near"?input.wallet.network || process.env.NEAR_NETWORK || "testnet":input.wallet.family):null;
   if(input.wallet?.family==="near"&&!['mainnet','testnet'].includes(network!))throw new ApiError(400,"Choose the NEAR mainnet or testnet identity to invite","INVALID_NETWORK");
   const now=new Date().toISOString(),expiresAt=new Date(Date.now()+7*86400000).toISOString();
-  getDb().prepare("INSERT INTO organization_invitations (id,organization_id,email,wallet_family,wallet_address,wallet_network,role_id,token_hash,created_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(id,orgId,input.email?.toLowerCase() || null,input.wallet?.family || null,address,network,role.id,hashToken(token),c.get("userId"),expiresAt,now);
+  transaction(db=>{
+    assertSeatCapacity(c.get("access"));
+    db.prepare("INSERT INTO organization_invitations (id,organization_id,email,wallet_family,wallet_address,wallet_network,role_id,token_hash,created_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(id,orgId,input.email?.toLowerCase() || null,input.wallet?.family || null,address,network,role.id,hashToken(token),c.get("userId"),expiresAt,now);
+  });
   audit(c.get("userId"),orgId,"member.invited",id,{roleId:role.id});
   return c.json({invitation:{id,email:input.email || null,wallet:input.wallet?{family:input.wallet.family,address,network}:null,roleId:role.id,expiresAt},invitationUrl:`${appOrigin()}/join?token=${token}`,delivery:"copy_link"},201);
 });
@@ -204,6 +208,7 @@ invitationRoutes.post("/accept",async(c)=>{
       const role=roleFor(current.organization_id,current.role_id);
       validatePermissions(JSON.parse(role.permissions_json));
       if(membership)throw new ApiError(409,"You already belong to this company. Open it from your company switcher.","ALREADY_A_MEMBER");
+      assertSeatCapacity({userId,organizationId:current.organization_id,permissions:["company:read"]},{excludeInvitationId:current.id,additional:1,existingUserId:userId});
       const consumed=db.prepare("UPDATE organization_invitations SET accepted_at=?,accepted_by=? WHERE id=? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>?").run(new Date().toISOString(),userId,current.id,new Date().toISOString());
       if(!consumed.changes)throw new ApiError(409,"This invitation is no longer available","INVITATION_UNAVAILABLE");
       db.prepare("INSERT INTO memberships (organization_id,user_id,role_id,created_at) VALUES (?,?,?,?) ON CONFLICT(organization_id,user_id) DO UPDATE SET role_id=excluded.role_id,status='active'").run(current.organization_id,userId,current.role_id,new Date().toISOString());

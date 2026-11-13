@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertFeature } from "../billing/entitlements";
 import { isDeepStrictEqual } from "node:util";
 import { getDb, row, rows, transaction } from "../db";
 import { ApiError, requirePermission, type AccessContext } from "../context";
@@ -144,6 +145,7 @@ export function createPayrollRun(access: AccessContext, input: {
 }) {
   requirePermission(access, "payments:prepare");
   if (!input.items.length || input.items.length > 1000) throw new ApiError(400, "A pay run needs between 1 and 1,000 recipients", "INVALID_RUN");
+  if (input.items.length > 1) assertFeature(access, "batch_payroll");
   if (new Date(input.periodStart).getTime() > new Date(input.periodEnd).getTime()) throw new ApiError(400, "The pay period ends before it starts", "INVALID_PERIOD");
   if (new Set(input.items.map((item) => item.recipientId)).size !== input.items.length) throw new ApiError(400, "A recipient appears more than once", "DUPLICATE_RECIPIENT");
   const old = row<PayrollRun>("SELECT * FROM payroll_runs WHERE organization_id = ? AND reference = ?", access.organizationId, input.reference);

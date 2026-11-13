@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertFeature } from "../billing/entitlements";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
@@ -149,6 +150,7 @@ export function previewRound(access: AccessContext, input: PreviewInput) {
 }
 
 export function createRound(access: AccessContext, input: PreviewInput & { reviewToken: string }) {
+  assertFeature(access, "clearing");
   owner(access); const config = settings();
   return transaction(db => {
     const preview = previewRound(access, input);

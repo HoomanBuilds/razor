@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertFeature } from "../billing/entitlements";
 import { verifyFundingCredit } from "../reconciliation/funding";
 import { dispatchNotifications } from "../notifications/service";
 import {
@@ -212,6 +213,13 @@ function recurringJob(job: OperationJob): JobResult {
         status: "completed",
         detail: { skipped: "Template is paused or its cycle already advanced" },
       };
+    try {
+      assertFeature(ownerAccess(job.organization_id), "recurring");
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 402) throw error;
+      notify(job.organization_id, `recurring-plan:${rule.id}`, "Recurring automation needs a company plan", error.message, rule.id);
+      return { status: "blocked", delayMs: 300_000, detail: { reason: error.message, billingRequired: true, ruleId: rule.id } };
+    }
     let current: TemplateSnapshot;
     let next: string;
     const timeZone =

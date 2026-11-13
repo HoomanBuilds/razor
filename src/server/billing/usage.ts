@@ -15,7 +15,7 @@ export function financeSeatUsage(organizationId: string, excludeInvitationId?: s
   return active + pending;
 }
 
-export function reserveAiUsage(access: AccessContext, requestKey = randomUUID()) {
+export function reserveAiUsage(access: AccessContext, requestKey: string = randomUUID()) {
   requirePermission(access, "company:read");
   requirePermission(access, "documents:manage");
   if (typeof requestKey !== "string" || !requestKey || requestKey.length > 512) throw new ApiError(422, "Use a bounded analysis request identity", "AI_REQUEST_ID_INVALID");

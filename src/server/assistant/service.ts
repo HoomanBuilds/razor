@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { completeAiUsage, reserveAiUsage } from "../billing/usage";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
@@ -41,6 +42,7 @@ export async function analyzeInvoice(access: AccessContext, text: string) {
   const expiresAt = config.retentionDays ? new Date(createdAt.getTime() + config.retentionDays * 86_400_000).toISOString() : null;
   const draftId = config.retentionDays ? randomUUID() : null;
   if (config.retentionDays) encrypt("private-analysis-readiness");
+  const usage = reserveAiUsage(access);
   activeAnalyses.add(access.organizationId);
   try {
     const result = await extractPrivateInvoice(text.trim());
@@ -49,7 +51,11 @@ export async function analyzeInvoice(access: AccessContext, text: string) {
       if (draftId && expiresAt) getDb().prepare("INSERT INTO assistant_drafts(id,organization_id,created_by,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)").run(draftId, access.organizationId, access.userId, encrypt(text.trim()), encrypt(JSON.stringify(result.draft)), encrypt(JSON.stringify({ verification: result.verification, ...result.evidence })), createdAt.toISOString(), expiresAt);
       audit(access, "invoice_analyzed", draftId);
     });
+    completeAiUsage(usage.id, "completed");
     return { id: draftId, draft: result.draft, verification: result.verification, retained: !!draftId, expiresAt, requiresReview: true };
+  } catch (error) {
+    completeAiUsage(usage.id, "failed");
+    throw error;
   } finally {
     activeAnalyses.delete(access.organizationId);
   }

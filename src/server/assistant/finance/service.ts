@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { completeAiUsage, reserveAiUsage } from "../../billing/usage";
 import { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
 export { duplicateInvoiceWarnings } from "../../business/duplicate-invoices";
 import { liabilityTotals } from "../../reconciliation/liability";
@@ -102,6 +103,7 @@ export async function proposeFinancePlan(access:AccessContext,data:PlanningInput
   const coverage=financeInsights(access).coverage,context={availableUSDC:cash.available,lastSyncedAt:cash.lastSyncedAt,openUnreservedUSDC:coverage.unreservedUSDC};
   const modelInput=JSON.stringify({instruction:input.instruction,context:{periodStart:source.periodStart,periodEnd:source.periodEnd,netEntitlementCapMicroUSDC:source.maxTotal,fixedHumanFeeBudgetMicroUSDC:feeBudget,cashSnapshotAvailableMicroUSDC:cash.available,cashSnapshotAt:cash.lastSyncedAt,existingUnreservedBudgetsMicroUSDC:coverage.unreservedUSDC,existingDraftBudgetsMicroUSDC:coverage.draftUSDC,unpreparedInvoicePrincipalMicroUSDC:coverage.unpreparedInvoiceUSDC,recipients:selected.map(item=>({recipientId:item.opaqueId,capMicroUSDC:item.capMicroUSDC,priorPaidMicroUSDC:item.priorAmountMicroUSDC}))}});
   if(config.retentionDays)encrypt("finance-plan-storage-readiness");
+  const usage=reserveAiUsage(access);
   activePlans.add(access.organizationId);
   try {
     const inference=await runVerifiedPrivateInference("finance",modelInput),plan=validateModelPlan(inference.content,source),createdAt=new Date().toISOString();
@@ -112,8 +114,9 @@ export async function proposeFinancePlan(access:AccessContext,data:PlanningInput
       if(id&&expiresAt)db.prepare("INSERT INTO finance_plans (id,organization_id,created_by,plan_hash,source_fingerprint,payload_ciphertext,evidence_ciphertext,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)").run(id,access.organizationId,access.userId,planHash,payload.sourceFingerprint,encrypt(JSON.stringify(payload)),encrypt(JSON.stringify(inference.evidence)),createdAt,expiresAt);
       audit(access.userId,access.organizationId,"finance_plan.proposed",id || undefined,{retained:!!id});
     });
+    completeAiUsage(usage.id,"completed");
     return {id,...payload,hash:planHash,retained:!!id,createdAt,expiresAt,preparedRunId:null,requiresReview:true};
-  }finally{activePlans.delete(access.organizationId);}
+  }catch(error){completeAiUsage(usage.id,"failed");throw error;}finally{activePlans.delete(access.organizationId);}
 }
 
 export function prepareFinancePlan(access:AccessContext,id:string,planHash:string) {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { assertFeature } from "../billing/entitlements";
 import { companyDate } from "../../lib/company-time";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -393,6 +394,7 @@ export function createRecurring(
 ) {
   manager(access);
   requirePermission(access, "payments:prepare");
+  assertFeature(access, "recurring");
   if (
     !Number.isInteger(input.intervalDays) ||
     input.intervalDays < 1 ||
@@ -499,6 +501,7 @@ export function setRecurring(
     );
   if (enabled) {
     requirePermission(access, "payments:prepare");
+    assertFeature(access, "recurring");
     if (rule.status === "held" || row("SELECT rule_id FROM recurring_occurrences WHERE rule_id=? AND due_at=? AND status='held'", rule.id, rule.next_run_at)) throw new ApiError(409, "Review the held occurrence and create a new template. A held cycle cannot resume as an already completed job", "TEMPLATE_REVIEW_REQUIRED");
     const current = captureTemplate(
       access.organizationId,
