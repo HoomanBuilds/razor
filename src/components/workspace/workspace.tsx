@@ -29,6 +29,7 @@ import { useAction, useResource } from "./hooks";
 import { Action, control, Field, Panel } from "./shared";
 import { Overview } from "./overview";
 import { Bills, Payroll } from "./business";
+import { BusinessClearing } from "./business-clearing";
 import { Recipients } from "./recipients";
 import { Payments } from "./payments";
 import { Treasury } from "./treasury";
@@ -48,6 +49,7 @@ const navigation = [
   { id: "payments", title: "Payments", icon: Wallet },
   { id: "payroll", title: "Payroll", icon: CalendarDays },
   { id: "bills", title: "Bills", icon: ReceiptText },
+  { id: "clearing", title: "Business clearing", icon: Building2 },
   { id: "recipients", title: "Payees", icon: Users },
   { id: "treasury", title: "Treasury", icon: Building2 },
   { id: "assistant", title: "Private assistant", icon: Sparkles },
@@ -382,6 +384,8 @@ function CompanyWorkspace({
           <InvoiceInbox />
           <Bills />
         </div>
+      ) : section === "clearing" ? (
+        <BusinessClearing />
       ) : section === "recipients" ? (
         <Recipients />
       ) : section === "treasury" ? (

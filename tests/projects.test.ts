@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getDb, row } from "../src/server/db";
+import { createBill } from "../src/server/business/service";
 import { encrypt } from "../src/server/identity/crypto";
 import type { AccessContext } from "../src/server/context";
 import { classifyProjectFunding, projectExport, projectReports } from "../src/server/projects/service";
@@ -48,4 +49,19 @@ test("an active client earmark suppresses earned receipts even when added after 
   assert.equal(report.heldReceipts, "100000000");
   assert.equal(report.cashResult, "0");
   assert.throws(() => classifyProjectFunding(access, { ...input, expectedVersion: 1 }), /client cash/);
+});
+
+
+test("business setoff is reported as discharged debt and never inflates project cash", () => {
+  const { access, now } = fixture(), db = getDb();
+  db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_network,primary_address,created_at,updated_at) VALUES(?,?,'Supplier','business','near','supplier.near',?,?)").run(access.organizationId, access.organizationId, now, now);
+  const bill = createBill({ ...access, permissions: [...access.permissions, "payments:prepare"] }, { recipientId: access.organizationId, reference: "setoff-report", title: "Services", amount: "1000000", projectReference: "Project", costCenterReference: "Delivery" });
+  db.prepare("UPDATE bills SET setoff_amount='600000' WHERE id=?").run(bill.id);
+  db.prepare("UPDATE payments SET status='cancelled' WHERE id=?").run(bill.payment_id);
+  const report = projectReports(access);
+  assert.equal(report.projects[0].dischargedDebt, "600000");
+  assert.equal(report.costCenters[0].dischargedDebt, "600000");
+  assert.equal(report.projects[0].cashResult, "0");
+  assert.equal(report.projects[0].settledPayments, "0");
+  assert(projectExport(access).includes("debt_discharged_without_cash_micro_usdc"));
 });

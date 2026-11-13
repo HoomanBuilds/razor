@@ -22,6 +22,7 @@ import { notificationRoutes } from "./notifications";
 import { projectRoutes } from "./projects";
 import { accountRecoveryRoutes, treasuryRecoveryRoutes } from "./account-recovery";
 import { retainedAssetRoutes } from "./retained-assets";
+import { clearingRoutes } from "./clearing";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use(
@@ -44,6 +45,10 @@ app.onError((error, c) => {
       { error: error.message, code: error.code },
       error.status as 400,
     );
+  if (/^(CLEARING_LOCKED|CLEARED_LIABILITY):/.test(error.message)) {
+    const separator = error.message.indexOf(":");
+    return c.json({ error: error.message.slice(separator + 1).trim(), code: error.message.slice(0, separator) }, 409);
+  }
   if (error instanceof ZodError)
     return c.json(
       {
@@ -90,6 +95,7 @@ app.route("/organizations/:orgId/client-reserves", clientReserveRoutes);
 app.route("/organizations/:orgId/projects", projectRoutes);
 app.route("/organizations/:orgId/access-recovery", treasuryRecoveryRoutes);
 app.route("/organizations/:orgId/retained-assets", retainedAssetRoutes);
+app.route("/organizations/:orgId/clearing", clearingRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
