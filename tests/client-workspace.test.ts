@@ -33,12 +33,17 @@ test("workspace navigation matches readable permissions and encodes company and 
   assert(!canOpenSection("recipients", viewer));
   assert(!canOpenSection("payments", ["company:read"]));
   assert(canOpenSection("settings", ["company:read"]));
+  assert(canOpenSection("billing", ["company:read"]));
+  assert(!canOpenSection("billing", []));
   assert(!hasPermissions(undefined, ["company:read"]));
   assert(!canOpenSection("unknown" as "overview", viewer));
   const url = new URL(workspacePath("company one", "payments", "payment&two"), "http://localhost");
   assert.equal(url.searchParams.get("company"), "company one");
   assert.equal(url.searchParams.get("payment"), "payment&two");
   assert(!workspacePath("company", "settings", "hidden").includes("payment="));
+  const invoice = new URL(workspacePath("company one", "billing", undefined, "invoice&two"), "http://localhost");
+  assert.equal(invoice.searchParams.get("invoice"), "invoice&two");
+  assert(!workspacePath("company", "settings", undefined, "hidden").includes("invoice="));
 });
 
 test("API only expires sessions for authentication loss, refreshes changed access and forwards abort signals", async () => {
