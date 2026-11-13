@@ -180,3 +180,61 @@ test("general manual funding revalidates treasury authority and source recovery 
   finally { observedCodeHash = process.env.NEAR_TREASURY_CODE_HASH!; }
   assert.equal(row<{n:number}>("SELECT COUNT(*) AS n FROM funding_legs WHERE organization_id=?", access.organizationId)!.n, 0);
 });
+
+test("status checks preserve untouched deposits and a concurrent pre-sign source claim", async () => {
+  const { reconcileFunding, getTreasury } = await import("../src/server/payments/service");
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  const sync = async () => ({ ...getTreasury(access), onchain: {balance:"0",reserved:"0",available:"0",in_flight:"0",confirmed_at_ms:"0"} });
+  const unchanged = await reconcileFunding(access, active.fundingId, undefined, {status:async()=>pendingObservation(active.fundingId), sync});
+  assert.equal(unchanged.funding?.status, "pending_deposit");
+  const claimed = await reconcileFunding(access, active.fundingId, undefined, {status:async()=>{getDb().prepare("UPDATE funding_legs SET status='source_unknown' WHERE id=?").run(active.fundingId);return pendingObservation(active.fundingId);}, sync});
+  assert.equal(claimed.funding?.status, "source_unknown");
+  getDb().prepare("UPDATE funding_legs SET status='pending_deposit' WHERE id=?").run(active.fundingId);
+  await reconcilePublicFunding(created.link.token, {fundingId:active.fundingId}, async()=>{getDb().prepare("UPDATE funding_legs SET status='source_unknown' WHERE id=?").run(active.fundingId);return pendingObservation(active.fundingId);});
+  assert.equal(savedLeg(active.fundingId).status, "source_unknown");
+});
+
+test("only expired never-started general top-ups can close outside their original public link", async () => {
+  const { closeCompanyUnsentFunding } = await import("../src/server/funding-requests/service");
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  const close = () => closeCompanyUnsentFunding(access, active.fundingId, true, async()=>pendingObservation(active.fundingId));
+  await assert.rejects(close, (error:ApiError)=>error.code==="FUNDING_SOURCE_CONTEXT_REQUIRED");
+  getDb().prepare("DELETE FROM funding_request_quotes WHERE funding_id=?").run(active.fundingId);
+  await assert.rejects(close, (error:ApiError)=>error.code==="FUNDING_QUOTE_ACTIVE");
+  expireLeg(active.fundingId);
+  getDb().prepare("UPDATE funding_legs SET status='source_unknown' WHERE id=?").run(active.fundingId);
+  await assert.rejects(close, (error:ApiError)=>error.code==="FUNDING_TRANSFER_UNRESOLVED");
+  getDb().prepare("UPDATE funding_legs SET status='pending_deposit' WHERE id=?").run(active.fundingId);
+  const closed = await close();
+  assert.equal(closed.funding.status, "closed_unsent");
+  assert.equal(closed.funding.credited_amount, "0");
+});
+
+test("funding pages keep older open links, unknown deposits and source refunds reachable beyond legacy caps", async () => {
+  const { fundingPage, listFunding } = await import("../src/server/payments/service");
+  const { fundingRequestPage } = await import("../src/server/funding-requests/service");
+  const { listFundingRefunds } = await import("../src/server/funding-refunds/service");
+  const { access, input } = fixture(), created = await createFundingRequest(access, input), active = seedActive(created.request.id, access.organizationId, input.amount);
+  const prototype = savedLeg(active.fundingId), oldId = randomUUID(), db = getDb();
+  db.prepare("INSERT INTO funding_legs(id,organization_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'unknown',?,?)").run(oldId,access.organizationId,"old-unknown-deposit",prototype.origin_asset,prototype.amount_in,prototype.expected_output,prototype.quote,prototype.deposit_address,prototype.recipient_address,"2000-01-01T00:00:00.000Z","2000-01-01T00:00:00.000Z");
+  for(let index=0;index<260;index++) {
+    const id=randomUUID(),at=new Date(Date.now()+index*10).toISOString();
+    db.prepare("INSERT INTO funding_legs(id,organization_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(id,access.organizationId,`history-${id}`,prototype.origin_asset,prototype.amount_in,prototype.expected_output,prototype.quote,prototype.deposit_address,prototype.recipient_address,index<105?"recovery_pending":"closed_unsent",at,at);
+  }
+  assert.equal(listFunding(access).some(leg=>leg.id===oldId),false);
+  assert.equal(fundingPage(access,11,25).funding.some(leg=>leg.id===oldId),true);
+  assert.equal(fundingPage(access,5,25,"unresolved").funding.some(leg=>leg.id===oldId),true);
+  assert.equal(listFundingRefunds(access).funding.some(leg=>leg.id===oldId),false);
+  assert.equal(listFundingRefunds(access,5,25).funding.some(leg=>leg.id===oldId),true);
+  assert.equal(fundingPage({...access,organizationId:randomUUID()},1,25).total,0);
+  assert.throws(()=>fundingPage(access,0,25), (error:ApiError)=>error.code==="INVALID_PAGINATION");
+  assert.throws(()=>listFundingRefunds(access,1,101), (error:ApiError)=>error.code==="INVALID_PAGINATION");
+  for(let index=0;index<105;index++) {
+    const id=randomUUID(),at=new Date(Date.now()+index*10).toISOString();
+    db.prepare("INSERT INTO funding_requests(id,organization_id,amount,purpose_ciphertext,expires_at,token_hash,capability_id,treasury_account_id,treasury_owner_id,token_contract,network,created_by,created_at,updated_at) SELECT ?,organization_id,amount,purpose_ciphertext,expires_at,?,?,treasury_account_id,treasury_owner_id,token_contract,network,created_by,?,? FROM funding_requests WHERE id=?")
+      .run(id,hashToken(randomUUID()),randomUUID(),at,at,created.request.id);
+  }
+  const older=fundingRequestPage(access,5,25);
+  assert.equal(older.total,106);assert.equal(older.requests.some(request=>request.id===created.request.id),true);
+  assert.equal(revokeFundingRequest(access,created.request.id).status,"revoked");
+});

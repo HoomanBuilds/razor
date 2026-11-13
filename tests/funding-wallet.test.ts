@@ -25,3 +25,10 @@ test("wallet funding refuses expired, preview and previously funded requests",()
   quote.quoteRequest.deadline=new Date(Date.now()+60000).toISOString();quote.quoteRequest.dry=true;
   assert.throws(()=>validateFundingQuote({...props.funding,quote},props.token),/do not match/);
 });
+
+test("funding uses the deliberately quoted account even when a wallet returns it after another account", async () => {
+  const { selectFundingAccount } = await import("../src/components/auth/funding-wallet");
+  assert.equal(selectFundingAccount(["first.near", "payroll.near"], "payroll.near"), "payroll.near");
+  assert.equal(selectFundingAccount(["0xother", "0xAbC"], "0xabc", true), "0xAbC");
+  assert.throws(() => selectFundingAccount(["first.near"], "payroll.near"), /refund address/);
+});

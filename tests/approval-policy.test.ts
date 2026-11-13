@@ -28,6 +28,7 @@ test("approval views fail closed for duplicate votes, unrelated route signers an
 
 test("wallet plans separate preparation, distinct approval and execution, including a scheduled route", async () => {
   process.env.DATABASE_PATH = ":memory:";
+  process.env.NEAR_TREASURY_CODE_HASH = "11111111111111111111111111111111";
   const { getDb } = await import("../src/server/db");
   const { createPayment, resumeAttempt, prepareAttemptApproval, markAttemptSubmitted } = await import("../src/server/payments/service");
   const { createHash } = await import("node:crypto");
@@ -51,6 +52,7 @@ test("wallet plans separate preparation, distinct approval and execution, includ
   globalThis.fetch = async (input, init) => {
     if (String(input).includes("/v0/tokens")) return Response.json([{ assetId: asset, blockchain: "near", symbol: "USDC", decimals: 6, contractAddress: NATIVE_USDC.near }]);
     const rpc = JSON.parse(init!.body as string);
+    if (rpc.params.request_type === "view_account") return Response.json({result:{code_hash:process.env.NEAR_TREASURY_CODE_HASH}});
     const results: Record<string, unknown> = { get_payment: chain, get_recipient: { primary: { asset_id: asset, network: "near", address: "payee.near" }, backup: null, backup_consent: false, active: true, version: "1" }, get_obligation: chain ? payment.id : null, get_config: { owner_id: "owner.near", approvers: ["finance.near"], policy_version: quorum.policy_version, paused: false }, get_approval_status: quorum, storage_balance_of: registered ? { total: "1" } : null, storage_balance_bounds: { min: "1250000000000000000000" } };
     assert.ok(rpc.params.method_name in results, `Unexpected view ${rpc.params.method_name}`);
     return Response.json({ result: { result: [...Buffer.from(JSON.stringify(results[rpc.params.method_name]))] } });

@@ -1,7 +1,8 @@
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { createHash } from "node:crypto";
 import { getDb, row } from "../db";
-import { nearTransactionStatus, view, type FinalTransaction, type NearAction } from "../payments/near";
+import { contractCodeHash, nearTransactionStatus, view, type FinalTransaction, type NearAction } from "../payments/near";
+import { reviewedArtifactHash } from "../near-artifacts";
 import { getAttempt, getPayment } from "../payments/service";
 import type { ChainAttempt, ChainPayment, TreasuryConfig, WalletTransaction } from "../payments/types";
 
@@ -41,6 +42,7 @@ export async function prepareSourceRecovery(access: AccessContext, attemptId: st
   const payment = getPayment(access, attempt.payment_id);
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   if (!config) throw new ApiError(409, "Configure the company treasury first", "TREASURY_SETUP_REQUIRED");
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the treasury code before preparing source recovery", "TREASURY_CODE_MISMATCH");
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: payment.id });
   const chainAttempt = chain?.attempts.at(-1);
   if (!chainAttempt || chainAttempt.id !== attemptId || chainAttempt.status !== "sending" || chainAttempt.route.source_receiver !== attempt.deposit_address || chainAttempt.route.input_amount !== attempt.amount_in || chainAttempt.route.output_amount !== attempt.expected_output || chainAttempt.route.quote_hash !== createHash("sha256").update(attempt.quote).digest("hex") || chain?.amount !== payment.amount || chain.recipient_id !== payment.recipient_id || chain.reference !== `razor:${payment.id}`) throw new ApiError(409, "Only a matching source transfer with a missing callback can use source recovery", "SOURCE_RECOVERY_NOT_REQUIRED");

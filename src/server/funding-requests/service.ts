@@ -1,3 +1,4 @@
+import { pageWindow } from "../pagination";
 import { randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -165,8 +166,14 @@ function companyView(request: FundingRequestRecord) {
   return { ...summary, paymentId: request.payment_id, createdAt: request.created_at, revokedAt: request.revoked_at, fulfilledAt: row<{ fulfilled_at: string | null }>("SELECT fulfilled_at FROM funding_requests WHERE id=?", request.id)!.fulfilled_at, treasuryAccountId: request.treasury_account_id, funding };
 }
 export function listFundingRequests(access: AccessContext) {
+  return fundingRequestPage(access, 1, 100).requests;
+}
+export function fundingRequestPage(access: AccessContext, page = 1, pageSize = 25) {
   requirePermission(access, "payments:read");
-  return rows<FundingRequestRecord>("SELECT * FROM funding_requests WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", access.organizationId).map(companyView);
+  const { offset } = pageWindow(page, pageSize);
+  const total = row<{total:number}>("SELECT COUNT(*) AS total FROM funding_requests WHERE organization_id=?", access.organizationId)!.total;
+  const requests = rows<FundingRequestRecord>("SELECT * FROM funding_requests WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", access.organizationId, pageSize, offset).map(companyView);
+  return { requests, page, pageSize, total, hasMore: offset + requests.length < total };
 }
 export function getFundingRequest(access: AccessContext, requestId: string) { requirePermission(access, "payments:read"); return companyView(requestForCompany(access, requestId)); }
 export function revokeFundingRequest(access: AccessContext, requestId: string) {
@@ -253,7 +260,7 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
   }
 }
 
-export async function reconcilePublicFunding(token: string, input: { fundingId: string; idempotencyKey?: string; sourceTxHash?: string }) {
+export async function reconcilePublicFunding(token: string, input: { fundingId: string; idempotencyKey?: string; sourceTxHash?: string }, observe = checkStatus) {
   const request = requestForToken(token), quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND funding_id=?", request.id, input.fundingId);
   if (!quote) throw new ApiError(404, "Funding leg not found for this link", "FUNDING_QUOTE_NOT_FOUND");
   const funding = legForQuote(quote);
@@ -267,11 +274,13 @@ export async function reconcilePublicFunding(token: string, input: { fundingId: 
     try { await notifyDeposit(funding.deposit_address, input.sourceTxHash, funding.deposit_memo); } catch {}
   }
   if (verifiedAmount(request, funding.id) === 0n) {
-    const status = await checkStatus(funding.deposit_address, funding.deposit_memo);
+    const status = await observe(funding.deposit_address, funding.deposit_memo);
     assertSameQuote(JSON.parse(funding.quote) as QuoteResponse, status.quoteResponse);
-    const next = status.status === "PENDING_DEPOSIT" && !funding.source_tx_hash && !input.sourceTxHash && funding.status === "pending_deposit" ? "pending_deposit" : fundingStateAfterProvider(funding, status.status);
-    getDb().prepare("UPDATE funding_legs SET status=CASE WHEN status='confirmed' THEN status ELSE ? END,provider_status=?,destination_tx_hash=COALESCE(?,destination_tx_hash),updated_at=? WHERE id=?")
-      .run(next, status.status, status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null, now(), funding.id);
+    transaction(db => {
+      const latest = legForQuote(quote), next = fundingStateAfterProvider(latest, status.status);
+      db.prepare("UPDATE funding_legs SET status=?,provider_status=?,destination_tx_hash=COALESCE(?,destination_tx_hash),updated_at=? WHERE id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested')")
+        .run(next, status.status, status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null, now(), funding.id);
+    });
   }
   return { request: publicView(request), funding: { id: funding.id, status: publicLegStatus(request, row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", funding.id)!) }, confirmationRequired: verifiedAmount(request, funding.id) === 0n };
 }
@@ -306,4 +315,24 @@ export async function closePublicUnsentFunding(token: string, input: { fundingId
     db.prepare("UPDATE funding_request_quotes SET state='closed',updated_at=? WHERE id=?").run(now(), quote.id);
   });
   return { request: publicView(requestForToken(token)), fundingId: funding.id };
+}
+
+export async function closeCompanyUnsentFunding(access: AccessContext, fundingId: string, noTransferConfirmed: boolean, observe = checkStatus) {
+  requirePermission(access, "payments:prepare");
+  if (!noTransferConfirmed) throw new ApiError(422, "Confirm that you never submitted this source transfer", "UNSENT_CONFIRMATION_REQUIRED");
+  const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
+  if (!funding) throw new ApiError(404, "Source funding leg not found", "FUNDING_NOT_FOUND");
+  if (funding.payment_id || row("SELECT id FROM funding_request_quotes WHERE funding_id=?", fundingId)) throw new ApiError(409, "Close this source quote from its obligation task or original funding link", "FUNDING_SOURCE_CONTEXT_REQUIRED");
+  if (funding.status !== "pending_deposit" || funding.source_tx_hash) throw new ApiError(409, "A submitted or uncertain source transfer must remain in reconciliation", "FUNDING_TRANSFER_UNRESOLVED");
+  const stored = JSON.parse(funding.quote) as QuoteResponse;
+  if (quoteDepositWindow(stored).startBefore > Date.now()) throw new ApiError(409, "This quote can still accept a deposit. Resume it before preparing another", "FUNDING_QUOTE_ACTIVE");
+  const status = await observe(funding.deposit_address, funding.deposit_memo);
+  assertSameQuote(stored, status.quoteResponse);
+  if (status.status !== "PENDING_DEPOSIT" || quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider has observed source activity or still accepts this quote. Keep tracking it", "FUNDING_TRANSFER_UNRESOLVED");
+  return transaction(db => {
+    const latest = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId)!;
+    if (latest.status !== "pending_deposit" || latest.source_tx_hash) throw new ApiError(409, "Source tracking changed during this review", "FUNDING_TRANSFER_UNRESOLVED");
+    db.prepare("UPDATE funding_legs SET status='closed_unsent',updated_at=? WHERE id=?").run(now(), fundingId);
+    return { funding: row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)! };
+  });
 }

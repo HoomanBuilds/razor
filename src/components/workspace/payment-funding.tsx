@@ -20,7 +20,7 @@ const FundingWalletAction = dynamic(() => import("@/components/auth/funding-wall
 interface Funding { originToken?: Token | null; id: string; origin_asset: string; origin_network: string; origin_symbol: string; origin_decimals: number; amount_in: string; expected_output: string; credited_amount: string; deposit_address: string; deposit_memo: string | null; quote: string; status: string; source_tx_hash: string | null; destination_tx_hash: string | null }
 interface Attempt { id: string; state: string; route: string; amount_in: string; expected_output: string; destination_network: string; destination_address: string; destination_symbol: string; destination_decimals: number; source_tx_hash: string | null; destination_tx_hash: string | null }
 interface Task { payment: Payment; treasury: Treasury; stage: string; message: string; paused: boolean; reviewToken: string; funding: Funding[]; attempts: Attempt[]; fundingCredit: string; cashCommitted: string; linkedCashHeld: string; clientCashHeld: string; required: string; shortfall: string; excess: string; canQuote: boolean; canReserve: boolean; depositAllowed: boolean }
-interface Route { attempt: Attempt; network: string; stage: string; walletActions: NearWalletAction[]; approvalActions: NearWalletAction[]; approvalAccounts: string[]; message: string; approvals: { required_approvals: number; payment_collected: number; attempt_collected: number; can_execute: boolean } | null }
+interface Route { attempt: Attempt; network: string; stage: string; walletActions: NearWalletAction[]; approvalActions: NearWalletAction[]; approvalAccounts: string[]; signerAccounts: string[]; message: string; approvals: { required_approvals: number; payment_collected: number; attempt_collected: number; can_execute: boolean } | null }
 
 export function PaymentFundingTask({ paymentId, close }: { paymentId: string; close: () => void }) {
   const { base, revision, refresh, session, organization, navigate } = useWorkspace();
@@ -47,7 +47,7 @@ export function PaymentFundingTask({ paymentId, close }: { paymentId: string; cl
     const actions = fresh.stage === "approve" ? fresh.approvalActions : fresh.walletActions;
     if (!actions.length || !["prepare", "approve", "execute"].includes(fresh.stage)) return;
     if (fresh.stage === "execute" && !fresh.approvals?.can_execute) throw new RequestError("Refresh the route's approvals before execution", 409, "APPROVAL_NOT_READY");
-    const txHash = await signNearActions(actions, fresh.network);
+    const txHash = await signNearActions(actions, fresh.network, fresh.stage === "approve" ? fresh.approvalAccounts : fresh.signerAccounts);
     if (fresh.stage === "execute" && txHash) await api(`${base}/attempts/${fresh.attempt.id}/submitted`, { txHash });
     await reconcile();
     if (fresh.stage === "execute") setRoute(null); else await resumeRoute(fresh.attempt.id);
