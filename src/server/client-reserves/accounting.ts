@@ -21,7 +21,7 @@ export function paymentTermsHash(payment: Payment) {
     amount: payment.amount, maxFee: payment.max_fee, metadata: payment.metadata, scheduledFor: payment.scheduled_for })).digest("hex");
 }
 
-function sourceIsUnresolved(payment: Payment): boolean {
+export function sourceIsUnresolved(payment: Payment): boolean {
   if (["paid", "cancelled"].includes(payment.status)) return false;
   const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1", payment.id, payment.organization_id);
   if (!attempt || ["closed_unfunded", "refunded_verified", "cancelled"].includes(attempt.state)) return false;

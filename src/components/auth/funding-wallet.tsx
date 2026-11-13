@@ -10,6 +10,8 @@ export interface FundingWalletActionProps {
   funding:{id:string;origin_asset:string;amount_in:string;deposit_address:string;deposit_memo:string|null;quote:string|object;status:string;source_tx_hash?:string|null};
   token:{assetId:string;symbol:string;blockchain:string;decimals:number;contractAddress?:string|null};
   onSubmitted:(txHash:string)=>Promise<void>;
+  beforeSend?:()=>Promise<void>;
+  onBroadcast?:(txHash:string)=>Promise<void>;
 }
 
 interface BoundQuote {quoteRequest:{originAsset:string;refundTo:string;dry:boolean;deadline:string;depositType:string};quote:{amountIn:string;depositAddress:string;depositMemo?:string;deadline?:string;timeWhenInactive?:string;amountInUsd?:string}}
@@ -58,12 +60,14 @@ async function transferEvm(props:FundingWalletActionProps,quote:BoundQuote,onHas
     if(simulation.data && simulation.data!=="0x" && !decodeFunctionResult({abi:erc20Abi,functionName:"transfer",data:simulation.data})) throw new Error("The token contract did not accept this transfer.");
     await rpc.estimateGas({account:sender,to:contract,data});
     validateFundingQuote(props.funding,props.token);
+    await props.beforeSend?.();
     hash=await wallet.sendTransaction({account:sender,to:contract,data});
   } else {
     const gas=await rpc.estimateGas({account:sender,to:destination,value:amount});
     const [balance,gasPrice]=await Promise.all([rpc.getBalance({address:sender}),rpc.getGasPrice()]);
     if(balance<amount+gas*gasPrice) throw new Error(`Keep enough ${chain.nativeCurrency.symbol} in your wallet for the deposit and network fee.`);
     validateFundingQuote(props.funding,props.token);
+    await props.beforeSend?.();
     hash=await wallet.sendTransaction({account:sender,to:destination,value:amount});
   }
   onHash(hash,sender);
@@ -101,6 +105,7 @@ async function transferNear(props:FundingWalletActionProps,quote:BoundQuote,onHa
   }
   actions.push({type:"FunctionCall",params:{methodName:"ft_transfer",args:{receiver_id:props.funding.deposit_address,amount:props.funding.amount_in},gas:"50000000000000",deposit:"1"}});
   validateFundingQuote(props.funding,props.token);
+  await props.beforeSend?.();
   const result=await wallet.signAndSendTransaction({signerId:sender,receiverId:contract,network:"mainnet",actions});
   const hash=result.transaction.hash;
   onHash(hash,sender);
@@ -140,6 +145,7 @@ async function transferSolana(props:FundingWalletActionProps,quote:BoundQuote,on
   if(simulation.value.err) throw new Error("The Solana source transfer could not be simulated. Check your balance, token account and SOL for network fees.");
   if(provider.publicKey?.toBase58()!==sender.toBase58()) throw new Error("Your Solana wallet changed accounts. Reconnect and try again.");
   validateFundingQuote(props.funding,props.token);
+  await props.beforeSend?.();
   const {signature:hash}=await provider.signAndSendTransaction(transaction);
   onHash(hash,sender.toBase58());
   const receipt=await connection.confirmTransaction({signature:hash,...block},"confirmed");
@@ -169,7 +175,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
     if(busy.current || !canSend || !quote)return;
     busy.current=true;setPhase("signing");setError(null);
     let broadcastHash:string|undefined;
-    function broadcast(txHash:string) {broadcastHash=txHash;setHash(txHash);setPhase("confirming");try{sessionStorage.setItem(storageKey(funding.id),txHash);}catch{}}
+    function broadcast(txHash:string) {broadcastHash=txHash;setHash(txHash);setPhase("confirming");try{sessionStorage.setItem(storageKey(funding.id),txHash);}catch{} if(props.onBroadcast) void props.onBroadcast(txHash).catch(error=>setError(`Source transfer submitted. Reopen this task to reconcile it. ${walletErrorMessage(error)}`));}
     try {
       const sendTransfer=token.blockchain==="near"?transferNear:token.blockchain==="sol"?transferSolana:transferEvm;
       const receipt=await sendTransfer(props,quote,(hash)=>broadcast(hash));

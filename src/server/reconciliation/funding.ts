@@ -5,7 +5,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { assertSameQuote, checkStatus, type QuoteResponse } from "../payments/intents";
 import { verifyTokenReceipt } from "../payments/near";
 import { NATIVE_USDC } from "../payments/policy";
-import { approvePayment, getPayment, syncTreasury } from "../payments/service";
+import { reserveApprovedPayment, getPayment, syncTreasury } from "../payments/service";
 import type { FundingLeg, TreasuryConfig } from "../payments/types";
 
 interface ReceiptRow {
@@ -36,6 +36,7 @@ export function getFundingReceipt(access: AccessContext, fundingId: string) {
 export async function verifyFundingCredit(access: AccessContext, fundingId: string, input: { senderAccountId: string; transactionHash?: string; receiptId?: string }) {
   requirePermission(access, "payments:prepare");
   const funding = fundingFor(access, fundingId);
+  if (["refunded_verified", "refunded_attested"].includes(funding.status)) throw new ApiError(409, "This source refund already has an audited closure. Any later credit requires a separate recovery review", "FUNDING_REFUND_CLOSED");
   if (funding.status === "confirmed") return { ...getFundingReceipt(access, fundingId), treasury: await syncTreasury(access) };
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   if (!config || config.network !== "mainnet" || config.token_contract !== NATIVE_USDC.near) throw new ApiError(409, "Configure the company native-USDC NEAR mainnet treasury first", "TREASURY_SETUP_REQUIRED");
@@ -55,6 +56,7 @@ export async function verifyFundingCredit(access: AccessContext, fundingId: stri
   const proof = await verifyTokenReceipt(config, txHash, input.senderAccountId, config.near_account_id, expected, input.receiptId, consumed);
   transaction(() => {
     const latest = fundingFor(access, fundingId);
+    if (["refunded_verified", "refunded_attested"].includes(latest.status)) throw new ApiError(409, "This source refund closed during verification. Review later credit separately", "FUNDING_REFUND_CLOSED");
     if (latest.status === "confirmed") return;
     for (const event of proof.events) {
       const used = row("SELECT id FROM funding_credit_receipts WHERE network=? AND token_contract=? AND receipt_id=? AND log_index=? AND data_index=?", config.network, config.token_contract, event.receiptId, event.logIndex, event.dataIndex);
@@ -64,9 +66,9 @@ export async function verifyFundingCredit(access: AccessContext, fundingId: stri
     getDb().prepare("UPDATE funding_legs SET status='confirmed',provider_status=?,destination_tx_hash=?,credited_amount=?,updated_at=? WHERE id=?").run(status.status, txHash, proof.amount, new Date().toISOString(), fundingId);
   });
   const treasury = await syncTreasury(access);
-  if (funding.payment_id && access.permissions.includes("payments:approve")) {
+  if (funding.payment_id) {
     const payment = getPayment(access, funding.payment_id);
-    if (payment.status === "approved_unfunded") approvePayment(access, payment.id);
+    if (payment.status === "approved_unfunded" && payment.approved_at && payment.approved_by && !row<{ paused: number }>("SELECT paused FROM organizations WHERE id=?", access.organizationId)?.paused) reserveApprovedPayment(access, payment.id);
   }
   return { ...getFundingReceipt(access, fundingId), treasury };
 }
