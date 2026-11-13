@@ -14,6 +14,7 @@ import { duplicateInvoiceWarnings } from "../business/duplicate-invoices";
 import { recipientRouteReadiness } from "./routing";
 import { liabilityPayments } from "../partial-settlement/model";
 import { recordedRecipientName } from "../payments/recipient-names";
+import { fundingPositions } from "../payment-funding/accounting";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
 interface Replacement { old_payment_id: string; new_payment_id: string; liability_kind: string; liability_id: string; reason_ciphertext: string; created_at: string }
@@ -28,9 +29,14 @@ function fundingReview(access: AccessContext, payments: Payment[]) {
   const unreserved = budgets.reduce((sum, value) => sum + value.unreserved, 0n);
   const awaitingReconciliation = budgets.reduce((sum, value) => sum + value.awaitingReconciliation, 0n);
   const alreadyReserved = budgets.reduce((sum, value) => sum + value.remaining - value.unreserved - value.awaitingReconciliation, 0n);
-  const shortfall = unreserved - BigInt(treasury.available);
+  const positions = new Map(fundingPositions(access.organizationId).map(position => [position.payment.id, position]));
+  const protectedFunding = payments.reduce((sum, payment, index) => {
+    const position = positions.get(payment.id), held = position ? position.clientCash + position.held : 0n;
+    return sum + (held < budgets[index].unreserved ? held : budgets[index].unreserved);
+  }, 0n);
+  const shortfall = unreserved - protectedFunding - BigInt(treasury.available), deficit = BigInt(treasury.reserveDeficit);
   return { unreserved: unreserved.toString(), alreadyReserved: alreadyReserved.toString(), awaitingReconciliation: awaitingReconciliation.toString(),
-    available: treasury.available, shortfall: (shortfall > 0n ? shortfall : 0n).toString(), treasuryConfigured: !!treasury.config, lastSyncedAt: treasury.lastSyncedAt };
+    protectedFunding: protectedFunding.toString(), available: treasury.available, shortfall: (shortfall > deficit ? shortfall : deficit).toString(), treasuryConfigured: !!treasury.config, lastSyncedAt: treasury.lastSyncedAt };
 }
 
 function audit(access: AccessContext, action: string, entityId: string, details: unknown) {
