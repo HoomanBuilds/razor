@@ -19,11 +19,12 @@ process.env.NEAR_RPC_URL="https://billing-rpc.invalid";
 process.env.RAZOR_BILLING_MODE="enforced";
 process.env.RAZOR_BILLING_CONTRACT_ID="billing.testnet";
 process.env.RAZOR_BILLING_TESTNET_TOKEN_CONTRACT="usdc.testnet";
-process.env.RAZOR_BILLING_CODE_HASH=base58.encode(new Uint8Array(32).fill(3));
+const reviewedCodeHash=base58.encode(new Uint8Array(32).fill(3));
+process.env.RAZOR_BILLING_CODE_HASH=reviewedCodeHash;
 const seed=new Uint8Array(32).fill(7),publicKey=ed25519.getPublicKey(seed),secret=`ed25519:${base58.encode(new Uint8Array([...seed,...publicKey]))}`;
 process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY=secret;
 const chainInvoices=new Map<string,BillingChainInvoice>(),chainRefunds=new Map<string,BillingChainRefund>();
-let contractPaused=false,contractIssuer=`ed25519:${base58.encode(publicKey)}`,codeHash=process.env.RAZOR_BILLING_CODE_HASH,network="testnet",blockTime=Date.now(),transactionResult:unknown=null;
+let contractPaused=false,contractIssuer=`ed25519:${base58.encode(publicKey)}`,codeHash=reviewedCodeHash,network="testnet",blockTime=Date.now(),transactionResult:unknown=null;
 const originalFetch=globalThis.fetch;
 globalThis.fetch=async(_input,init)=>{
  const request=JSON.parse(String(init?.body)),p=request.params;
@@ -35,6 +36,7 @@ globalThis.fetch=async(_input,init)=>{
  const args=JSON.parse(Buffer.from(p.args_base64,"base64").toString());
  if(p.method_name==="get_config")value={owner_id:"operator.testnet",token_contract:"usdc.testnet",network:"testnet",issuer_public_key:contractIssuer,paused:contractPaused,available:"999000000",withdrawal_pending:false,version:1};
  else if(p.method_name==="storage_balance_of")value={total:"1000",available:"0"};
+ else if(p.method_name==="ft_metadata")value={symbol:"USDC",decimals:6};
  else if(p.method_name==="get_invoice")value=chainInvoices.get(args.invoice_id)??null;
  else if(p.method_name==="get_refund")value=chainRefunds.get(args.refund_id)??null;
  else throw new Error(`Unexpected billing view ${p.method_name}`);
@@ -86,7 +88,7 @@ test("missing setup, wrong network and changed code fail closed before invoice c
  const value=company();delete process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY;
  assert.equal((await billingCheckoutConfiguration()).ready,false);await assert.rejects(checkout(value),/issuer|ISSUER|Configure/);assert.equal(invoicePage(value.access).total,0);
  process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY=secret;network="mainnet";await assert.rejects(checkout(value),/another network/);network="testnet";
- codeHash="different-code";await assert.rejects(checkout(value),/reviewed/);codeHash=process.env.RAZOR_BILLING_CODE_HASH;
+ codeHash="different-code";await assert.rejects(checkout(value),/reviewed/);codeHash=reviewedCodeHash;
 });
 
 test("authoritative payment recovery remains available after issuer rotation and collection pause",async()=>{
@@ -101,7 +103,7 @@ test("mismatched receipt identity cannot activate a subscription",async()=>{
 });
 
 test("stale paid terms preserve the received payment as a refund request rather than granting conflicting access",async()=>{
- const value=company(),detail=await checkout(value);getDb().prepare("UPDATE billing_subscription_settings SET revision=revision+1 WHERE organization_id=?").run(value.access.organizationId);paid(detail);
+ const value=company(),detail=await checkout(value);getDb().prepare("UPDATE billing_subscription_settings SET revision=revision+1 WHERE organization_id=?").run(value.access.organizationId);assert.equal((await invoiceDetail(value.access,detail.invoice.id)).canSign,false);paid(detail);
  const result=await reconcileInvoice(value.access,detail.invoice.id);assert.equal(result.invoice.status,"credit_required");assert(result.invoice.refundRequest);assert.equal(result.invoice.refundRequest.amount,"29000000");assert.equal(getSubscriptionState(value.access.organizationId).plan.code,"free");
 });
 
