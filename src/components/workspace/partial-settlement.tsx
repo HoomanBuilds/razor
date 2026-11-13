@@ -11,6 +11,7 @@ import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Field, Status } from "./shared";
 
 type Review = ReturnType<typeof partialReview>;
+interface PartialWalletReview { walletActions: NearWalletAction[]; network: string; creditedUSDC: string; actualOutput: string; remainingUSDC: string }
 export function partialReviewId(payment: { id: string; status: string; metadata?: string }) {
   if (["held", "recovery_pending", "partially_paid"].includes(payment.status)) return payment.id;
   try { const value = JSON.parse(payment.metadata || "{}").partialOf; return typeof value === "string" ? value : payment.id; } catch { return payment.id; }
@@ -22,7 +23,7 @@ function amount(value: FormDataEntryValue | null, zero = false) {
 export function PartialSettlementPanel({ paymentId }: { paymentId: string }) {
   const { base, revision, refresh, notify, navigate, organization } = useWorkspace();
   const resource = useResource<Review>(`${base}/partial-settlements/payments/${paymentId}`, revision), { busy, error, run } = useAction();
-  const [wallet, setWallet] = useState<{ walletActions: NearWalletAction[]; network: string; creditedUSDC: string; actualOutput: string; remainingUSDC: string } | null>(null);
+  const [wallet, setWallet] = useState<PartialWalletReview | null>(null);
   const data = resource.data, canPrepare = organization.permissions?.includes("payments:prepare"), canApprove = organization.permissions?.includes("payments:approve");
   if (!data || !data.settlement && data.attempt?.state !== "reported_partial") return null;
   const attempt = data.attempt;
@@ -31,7 +32,7 @@ export function PartialSettlementPanel({ paymentId }: { paymentId: string }) {
   return <section className="mt-4 grid gap-4 rounded-lg border p-4"><div><h3 className="text-sm font-semibold">Partial delivery and remaining entitlement</h3><p className="mt-2 text-xs text-muted-foreground">The original payment cannot retry in full. Destination tokens and credited USDC entitlement are different amounts unless the destination is verified native USDC.</p></div>
     {(error || resource.error) && <p role="alert" className="text-sm text-destructive">{error || resource.error}</p>}
     {attempt?.observed_output && <p className="text-sm">Observed destination output: {output(attempt.observed_output)}. Original quoted output: {output(attempt.expected_output)}.</p>}
-    {!data.settlement && canApprove && <form className="grid gap-3" onSubmit={event=>{event.preventDefault();const values=new FormData(event.currentTarget);void run("prepare-partial",async()=>{const prepared=await api<NonNullable<typeof wallet>>(`${base}/partial-settlements/attempts/${attempt!.id}/prepare`,{creditedUSDC:amount(values.get("credit")),receipt:values.get("receipt"),valuationNote:values.get("valuation"),routeClosed:values.has("closed"),reviewConfirmed:values.has("reviewed")});if(!prepared.walletActions.length){setWallet(null);refresh();notify("This partial settlement is already reconciled. Review its current remaining entitlement.");return;}setWallet(prepared);});}}>
+    {!data.settlement && canApprove && <form className="grid gap-3" onSubmit={event=>{event.preventDefault();const values=new FormData(event.currentTarget);void run("prepare-partial",async()=>{const prepared=await api<PartialWalletReview>(`${base}/partial-settlements/attempts/${attempt!.id}/prepare`,{creditedUSDC:amount(values.get("credit")),receipt:values.get("receipt"),valuationNote:values.get("valuation"),routeClosed:values.has("closed"),reviewConfirmed:values.has("reviewed")});if(!prepared.walletActions.length){setWallet(null);refresh();notify("This partial settlement is already reconciled. Review its current remaining entitlement.");return;}setWallet(prepared);});}}>
       <Field label="Agreed USDC entitlement credited"><input name="credit" required inputMode="decimal" className={control} placeholder="Amount of the original entitlement satisfied"/></Field>
       <Field label="Delivery and terminal route closure evidence"><textarea name="receipt" required minLength={3} maxLength={1000} className={control} placeholder="Verified destination transaction and evidence no further funds can arrive"/></Field>
       <Field label="Basis for the agreed USDC credit"><textarea name="valuation" required minLength={3} maxLength={400} className={control} placeholder="Record the agreed value of the actual received asset. Native USDC credits must equal the USDC received."/></Field>
