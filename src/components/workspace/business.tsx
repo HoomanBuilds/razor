@@ -415,7 +415,6 @@ export function Payroll() {
                     setItems(Object.fromEntries(Object.entries(parsed).map(([recipientId, item]) => [recipientId, item.amount])));
                     setImportedRows(parsed);
                     setError("");
-                    setError("");
                   } catch (cause) {
                     setError((cause as Error).message);
                   }
