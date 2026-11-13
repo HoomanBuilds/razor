@@ -39,6 +39,12 @@ test("source callback recovery follows the execute-payment receipt graph and nev
   const attempt = { id: "attempt", route: { source_receiver: "deposit.near", input_amount: "1000000" } } as ChainAttempt;
   const result: FinalTransaction = { final_execution_status: "FINAL", status: { Failure: "missing callback" }, transaction: { hash: "source", signer_id: "owner.near", receiver_id: "treasury.near", actions: [call("execute_payment", { payment_id: "payment", attempt_id: "attempt" })] }, transaction_outcome: { outcome: { receipt_ids: ["execute"] } }, receipts: [{ receipt_id: "token", receiver_id: NATIVE_USDC.near, predecessor_id: "treasury.near", receipt: { Action: { actions: [call("ft_transfer", { receiver_id: "deposit.near", amount: "1000000" })] } } }], receipts_outcome: [{ id: "execute", block_hash: "block", outcome: { executor_id: "treasury.near", logs: [], status: { SuccessReceiptId: "callback" }, receipt_ids: ["token", "callback"] } }, { id: "token", block_hash: "block", outcome: { executor_id: NATIVE_USDC.near, logs: [transferLog("treasury.near", "deposit.near")], status: { SuccessValue: "" } } }] };
   assert.equal(inspectSourceTransfer(result, config, "payment", attempt).succeeded, true);
+  const shared = { ...config, architecture: "shared_v1" as const, company_id: "org:0000000000000000" };
+  assert.throws(() => inspectSourceTransfer(result, shared, "payment", attempt), /bound/);
+  const scoped = structuredClone(result);
+  scoped.transaction!.actions = [call("execute_payment", { company_id: shared.company_id, payment_id: "payment", attempt_id: "attempt" })];
+  assert.equal(inspectSourceTransfer(scoped, shared, "payment", attempt).succeeded, true);
+  assert.throws(() => inspectSourceTransfer(scoped, { ...shared, company_id: "org:1111111111111111" }, "payment", attempt), /bound/);
   assert.throws(() => inspectSourceTransfer(result, config, "another-payment", attempt));
   result.receipts_outcome![0].outcome.receipt_ids = ["unrelated"];
   assert.throws(() => inspectSourceTransfer(result, config, "payment", attempt));

@@ -1,4 +1,5 @@
 import { pageWindow } from "../pagination";
+import { sharedFundingMessage } from "../payments/near";
 import { randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -240,14 +241,15 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
     try { normalizeDestination(origin.blockchain, input.refundAddress); } catch { throw new ApiError(422, "Use a complete valid recovery address for the selected source network", "REFUND_ADDRESS_INVALID"); }
     if (destination.contractAddress !== request.token_contract) throw new ApiError(409, "The live catalog's settlement token changed", "FUNDING_TARGET_CHANGED");
     const deadline = new Date(Math.min(Date.now() + 2 * 60 * 60_000, Date.parse(request.expires_at))).toISOString();
-    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: `razor:funding-request:${request.id}` });
+    const fundingId = randomUUID();
+    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: sharedFundingMessage(config, fundingId) });
     if (quote.quote.amountOut !== initial.remainingAmount || Date.parse(quote.quote.deadline ?? deadline) > Date.parse(request.expires_at)) throw new ApiError(502, "The signed quote changed the fixed amount or request expiry", "FUNDING_QUOTE_MISMATCH");
     await frozenTarget(request);
     return transaction(() => {
       const current = requestForToken(token); assertOpen(current);
       const reserved = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE id=? AND state='quoting' AND reservation_owner=? AND lease_expires_at>?", claim.id!, owner, now());
       if (!reserved) throw new ApiError(409, "This funding preparation was replaced. Refresh the request before funding", "FUNDING_RESERVATION_EXPIRED");
-      const fundingId = randomUUID(), savedAt = now();
+      const savedAt = now();
       getDb().prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending_deposit',?,?)")
         .run(fundingId, request.organization_id, request.payment_id, `request:${request.id}:${reserved.id}`, origin.assetId, quote.quote.amountIn, quote.quote.amountOut, JSON.stringify(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, request.treasury_account_id, savedAt, savedAt);
       getDb().prepare("UPDATE funding_request_quotes SET funding_id=?,origin_token_json=?,state='active',reservation_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE id=?").run(fundingId, JSON.stringify(origin), savedAt, reserved.id);

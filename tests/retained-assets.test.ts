@@ -47,6 +47,12 @@ test("retained withdrawal recovery requires the exact final source receipt graph
     ],
   };
   assert.equal(inspectRetainedWithdrawal(result, config, pending).succeeded, true);
+  const shared = { ...config, architecture: "shared_v1" as const, company_id: "fixture:0000000000000000" };
+  assert.throws(() => inspectRetainedWithdrawal(result, shared, pending), /bound/);
+  const scoped = structuredClone(result);
+  scoped.transaction!.actions = [call("withdraw_retained_asset", { company_id: shared.company_id, token_contract: asset.token_contract, receiver_id: "owner.near", amount: "100000000", expected_epoch: "7" })];
+  assert.equal(inspectRetainedWithdrawal(scoped, shared, pending).succeeded, true);
+  assert.throws(() => inspectRetainedWithdrawal(scoped, { ...shared, company_id: "fixture:1111111111111111" }, pending), /bound/);
   const malformed = structuredClone(result);
   malformed.receipts_outcome![1].outcome.logs.unshift("EVENT_JSON:null", "EVENT_JSON:{\"standard\":\"nep141\",\"event\":\"ft_transfer\",\"data\":[null]}");
   assert.equal(inspectRetainedWithdrawal(malformed, config, pending).succeeded, true);

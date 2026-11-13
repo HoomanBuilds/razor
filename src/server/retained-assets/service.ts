@@ -5,17 +5,19 @@ import { getDb, row, rows, transaction } from "../db";
 import { encrypt } from "../identity/crypto";
 import { atomic } from "../../lib/money";
 import { getSupportedTokens, type Token } from "../payments/intents";
-import { contractCodeHash, nearTransactionStatus, validNearAccount, verifyTokenReceipt, view } from "../payments/near";
+import { contractCodeHash, nearTransactionStatus, sharedFundingMessage, treasuryArgs, validNearAccount, verifySharedDeposit, verifyTokenReceipt, view } from "../payments/near";
 import { reviewedArtifactHash } from "../near-artifacts";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import { eligibleRetainedTokens, indicativeValue, verifyMetadata } from "./policy";
 import type { RetainedAsset, RetainedPreview, TokenMetadata } from "./types";
+import { recoveryAuthority } from "../reconciliation/authority";
 import { inspectRetainedWithdrawal } from "./withdrawal-proof";
 
 interface ContractConfig { owner_id: string; token_contract: string; paused: boolean; retained_assets_enabled: boolean; max_retained_assets: number }
 interface State { config: TreasuryConfig; contract: ContractConfig; localPaused: boolean }
 const amount = (value: string) => { try { return atomic(value).toString(); } catch { throw new ApiError(422, "Enter a positive integer token amount within the supported range", "INVALID_AMOUNT"); } };
 const action = (receiverId: string, methodName: string, args: object, deposit = "1", gas = "100000000000000"): WalletTransaction => ({ receiverId, actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }] });
+const companyAction = (current: State, method: string, args: object, deposit = "1", gas = "100000000000000") => action(current.config.near_account_id, method, treasuryArgs(current.config, args), deposit, gas);
 
 async function state(access: AccessContext): Promise<State> {
   requirePermission(access, "company:read");
@@ -77,7 +79,7 @@ export async function retainedOverview(access: AccessContext) {
   if (!Array.isArray(registered) || registered.length > 16 || new Set(registered.map((item) => item.token_contract)).size !== registered.length) throw new ApiError(502, "The treasury returned an invalid retained-asset registry", "RETAINED_REGISTRY_INVALID");
   const holdings = await Promise.all(registered.map(async (item) => {
     const selected = checkedAsset(item, current, item.token_contract), tokenConfig = { ...current.config, near_account_id: selected.token_contract };
-    const [quantityResult, metadataResult] = await Promise.allSettled([view<string>(tokenConfig, "ft_balance_of", { account_id: current.config.near_account_id }), view<TokenMetadata>(tokenConfig, "ft_metadata")]);
+    const [quantityResult, metadataResult] = await Promise.allSettled([(current.config.architecture === "shared_v1" ? Promise.resolve(selected.balance) : view<string>(tokenConfig, "ft_balance_of", { account_id: current.config.near_account_id })), view<TokenMetadata>(tokenConfig, "ft_metadata")]);
     let observedBalance: string | null = null;
     if (quantityResult.status === "fulfilled") try { observedBalance = atomic(quantityResult.value, true).toString(); } catch {}
     const token = eligible.find((value) => value.contractAddress === selected.token_contract);
@@ -109,7 +111,7 @@ export async function prepareRetainedPolicy(access: AccessContext, input: { toke
     if (existing && (existing.asset_id !== selected.asset_id || existing.symbol !== selected.symbol || existing.decimals !== selected.decimals)) throw new ApiError(409, "The registered token identity is immutable. Retire deposits and withdraw its remaining units before using a different token", "RETAINED_IDENTITY_CHANGED");
   } else selected = checkedAsset(existing, current, input.tokenContract);
   activity(access, "retained.policy_prepared", input.tokenContract, { enabled: input.enabled });
-  return { ...preview(current, selected, signer, "allow", input.enabled ? "Approve this exact NEAR token contract for retained deposits. It will remain separate from USDC payment cash." : "Disable further retained deposits. Existing quantities stay visible and the owner can still withdraw them.", [action(current.config.near_account_id, "set_retained_asset", { token_contract: selected.token_contract, asset_id: selected.asset_id, symbol: selected.symbol, decimals: selected.decimals, enabled: input.enabled })]), enabled: input.enabled };
+  return { ...preview(current, selected, signer, "allow", input.enabled ? "Approve this exact NEAR token contract for retained deposits. It will remain separate from USDC payment cash." : "Disable further retained deposits. Existing quantities stay visible and the owner can still withdraw them.", [companyAction(current, "set_retained_asset", { token_contract: selected.token_contract, asset_id: selected.asset_id, symbol: selected.symbol, decimals: selected.decimals, enabled: input.enabled })]), enabled: input.enabled };
 }
 
 export async function prepareRetainedDeposit(access: AccessContext, input: { tokenContract: string; senderAccountId: string; amount: string }) {
@@ -121,7 +123,7 @@ export async function prepareRetainedDeposit(access: AccessContext, input: { tok
   const sourceBalance = await view<string>({ ...current.config, near_account_id: input.tokenContract }, "ft_balance_of", { account_id: input.senderAccountId });
   if (atomic(sourceBalance, true) < BigInt(value)) throw new ApiError(409, "The connected NEAR token holder has insufficient units. Native NEAR is not automatically wrapped", "RETAINED_SOURCE_BALANCE_LOW");
   const actions = await storageActions(current, selected.token_contract, current.config.near_account_id);
-  const instructions = { method: "ft_transfer_call" as const, receiver_id: current.config.near_account_id, amount: value, msg: "razor:retain" as const, attachedYoctoNear: "1" as const, gas: "100000000000000" };
+  const instructions = { method: "ft_transfer_call" as const, receiver_id: current.config.near_account_id, amount: value, msg: sharedFundingMessage(current.config, randomUUID(), "retained"), attachedYoctoNear: "1" as const, gas: "100000000000000" };
   actions.push(action(selected.token_contract, instructions.method, { receiver_id: instructions.receiver_id, amount: value, msg: instructions.msg }, "1", instructions.gas));
   activity(access, "retained.deposit_prepared", input.tokenContract);
   return { ...preview(current, selected, input.senderAccountId, "deposit", "Transfer only this NEAR NEP-141 token. Use ft_transfer_call with the exact message. The deposit does not create USDC payment credit.", actions), amount: value, receiver: current.config.near_account_id, instructions };
@@ -131,11 +133,11 @@ export async function prepareRetainedWithdrawal(access: AccessContext, input: { 
   const current = await state(access), signer = owner(access, current); running(current); holder(access, current, input.receiverId);
   const selected = await asset(current, input.tokenContract), value = amount(input.amount);
   if (selected.in_flight !== "0") throw new ApiError(409, "Reconcile the earlier retained-token withdrawal before preparing another", "RETAINED_WITHDRAWAL_PENDING");
-  const actual = atomic(await view<string>({ ...current.config, near_account_id: selected.token_contract }, "ft_balance_of", { account_id: current.config.near_account_id }), true);
+  const actual = atomic(current.config.architecture === "shared_v1" ? selected.balance : await view<string>({ ...current.config, near_account_id: selected.token_contract }, "ft_balance_of", { account_id: current.config.near_account_id }), true);
   if (actual !== BigInt(selected.balance) || selected.confirmed_at_ms === "0") throw new ApiError(409, "Refresh this retained balance in the NEAR treasury before withdrawal", "RETAINED_RECONCILIATION_REQUIRED");
   if (BigInt(value) > actual) throw new ApiError(409, "Withdrawal exceeds the observed retained token quantity", "INSUFFICIENT_RETAINED_BALANCE");
   const actions = await storageActions(current, selected.token_contract, input.receiverId);
-  actions.push(action(current.config.near_account_id, "withdraw_retained_asset", { token_contract: selected.token_contract, receiver_id: input.receiverId, amount: value, expected_epoch: selected.balance_epoch }));
+  actions.push(companyAction(current, "withdraw_retained_asset", { token_contract: selected.token_contract, receiver_id: input.receiverId, amount: value, expected_epoch: selected.balance_epoch }));
   activity(access, "retained.withdrawal_prepared", input.tokenContract);
   return { ...preview(current, selected, signer, "withdraw", "Withdraw retained token units to your verified NEAR wallet. No conversion or USDC payment credit occurs. The contract refuses withdrawals while paused or another withdrawal is unresolved.", actions), amount: value, receiver: input.receiverId };
 }
@@ -143,7 +145,7 @@ export async function prepareRetainedWithdrawal(access: AccessContext, input: { 
 export async function prepareRetainedRefresh(access: AccessContext, tokenContract: string) {
   const current = await state(access), signer = owner(access, current), selected = await asset(current, tokenContract);
   if (selected.in_flight !== "0") throw new ApiError(409, "A balance observation cannot close an unresolved withdrawal. Review its final source receipt first", "RETAINED_WITHDRAWAL_PENDING");
-  return preview(current, selected, signer, "refresh", "Observe the configured token contract's actual treasury balance. This never changes USDC payment cash.", [action(current.config.near_account_id, "refresh_retained_balance", { token_contract: tokenContract }, "0", "50000000000000")]);
+  return preview(current, selected, signer, "refresh", current.config.architecture === "shared_v1" ? "Refresh this company's credited token ledger. The shared wallet balance is never assigned to an individual company." : "Observe the configured token contract's actual treasury balance. This never changes USDC payment cash.", [companyAction(current, "refresh_retained_balance", { token_contract: tokenContract }, "0", "50000000000000")]);
 }
 
 export async function verifyRetainedDeposit(access: AccessContext, input: { tokenContract: string; senderAccountId: string; amount: string; transactionHash: string }) {
@@ -151,19 +153,24 @@ export async function verifyRetainedDeposit(access: AccessContext, input: { toke
   const current = await state(access); holder(access, current, input.senderAccountId);
   const selected = await asset(current, input.tokenContract), value = amount(input.amount);
   const proof = await verifyTokenReceipt({ ...current.config, token_contract: selected.token_contract }, input.transactionHash, input.senderAccountId, current.config.near_account_id, value);
+  if (current.config.architecture === "shared_v1") await verifySharedDeposit({ ...current.config, token_contract: selected.token_contract }, proof, undefined, "retained");
   transaction(db => {
     for (const event of proof.events) db.prepare("INSERT OR IGNORE INTO retained_asset_events(id,organization_id,event_key,event_type,token_contract,amount,transaction_hash,proof_ciphertext,actor_id,created_at) VALUES(?,?,?,'deposit_verified',?,?,?,?,?,?)")
       .run(randomUUID(), access.organizationId, `${current.config.network}:${selected.token_contract}:${event.receiptId}:${event.logIndex}:${event.dataIndex}`, selected.token_contract, event.amount, input.transactionHash, encrypt(JSON.stringify(proof)), access.userId, new Date().toISOString());
   });
-  return { receipt: proof, holdings: await retainedOverview(access), message: "The final NEAR token receipt is verified. Retained quantities come from token balance observations; company USDC and payment reserves are unchanged." };
+  return { receipt: proof, holdings: await retainedOverview(access), message: "The final NEAR token receipt is verified. Retained quantities come from the company token ledger; company USDC and payment reserves are unchanged." };
 }
 
 export async function prepareRetainedRecovery(access: AccessContext, input: { tokenContract: string; transactionHash: string; senderAccountId: string }) {
-  const current = await state(access), signer = owner(access, current), selected = await asset(current, input.tokenContract);
+  const current = await state(access), selected = await asset(current, input.tokenContract);
+  requirePermission(access, "company:manage");
   if (selected.in_flight === "0" || selected.withdrawal?.status !== "pending") throw new ApiError(409, "No retained withdrawal needs callback recovery", "RETAINED_RECOVERY_NOT_REQUIRED");
   const result = await nearTransactionStatus(current.config, input.transactionHash, input.senderAccountId);
   const proof = inspectRetainedWithdrawal(result, current.config, selected);
+  const authority = await recoveryAuthority(current.config, access.userId);
+  const signer = authority.shared && !proof.succeeded ? authority.refundAccounts[0] : owner(access, current);
+  if (!signer) throw new ApiError(409, "A verified platform recovery reporter must authorize this failed-transfer credit. Keep the withdrawal pending for operator review", "PLATFORM_RECOVERY_REQUIRED");
   const receipt = JSON.stringify({ transaction_hash: proof.transactionHash, receipt_id: proof.tokenReceiptId, succeeded: proof.succeeded });
   activity(access, "retained.recovery_prepared", selected.token_contract, { withdrawalId: selected.withdrawal.id });
-  return { ...preview(current, selected, signer, "recovery", "The application verified a final token-transfer receipt. The contract trusts the owner's explicit outcome attestation, then observes the token balance. No timeout or balance probe alone proves closure.", [action(current.config.near_account_id, "recover_retained_withdrawal", { token_contract: selected.token_contract, withdrawal_id: selected.withdrawal.id, succeeded: proof.succeeded, receipt }, "1", "100000000000000")]), proof };
+  return { ...preview(current, selected, signer, "recovery", "The application verified the final transfer receipt. Failed shared-wallet transfers require the platform recovery reporter before any company credit is restored. No timeout or pooled balance probe proves closure.", [companyAction(current, "recover_retained_withdrawal", { token_contract: selected.token_contract, withdrawal_id: selected.withdrawal.id, succeeded: proof.succeeded, receipt }, "1", "100000000000000")]), proof };
 }

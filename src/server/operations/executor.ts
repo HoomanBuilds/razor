@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { base58 } from "@scure/base";
 import { getDb, row, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
-import { contractCodeHash, view } from "../payments/near";
+import { contractCodeHash, treasuryArgs, view } from "../payments/near";
 import { reconcilePayment } from "../payments/service";
 import type { AccessContext } from "../context";
 import type { ApprovalStatus, ChainPayment, Payment, PayoutAttempt, TreasuryConfig } from "../payments/types";
@@ -22,7 +22,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
     notify(job.organization_id, `execute-attention:${job.entity_id}:${reason}`, "Payment requires attention", reason, job.entity_id);
     return { status: "blocked" as const, delayMs: 300_000, detail: { mode: "manual", reason, attemptId: job.entity_id } };
   };
-  const worker = workerConfiguration();
+  const worker = workerConfiguration(job.organization_id);
   if (!worker.configured || !worker.accountId) return blocked("A company signer must authorize this payment in the NEAR wallet. No restricted worker signer is configured.");
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", job.organization_id);
   const mandate = row<AgentMandate>("SELECT * FROM agent_mandates WHERE organization_id=?", job.organization_id);
@@ -77,7 +77,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   if (submission && submission.executor_account_id !== worker.accountId) return blocked("The executor changed while a signed submission is unresolved.");
   if (!submission) {
     const account = new Account(worker.accountId, provider, signer);
-    const signed = await account.createSignedTransaction({ receiverId: config.near_account_id, actions: [actions.functionCall("execute_payment", { payment_id: payment.id, attempt_id: attempt.id }, 100_000_000_000_000n, 0n)] });
+    const signed = await account.createSignedTransaction({ receiverId: config.near_account_id, actions: [actions.functionCall("execute_payment", treasuryArgs(config, { payment_id: payment.id, attempt_id: attempt.id }), 100_000_000_000_000n, 0n)] });
     const hash = base58.encode(createHash("sha256").update(signed.transaction.encode()).digest());
     transaction(() => {
       assertLease(job);
@@ -94,6 +94,10 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
   if (!currentPayment || ["paid", "cancelled", "partially_paid"].includes(currentPayment.status) || currentPayment.recipient_version !== payment.recipient_version || !currentRecipient || currentRecipient.version !== payment.recipient_version || currentRecipient.archived || currentRecipient.preference_status !== "confirmed") return blocked("Payment or recipient preferences changed before broadcast. Review the obligation in the owner wallet.");
   const signed = SignedTransaction.decode(Buffer.from(decrypt(submission.signed_transaction_ciphertext), "base64"));
   if (signed.transaction.signerId !== worker.accountId || signed.transaction.receiverId !== config.near_account_id || signed.transaction.publicKey.toString() !== publicKey.toString()) return blocked("The recorded transaction does not match the restricted executor.");
+  const call = signed.transaction.actions.length === 1 ? signed.transaction.actions[0].functionCall : undefined;
+  let recordedArgs: Record<string, unknown> | null = null;
+  try { if (call) recordedArgs = JSON.parse(Buffer.from(call.args).toString()); } catch {}
+  if (!call || call.methodName !== "execute_payment" || call.deposit !== 0n || recordedArgs?.payment_id !== payment.id || recordedArgs.attempt_id !== attempt.id || config.architecture === "shared_v1" && recordedArgs.company_id !== config.company_id) return blocked("The recorded transaction names a different company or payment attempt. Reconcile it before creating another signature.");
   try {
     const outcome = await provider.sendTransactionUntil(signed, "FINAL");
     const failed = typeof outcome.status === "object" && "Failure" in outcome.status;

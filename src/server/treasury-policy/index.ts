@@ -4,7 +4,7 @@ import { ApiError, requirePermission, type AccessContext, type AppEnv } from "..
 import { getDb, row } from "../db";
 import { getTreasury, setNetwork, syncTreasury } from "../payments";
 import { nativeUsdc, getSupportedTokens } from "../payments/intents";
-import { view, validNearAccount } from "../payments/near";
+import { treasuryAction, treasuryArgs, view, validNearAccount } from "../payments/near";
 import { BACKUP_NETWORKS } from "../payments/policy";
 import type { ApprovalTier, TreasuryConfig, WalletTransaction } from "../payments/types";
 import { atomic } from "../../lib/money";
@@ -43,7 +43,7 @@ export async function preparePolicyChange(access: AccessContext, input: z.infer<
   if (current.policy_version !== expectedPolicyVersion) throw new ApiError(409, "The treasury policy changed. Refresh and review it again", "POLICY_CHANGED");
   if (!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, current.owner_id, config.network)) throw new ApiError(403, "Verify the NEAR owner wallet before changing financial authority", "OWNER_WALLET_REQUIRED");
   const actions: WalletTransaction[] = [];
-  const action = (receiverId: string, methodName: string, args: object, deposit = "1", gas = "50000000000000") => ({ receiverId, actions: [{ type: "FunctionCall" as const, params: { methodName, args, deposit, gas } }] });
+  const action = (receiverId: string, methodName: string, args: object, deposit = "1", gas = "50000000000000") => ({ receiverId, actions: [{ type: "FunctionCall" as const, params: { methodName, args: receiverId === config.near_account_id ? treasuryArgs(config, args) : args, deposit, gas } }] });
   switch (input.action) {
     case "pause": actions.push(action(config.near_account_id, "set_paused", { paused: input.paused })); break;
     case "limits":
@@ -79,6 +79,34 @@ export async function preparePolicyChange(access: AccessContext, input: z.infer<
 }
 
 export const treasuryPolicyRoutes = new Hono<AppEnv>();
+export async function companyStorage(access: AccessContext) {
+  requirePermission(access, "company:read");
+  const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
+  if (!config || config.architecture !== "shared_v1") return { configured: false as const };
+  const [storage, current] = await Promise.all([
+    view<{ storage_credit: string; storage_used: string; storage_available: string }>(config, "get_storage"),
+    view<{ owner_id: string }>(config, "get_config"),
+  ]);
+  const credit = atomic(storage.storage_credit, true), used = atomic(storage.storage_used, true), available = atomic(storage.storage_available, true);
+  if (used > credit || credit - used !== available) throw new ApiError(502, "The treasury returned inconsistent company storage accounting", "STORAGE_ACCOUNTING_INVALID");
+  return { configured: true as const, network: config.network, companyId: config.company_id, treasuryAccount: config.near_account_id, ownerAccount: current.owner_id, storage };
+}
+
+export async function prepareCompanyStorage(access: AccessContext, deposit: string) {
+  requirePermission(access, "company:manage");
+  const state = await companyStorage(access);
+  if (!state.configured) throw new ApiError(409, "Activate the shared company treasury first", "TREASURY_SETUP_REQUIRED");
+  if (!row("SELECT id FROM linked_wallets WHERE user_id=? AND family='near' AND address=? AND network=?", access.userId, state.ownerAccount, state.network)) throw new ApiError(403, "Verify the company owner wallet before funding storage", "OWNER_WALLET_REQUIRED");
+  const amount = atomic(deposit).toString();
+  const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId)!;
+  return { ...state, deposit: amount, walletActions: [treasuryAction(config, "add_storage", {}, amount, "30000000000000")] };
+}
+
+treasuryPolicyRoutes.get("/storage", async c => c.json(await companyStorage(c.get("access"))));
+treasuryPolicyRoutes.post("/storage/prepare", async c => {
+  const input = z.object({ deposit: amount }).parse(await c.req.json());
+  return c.json(await prepareCompanyStorage(c.get("access"), input.deposit));
+});
 treasuryPolicyRoutes.get("/", async (c) => c.json(await policy(c.get("access"))));
 treasuryPolicyRoutes.post("/prepare", async (c) => {
   const value = z.object({ change: changeInput, expectedPolicyVersion: z.string().regex(/^\d+$/) }).parse(await c.req.json());

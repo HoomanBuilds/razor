@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { treasuryArgs } from "../payments/near";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, transaction } from "../db";
 import { encrypt } from "../identity/crypto";
@@ -68,7 +69,7 @@ export async function preparePartialSettlement(access: AccessContext, attemptId:
     db.prepare("INSERT INTO partial_settlement_reviews(id,organization_id,payment_id,attempt_id,actual_output,credited_usdc,destination_tx_hash,receipt_commitment,evidence_ciphertext,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_commitment) DO NOTHING")
       .run(randomUUID(), access.organizationId, payment.id, attemptId, measured.actual, input.creditedUSDC, attempt.destination_tx_hash, receipt, encrypt(JSON.stringify({ ...proof, provider })), access.userId, now());
   });
-  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "report_partial_settlement", args: { payment_id: payment.id, attempt_id: attemptId, expected_quote_hash: quoteHash, actual_output: measured.actual, credited_amount: input.creditedUSDC, route_closed: true, receipt }, gas: "80000000000000", deposit: "0" } }] }];
+  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "report_partial_settlement", args: treasuryArgs(config, { payment_id: payment.id, attempt_id: attemptId, expected_quote_hash: quoteHash, actual_output: measured.actual, credited_amount: input.creditedUSDC, route_closed: true, receipt }), gas: "80000000000000", deposit: "0" } }] }];
   return { ...reconciled, walletActions, network: config.network, creditedUSDC: input.creditedUSDC, actualOutput: measured.actual, remainingUSDC: (BigInt(payment.amount) - BigInt(input.creditedUSDC)).toString(), evidenceCommitment: receipt, requiresReporterAttestation: true };
 }
 

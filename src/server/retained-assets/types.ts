@@ -27,5 +27,5 @@ export interface RetainedPreview {
   expiresAt: string;
   message: string;
   walletActions: WalletTransaction[];
-  instructions?: { method: "ft_transfer_call"; receiver_id: string; amount: string; msg: "razor:retain"; attachedYoctoNear: "1"; gas: string };
+  instructions?: { method: "ft_transfer_call"; receiver_id: string; amount: string; msg: string; attachedYoctoNear: "1"; gas: string };
 }

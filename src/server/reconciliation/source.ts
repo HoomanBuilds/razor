@@ -1,7 +1,8 @@
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { createHash } from "node:crypto";
-import { getDb, row } from "../db";
-import { contractCodeHash, nearTransactionStatus, view, type FinalTransaction, type NearAction } from "../payments/near";
+import { getDb, row, rows } from "../db";
+import { contractCodeHash, nearTransactionStatus, treasuryArgs, view, type FinalTransaction, type NearAction } from "../payments/near";
+import { recoveryAuthority } from "./authority";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { getAttempt, getPayment } from "../payments/service";
 import type { ChainAttempt, ChainPayment, TreasuryConfig, WalletTransaction } from "../payments/types";
@@ -13,7 +14,7 @@ function args(action: NearAction, method: string): Record<string, unknown> | nul
 
 export function inspectSourceTransfer(result: FinalTransaction, config: TreasuryConfig, paymentId: string, attempt: ChainAttempt) {
   if (result.final_execution_status !== "FINAL") throw new ApiError(409, "Wait for the original source transaction to become final", "RECEIPT_NOT_FINAL");
-  const matchesExecution = (action: NearAction) => { const value = args(action, "execute_payment"); return value?.payment_id === paymentId && value.attempt_id === attempt.id; };
+  const matchesExecution = (action: NearAction) => { const value = args(action, "execute_payment"); return value?.payment_id === paymentId && value.attempt_id === attempt.id && (config.architecture !== "shared_v1" || value.company_id === config.company_id); };
   const executionIds = new Set(result.receipts?.filter((receipt) => receipt.receiver_id === config.near_account_id && receipt.receipt?.Action?.actions.some(matchesExecution)).map((receipt) => receipt.receipt_id) ?? []);
   if (result.transaction?.receiver_id === config.near_account_id && result.transaction.actions?.some(matchesExecution)) for (const receiptId of result.transaction_outcome?.outcome.receipt_ids ?? []) executionIds.add(receiptId);
   const sourceIds = new Set(result.receipts_outcome?.filter((outcome) => executionIds.has(outcome.id) && outcome.outcome.executor_id === config.near_account_id && !("Failure" in outcome.outcome.status)).flatMap((outcome) => outcome.outcome.receipt_ids ?? []) ?? []);
@@ -51,6 +52,10 @@ export async function prepareSourceRecovery(access: AccessContext, attemptId: st
   const compact = JSON.stringify({ transaction_hash: proof.transactionHash, receipt_id: proof.tokenReceiptId, outcome: proof.succeeded ? "source_sent" : "source_failed" });
   getDb().prepare("INSERT INTO payment_source_receipts(attempt_id,organization_id,transaction_hash,receipt_id,evidence,verified_by,verified_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET transaction_hash=excluded.transaction_hash,receipt_id=excluded.receipt_id,evidence=excluded.evidence,verified_by=excluded.verified_by,verified_at=excluded.verified_at").run(attemptId, access.organizationId, proof.transactionHash, proof.tokenReceiptId, JSON.stringify(proof), access.userId, new Date().toISOString());
   getDb().prepare("UPDATE payout_attempts SET source_tx_hash=?,updated_at=? WHERE id=? AND organization_id=?").run(proof.transactionHash, new Date().toISOString(), attemptId, access.organizationId);
-  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "recover_source_transfer", args: { payment_id: payment.id, attempt_id: attemptId, succeeded: proof.succeeded, receipt: compact }, gas: "60000000000000", deposit: "1" } }] }];
-  return { proof, sourceOutcome: proof.succeeded ? "succeeded" : "failed", requiresOwnerSignature: true, walletActions };
+  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "recover_source_transfer", args: treasuryArgs(config, { payment_id: payment.id, attempt_id: attemptId, succeeded: proof.succeeded, receipt: compact }), gas: "60000000000000", deposit: "1" } }] }];
+  const authority = await recoveryAuthority(config, access.userId);
+  const chain = await view<{ owner_id: string }>(config, "get_config");
+  const owners = rows<{address:string}>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=? AND address=?", access.userId, config.network, chain.owner_id).map(wallet => wallet.address);
+  const eligibleSigners = authority.shared && !proof.succeeded ? authority.refundAccounts : [...new Set([...owners, ...authority.refundAccounts])];
+  return { proof, sourceOutcome: proof.succeeded ? "succeeded" : "failed", requiresOwnerSignature: !authority.shared || proof.succeeded, requiresPlatformRecovery: authority.shared && !proof.succeeded, eligibleSigners, walletActions };
 }

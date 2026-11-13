@@ -4,7 +4,7 @@ import { companyDate } from "../../lib/company-time";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
-import { view, validNearAccount } from "../payments/near";
+import { treasuryArgs, view, validNearAccount } from "../payments/near";
 import { purgePrivateEvidence } from "../reconciliation/evidence";
 import { purgeFinancePlans } from "../assistant/finance";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
@@ -48,6 +48,7 @@ export function workerConfiguration(organizationId?: string) {
   const treasuryAccountId =
     process.env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID || null;
   const network = process.env.RAZOR_EXECUTOR_NETWORK || null;
+  const companyId = process.env.RAZOR_EXECUTOR_COMPANY_ID || null;
   const company = organizationId
     ? row<TreasuryConfig>(
         "SELECT * FROM treasury_config WHERE organization_id=?",
@@ -58,7 +59,8 @@ export function workerConfiguration(organizationId?: string) {
     !organizationId ||
     (!!company &&
       company.near_account_id === treasuryAccountId &&
-      company.network === network);
+      company.network === network &&
+      (company.architecture !== "shared_v1" || company.company_id === companyId));
   return {
     configured: !!(
       matches &&
@@ -70,6 +72,7 @@ export function workerConfiguration(organizationId?: string) {
     accountId: matches ? accountId : null,
     treasuryAccountId: matches ? treasuryAccountId : null,
     network: matches ? network : null,
+    companyId: matches ? companyId : null,
   };
 }
 
@@ -646,7 +649,8 @@ export async function prepareExecutorRole(
     !config ||
     !worker.accountId ||
     worker.treasuryAccountId !== config.near_account_id ||
-    worker.network !== config.network
+    worker.network !== config.network ||
+    (config.architecture === "shared_v1" && worker.companyId !== config.company_id)
   )
     throw new ApiError(
       409,
@@ -677,7 +681,7 @@ export async function prepareExecutorRole(
             type: "FunctionCall",
             params: {
               methodName: "set_role",
-              args: { account_id: worker.accountId, role: "executor", enabled },
+              args: treasuryArgs(config, { account_id: worker.accountId, role: "executor", enabled }),
               gas: "50000000000000",
               deposit: "1",
             },

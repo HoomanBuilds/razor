@@ -6,6 +6,7 @@ import { assertPaymentLiabilityApproved, getPayment, getTreasury, listAttempts, 
 import { getSupportedTokens, nativeUsdc, requestQuote, assertCanStartDeposit, quoteDepositWindow, assertSameQuote, checkStatus, type QuoteResponse } from "../payments/intents";
 import { normalizeDestination, DestinationError } from "../../lib/recipient-destination";
 import type { FundingLeg, WalletTransaction } from "../payments/types";
+import { sharedFundingMessage, treasuryArgs } from "../payments/near";
 import { verifyFundingCredit } from "../reconciliation/funding";
 import { fundingPositions, verifiedLinkedCredit, type FundingTask } from "./accounting";
 import { verifyCompanyFundingTarget } from "../funding-requests/service";
@@ -127,7 +128,8 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
     return current.shortfall;
   });
   try {
-    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: token.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 3600_000).toISOString(), customRecipientMsg: `razor:payment-funding:${paymentId}` });
+    const fundingId = randomUUID();
+    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: token.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 3600_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) });
     await verifyCompanyFundingTarget(access);
     const funding = transaction(db => {
       running(access); approved(access, paymentId);
@@ -135,7 +137,7 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
       if (!claim || claim.terms_hash !== paymentTermsHash(getPayment(access, paymentId))) throw new ApiError(409, "The obligation or quote preparation changed. No deposit is authorized", "FUNDING_TERMS_CHANGED");
       const currentConfig = getTreasury(access).config;
       if (!currentConfig || currentConfig.near_account_id !== config.near_account_id || currentConfig.network !== config.network || currentConfig.token_contract !== config.token_contract) throw new ApiError(409, "The company's funding destination changed", "FUNDING_TARGET_CHANGED");
-      const id = randomUUID();
+      const id = fundingId;
       db.prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,deposit_memo,recipient_address,status,origin_network,origin_decimals,origin_symbol,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending_deposit',?,?,?,?,?)").run(id, access.organizationId, paymentId, `payment-task:${quoteId}`, token.assetId, quote.quote.amountIn, quote.quote.amountOut, JSON.stringify(quote), quote.quote.depositAddress!, quote.quote.depositMemo ?? null, config.near_account_id, token.blockchain, token.decimals, token.symbol, now(), now());
       db.prepare("UPDATE payment_funding_quotes SET state='active',funding_id=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(id, now(), quoteId);
       return row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", id)!;
@@ -159,7 +161,7 @@ export async function prepareTaskBalanceRefresh(access: AccessContext, paymentId
   getPayment(access, paymentId);
   const treasury = await syncTreasury(access), config = treasury.config!;
   if (BigInt(treasury.onchain.in_flight) > 0n) throw new ApiError(409, "A NEAR source callback is unresolved. Reconcile it before refreshing the balance", "SOURCE_CALLBACK_PENDING");
-  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "refresh_balance", args: {}, gas: "40000000000000", deposit: "0" } }] }];
+  const walletActions: WalletTransaction[] = [{ receiverId: config.near_account_id, actions: [{ type: "FunctionCall", params: { methodName: "refresh_balance", args: treasuryArgs(config), gas: "40000000000000", deposit: "0" } }] }];
   return { network: config.network, walletActions };
 }
 
