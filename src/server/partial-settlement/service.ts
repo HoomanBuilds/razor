@@ -10,6 +10,7 @@ import { getSupportedTokens, nativeUsdc, type StatusResponse } from "../payments
 import type { Payment, PayoutAttempt, TreasuryConfig, WalletTransaction } from "../payments/types";
 import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { deliveryOutput, digest, liabilityPayments, validateCredit } from "./model";
+import { assertSameRecipientOwner } from "../payments/recipient-names";
 
 const now = () => new Date().toISOString();
 interface Settlement { payment_id: string; attempt_id: string; actual_output: string; credited_usdc: string; source_spent_usdc: string; receipt_commitment: string; confirmed_at: string }
@@ -84,6 +85,7 @@ export async function createRemainder(access: AccessContext, paymentId: string, 
     if (review.remainder) return { payment: review.remainder, alreadyPrepared: true };
     if (review.reviewToken !== input.reviewToken || !review.settlement || review.payment.status !== "partially_paid" || !review.remaining || !review.currentRecipientConfirmed) throw new ApiError(409, "Review the terminal partial settlement and current confirmed recipient before preparing a remainder", "PARTIAL_REMAINDER_NOT_READY");
     const parent = review.payment, metadata = JSON.parse(parent.metadata) as Record<string, unknown>;
+    assertSameRecipientOwner(access.organizationId, parent);
     const bill = row<{ id: string; payment_id: string | null }>("SELECT b.id,b.payment_id FROM bills b JOIN bill_installments i ON i.bill_id=b.id WHERE i.payment_id=? AND b.organization_id=?", parent.id, access.organizationId);
     const item = row<{ id: string; run_id: string }>("SELECT i.id,i.run_id FROM payroll_items i JOIN payroll_runs r ON r.id=i.run_id WHERE i.payment_id=? AND r.organization_id=?", parent.id, access.organizationId);
     if (metadata.billId && bill?.payment_id !== parent.id || metadata.runId && !item) throw new ApiError(409, "The original liability no longer points to this partial payment", "PARTIAL_LIABILITY_STALE");

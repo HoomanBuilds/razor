@@ -13,7 +13,7 @@ import { getSupportedTokens, type Token } from "../payments/intents";
 import { duplicateInvoiceWarnings } from "../business/duplicate-invoices";
 import { recipientRouteReadiness } from "./routing";
 import { liabilityPayments } from "../partial-settlement/model";
-import { recordedRecipientName } from "../payments/recipient-names";
+import { assertSameRecipientOwner, recordedRecipientName } from "../payments/recipient-names";
 import { fundingPositions } from "../payment-funding/accounting";
 
 interface Terms { base_amount: string; bonus_amount: string; adjustment_amount: string; note_ciphertext: string | null; version: number }
@@ -218,6 +218,7 @@ export async function replaceCancelledPayment(access: AccessContext, paymentId: 
     if (concurrent) return { payment: getPayment(access, concurrent.new_payment_id), replacedPaymentId: paymentId, alreadyPrepared: true };
     const previous = getPayment(access, paymentId);
     assertReplaceable(access, previous);
+    assertSameRecipientOwner(access.organizationId, previous);
     const item = row<Item>("SELECT i.* FROM payroll_items i JOIN payroll_runs r ON r.id=i.run_id WHERE i.payment_id=? AND r.organization_id=?", paymentId, access.organizationId);
     const bill = row<{ id: string; reference: string; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null }>("SELECT id,reference,requires_acceptance,milestone_accepted_at,acceptance_evidence FROM bills WHERE payment_id=? AND organization_id=?", paymentId, access.organizationId);
     const parent = row<Replacement>("SELECT * FROM payment_replacements WHERE new_payment_id=? AND organization_id=?", paymentId, access.organizationId);

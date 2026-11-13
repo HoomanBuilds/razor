@@ -143,3 +143,17 @@ test("client principal follows the active remainder without duplicating reservat
   getDb().prepare("UPDATE payments SET status='paid',delivered_amount=amount WHERE id=?").run(child.id);
   assert.equal(clientReserveTotals(f.access.organizationId).clientPrincipalOutstanding,"0");assert.equal(reservePositions(f.access.organizationId)[0].state,"closed");
 });
+
+test("a partial remainder cannot adopt another person's reassigned recipient profile",async()=>{
+  const f=fixture(),db=getDb(),other=randomUUID(),savedAt=new Date().toISOString();
+  db.prepare("UPDATE recipients SET user_id=? WHERE id=?").run(f.access.userId,f.recipientId);
+  db.prepare("INSERT INTO recipient_versions(recipient_id,version,profile_ciphertext,changed_by,created_at) VALUES(?,1,?,?,?)").run(f.recipientId,encrypt(JSON.stringify({name:"Payee",user_id:f.access.userId})),f.access.userId,savedAt);
+  await reconcilePayment(f.access,f.paymentId);
+  db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,'Other person',?)").run(other,savedAt);
+  db.prepare("UPDATE recipients SET user_id=?,version=2,primary_address='0x3434343434343434343434343434343434343434' WHERE id=?").run(other,f.recipientId);
+  await assert.rejects(createRemainder(f.access,f.paymentId,{reviewToken:partialReview(f.access,f.paymentId).reviewToken,maxFee:"1000000"}),/different person/);
+  assert.equal(partialReview(f.access,f.paymentId).remainder,null);
+  db.prepare("UPDATE recipients SET user_id=? WHERE id=?").run(f.access.userId,f.recipientId);
+  const child=await createRemainder(f.access,f.paymentId,{reviewToken:partialReview(f.access,f.paymentId).reviewToken,maxFee:"1000000"});
+  assert.equal(child.payment.amount,"60000000");assert.equal(child.payment.recipient_version,2);
+});
