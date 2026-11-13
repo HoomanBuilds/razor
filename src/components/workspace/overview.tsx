@@ -17,7 +17,7 @@ interface Summary {
 }
 
 export function Overview() {
-  const { base, revision, recipients, navigate, organization } = useWorkspace();
+  const { base, revision, recipients, navigate, organization, session } = useWorkspace();
   const permissions = organization.permissions ?? [];
   const canReadPayments = hasPermissions(permissions, ["payments:read"]);
   const canPrepare = hasPermissions(permissions, ["payments:prepare", "recipients:read"]);
@@ -25,14 +25,15 @@ export function Overview() {
   const canManageRecipients = hasPermissions(permissions, ["recipients:manage"]);
   const summary = useResource<Summary>(canReadPayments ? `${base}/payments/summary` : null, revision);
   const balance = useResource<Treasury>(!canReadPayments ? `${base}/treasury` : null, revision);
-  const { data: account } = useResource<{ ownerWalletReady: boolean }>(canManage || canPrepare ? "/account/status" : null, revision);
   const treasury = summary.data?.treasury ?? balance.data;
+  const signingNetwork = treasury?.config?.network ?? organization.near_network;
+  const signerLinked = session.wallets.some(wallet => wallet.family === "near" && wallet.network === signingNetwork);
   const steps: { title: string; done: boolean; section: Section; detail: string; href?: string; show: boolean }[] = [
     { title: "Company created", done: true, section: "settings", detail: organization.name, show: true },
-    { title: "Link a NEAR signing wallet", done: !!account?.ownerWalletReady, section: "treasury", detail: "Verify your wallet, then check its company authority", href: "/account", show: canManage || canPrepare },
+    { title: "Link a NEAR signing wallet", done: signerLinked, section: "treasury", detail: `Verify a wallet on ${signingNetwork ?? "the company network"}, then check its authority`, href: "/account", show: canManage || canPrepare },
     { title: "Connect NEAR treasury", done: !!treasury?.config, section: "treasury", detail: "Verify your company contract and owner", show: canManage },
     { title: "Add your payees", done: recipients.length > 0, section: "recipients", detail: "Invite employees, contractors or suppliers", show: canManageRecipients },
-    { title: "Fund the company", done: BigInt(treasury?.balance ?? "0") > 0n, section: "treasury", detail: "Use any live supported source asset", show: canPrepare },
+    { title: "Fund the company", done: BigInt(treasury?.balance ?? "0") > 0n || (summary.data?.paidCount ?? 0) > 0, section: "treasury", detail: "Use any live supported source asset", show: canPrepare },
     { title: "Complete a payment", done: (summary.data?.paidCount ?? 0) > 0, section: "payments", detail: "Approve, execute and reconcile delivery", show: canPrepare },
   ];
   const visibleSteps = steps.filter(step => step.show);
