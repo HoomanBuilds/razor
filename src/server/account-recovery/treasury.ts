@@ -49,8 +49,10 @@ async function requirePausedAndClear(access:AccessContext,state:Awaited<ReturnTy
 }
 
 export async function treasuryRecoveryStatus(access:AccessContext) {
+  requirePermission(access,"company:manage");
+  if(!row("SELECT organization_id FROM treasury_config WHERE organization_id=?",access.organizationId))return {configured:false as const};
   const state=await chainState(access);
-  return {treasuryAccount:state.config.near_account_id,network:state.config.network,chain:state.chain,codeHash:state.codeHash,companyOwner:!!row("SELECT id FROM organizations WHERE id=? AND owner_id=?",access.organizationId,access.userId),requests:rows<{id:string;kind:string;status:string;created_at:string;confirmed_at:string|null}>("SELECT id,kind,status,created_at,confirmed_at FROM treasury_recovery_requests WHERE organization_id=? ORDER BY created_at DESC LIMIT 20",access.organizationId)};
+  return {configured:true as const,treasuryAccount:state.config.near_account_id,network:state.config.network,chain:state.chain,codeHash:state.codeHash,companyOwner:!!row("SELECT id FROM organizations WHERE id=? AND owner_id=?",access.organizationId,access.userId),requests:rows<{id:string;kind:string;status:string;created_at:string;confirmed_at:string|null}>("SELECT id,kind,status,created_at,confirmed_at FROM treasury_recovery_requests WHERE organization_id=? ORDER BY created_at DESC LIMIT 20",access.organizationId)};
 }
 
 export async function prepareRecoveryPause(access:AccessContext) {
