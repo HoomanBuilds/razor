@@ -28,6 +28,7 @@
     "@solana/kit": "^5.5.1",
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.99.0",
+    "@web3icons/react": "4.1.25",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
