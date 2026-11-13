@@ -43,6 +43,10 @@ export function classifyProjectFunding(access: AccessContext, input: { fundingId
 export function projectReports(access: AccessContext) {
   requirePermission(access, "reports:read");
   requirePermission(access, "payments:read");
+  return transaction(() => projectReportSnapshot(access));
+}
+
+function projectReportSnapshot(access: AccessContext) {
   const held = clientRestrictions(access.organizationId);
   const projects = new Map<string, Bucket>(), costCenters = new Map<string, Bucket>();
   const bucket = (map: Map<string, Bucket>, reference: string) => {
