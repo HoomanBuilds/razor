@@ -10,6 +10,7 @@ import type {
 } from "../payments/types";
 import { isDirectExecution } from "./direct";
 import { clientReserveExportRows } from "../client-reserves";
+import { clearingExportRows } from "../clearing/accounting";
 
 export function csvCell(value: unknown): string {
   let text = String(value ?? "").replaceAll("\u0000", "");
@@ -64,6 +65,7 @@ export function accountingExport(access: AccessContext): string {
     created_at: string;
     project_reference: string | null;
     cost_center_reference: string | null;
+    setoff_amount: string;
   }>(
     "SELECT * FROM bills WHERE organization_id=? ORDER BY created_at,id",
     access.organizationId,
@@ -343,6 +345,8 @@ export function accountingExport(access: AccessContext): string {
       cost_center_reference: bill.cost_center_reference ? decrypt(bill.cost_center_reference) : undefined,
       entitlement_usdc: usdc(bill.amount),
       entitlement_micro_usdc: bill.amount,
+      setoff_usdc: usdc(bill.setoff_amount),
+      setoff_micro_usdc: bill.setoff_amount,
       max_cost_usdc: usdc(bill.max_fee),
       max_cost_micro_usdc: bill.max_fee,
       verification: "invoice_record; obligation_row_is_the_payment_liability",
@@ -375,6 +379,7 @@ export function accountingExport(access: AccessContext): string {
       ),
       ...entry,
     });
+  records.push(...clearingExportRows(access.organizationId));
   const headers = [
     "record_type",
     "record_id",
@@ -447,6 +452,14 @@ export function accountingExport(access: AccessContext): string {
     "client_principal_outstanding_usdc",
     "client_release_reason",
     "verification",
+    "setoff_usdc",
+    "setoff_micro_usdc",
+    "clearing_round_id",
+    "residual_payment_id",
+    "discharged_invoice_value_usdc",
+    "planned_residual_transfer_volume_usdc",
+    "residual_transfer_volume_usdc",
+    "minimum_starting_liquidity_usdc",
   ];
   return [
     headers.map(csvCell).join(","),

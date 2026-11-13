@@ -5,7 +5,7 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { createPayment, getPayment, type Payment } from "../payments";
 import { activity } from "./service";
 
-interface TermsBill { id: string; recipient_id: string; amount: string; status: string; payment_id: string; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
+interface TermsBill { id: string; recipient_id: string; amount: string; setoff_amount: string; status: string; payment_id: string | null; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
 function bill(access: AccessContext, id: string): TermsBill {
   const result = row<TermsBill>("SELECT * FROM bills WHERE id=? AND organization_id=?", id, access.organizationId);
   if (!result) throw new ApiError(404, "Invoice not found", "NOT_FOUND");
@@ -19,14 +19,17 @@ export function getBillTerms(access: AccessContext, id: string) {
   requirePermission(access, "payments:read");
   const current = bill(access, id);
   const installments = rows<Payment>("SELECT p.* FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? ORDER BY i.created_at", id);
-  const paid = installments.filter((item) => item.status === "paid").reduce((sum, item) => sum + BigInt(item.amount), 0n);
+  const paid = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(current.setoff_amount);
   const committed = installments.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + BigInt(item.amount), 0n);
-  return { ...current, acceptance_evidence: current.acceptance_evidence ? decrypt(current.acceptance_evidence) : null, dispute_reason: current.dispute_reason ? decrypt(current.dispute_reason) : null, installments, paid: paid.toString(), remainingLiability: (BigInt(current.amount) - paid).toString(), uncommitted: (BigInt(current.amount) - committed).toString() };
+  const clearingSetoffs = rows<{ round_id: string; amount: string; original_payment_id: string; residual_payment_id: string | null; proof_block_hash: string; proof_block_height: string; created_at: string }>("SELECT round_id,amount,original_payment_id,residual_payment_id,proof_block_hash,proof_block_height,created_at FROM clearing_setoffs WHERE bill_id=? AND organization_id=? ORDER BY created_at", id, access.organizationId);
+  return { ...current, acceptance_evidence: current.acceptance_evidence ? decrypt(current.acceptance_evidence) : null, dispute_reason: current.dispute_reason ? decrypt(current.dispute_reason) : null, installments, clearingSetoffs, paid: paid.toString(), setoffAmount: setoff.toString(), remainingLiability: (BigInt(current.amount) - paid - setoff).toString(), uncommitted: (BigInt(current.amount) - committed - setoff).toString() };
 }
 export function setBillTerms(access: AccessContext, id: string, input: { paymentAmount: string; maxFee: string; requiresAcceptance: boolean }) {
   requirePermission(access, "payments:prepare");
   return transaction((db) => {
-    const current = getBillTerms(access, id), payment = getPayment(access, current.payment_id);
+    const current = getBillTerms(access, id);
+    if (!current.payment_id) throw new ApiError(409, "This invoice has no unpaid installment to change", "TERMS_LOCKED");
+    const payment = getPayment(access, current.payment_id);
     if (current.status === "disputed" || payment.status !== "draft" || payment.approved_at) throw new ApiError(409, "Only an undisputed, unapproved installment can change terms", "TERMS_LOCKED");
     const amount = positive(input.paymentAmount), maxFee = positive(input.maxFee, true);
     if (BigInt(amount) > BigInt(current.uncommitted) + BigInt(payment.amount)) throw new ApiError(409, "The installment exceeds the remaining invoice amount", "INSTALLMENT_EXCEEDS_BALANCE");

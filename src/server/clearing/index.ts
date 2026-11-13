@@ -1,0 +1,20 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import type { AppEnv } from "../context";
+import * as service from "./service";
+
+export const clearingRoutes = new Hono<AppEnv>();
+const id = z.string().min(1).max(100), digest = z.string().regex(/^[a-f0-9]{64}$/);
+const selection = z.object({ linkIds: z.array(id).min(2).max(32), startsAt: z.string().datetime(), expiresAt: z.string().datetime() });
+clearingRoutes.get("/", c => c.json(service.overview(c.get("access"))));
+clearingRoutes.post("/participation", async c => c.json(await service.setParticipation(c.get("access"), z.object({ enabled: z.boolean() }).parse(await c.req.json()).enabled)));
+clearingRoutes.get("/companies/:id", c => c.json(service.lookupCompany(c.get("access"), c.req.param("id"))));
+clearingRoutes.post("/invoices", async c => c.json(service.offerInvoice(c.get("access"), z.object({ billId: id, creditorId: id, startsAt: z.string().datetime(), expiresAt: z.string().datetime() }).parse(await c.req.json())), 201));
+clearingRoutes.post("/invoices/:id/accept", async c => c.json(service.acceptInvoice(c.get("access"), c.req.param("id"), z.object({ termsHash: digest }).parse(await c.req.json()).termsHash)));
+clearingRoutes.post("/invoices/:id/revoke", c => c.json(service.revokeInvoice(c.get("access"), c.req.param("id"))));
+clearingRoutes.post("/invoices/:id/share", async c => c.json(service.shareInvoice(c.get("access"), c.req.param("id"), z.object({ companyId: id }).parse(await c.req.json()).companyId)));
+clearingRoutes.post("/rounds/preview", async c => c.json(service.previewRound(c.get("access"), selection.parse(await c.req.json()))));
+clearingRoutes.post("/rounds", async c => c.json(service.createRound(c.get("access"), selection.extend({ reviewToken: digest }).parse(await c.req.json())), 201));
+clearingRoutes.get("/rounds/:id", c => c.json(service.roundDetail(c.get("access"), c.req.param("id"))));
+clearingRoutes.post("/rounds/:id/actions", async c => { const input = z.object({ manifestHash: digest, operation: z.enum(["register", "consent", "finalize", "revoke"]) }).parse(await c.req.json()); return c.json(await service.prepareRoundAction(c.get("access"), c.req.param("id"), input.manifestHash, input.operation)); });
+clearingRoutes.post("/rounds/:id/reconcile", async c => c.json(await service.reconcileRound(c.get("access"), c.req.param("id"))));
