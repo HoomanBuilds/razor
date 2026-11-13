@@ -4,6 +4,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { extractPrivateInvoice } from "./client";
 import { getAssistantConfig, requirePrivateAiConfig } from "./config";
+import { privateHistoryQuery, privateHistoryWindow } from "../private-history";
 import type { ExtractedInvoice } from "./extraction";
 
 interface StoredDraft {
@@ -54,10 +55,19 @@ export async function analyzeInvoice(access: AccessContext, text: string) {
   }
 }
 
+export function invoiceDraftHistory(access:AccessContext,input:unknown={}) {
+  requirePermission(access,"documents:manage");
+  const query=privateHistoryQuery.parse(input);
+  return transaction(()=>{
+    purgeExpired();
+    const total=row<{total:number}>("SELECT COUNT(*) AS total FROM assistant_drafts WHERE organization_id=?",access.organizationId)!.total,{offset,...page}=privateHistoryWindow(total,query);
+    const drafts=rows<StoredDraft>("SELECT id,organization_id,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at FROM assistant_drafts WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",access.organizationId,page.pageSize,offset).map(item=>({id:item.id,documentHash:createHash("sha256").update(decrypt(item.input_ciphertext)).digest("hex"),draft:JSON.parse(decrypt(item.draft_ciphertext)) as ExtractedInvoice,verification:JSON.parse(decrypt(item.evidence_ciphertext)).verification,createdAt:item.created_at,expiresAt:item.expires_at,requiresReview:true}));
+    return {drafts,...page};
+  });
+}
+
 export function listDrafts(access: AccessContext) {
-  requirePermission(access, "documents:manage");
-  purgeExpired();
-  return rows<StoredDraft>("SELECT id,organization_id,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at FROM assistant_drafts WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", access.organizationId).map((item) => ({ id: item.id, documentHash:createHash("sha256").update(decrypt(item.input_ciphertext)).digest("hex"), draft: JSON.parse(decrypt(item.draft_ciphertext)) as ExtractedInvoice, verification: JSON.parse(decrypt(item.evidence_ciphertext)).verification, createdAt: item.created_at, expiresAt: item.expires_at, requiresReview: true }));
+  return invoiceDraftHistory(access,{pageSize:100}).drafts;
 }
 
 export function getDraftEvidence(access: AccessContext, draftId: string) {

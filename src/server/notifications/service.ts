@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { privateHistoryQuery, privateHistoryWindow } from "../private-history";
 import { randomUUID } from "node:crypto";
 import { ApiError } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -29,7 +31,15 @@ function mayReadRecipientNotice(userId:string,id:string) {
 
 export function listRecipientNotices(userId: string) {
   refreshNoticeOwners(undefined,userId);
-  return rows("SELECT id,title,body,entity_id,recipient_id,read_at,created_at FROM recipient_notices WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100", userId).filter((notice)=>mayReadRecipientNotice(userId,(notice as {id:string}).id));
+  return rows<{id:string;organization_id:string;companyName:string;title:string;body:string;entity_id:string;recipient_id:string;read_at:string|null;created_at:string}>("SELECT n.id,n.organization_id,o.name AS companyName,n.title,n.body,n.entity_id,n.recipient_id,n.read_at,n.created_at FROM recipient_notices n JOIN organizations o ON o.id=n.organization_id WHERE n.user_id=? ORDER BY n.created_at DESC,n.id DESC",userId).filter(notice=>mayReadRecipientNotice(userId,notice.id));
+}
+const noticeHistoryQuery=privateHistoryQuery.extend({filter:z.enum(["all","unread"]).default("all")});
+export function recipientNoticeHistory(userId:string,input:unknown={}) {
+  const query=noticeHistoryQuery.parse(input);
+  return transaction(()=>{
+    const all=listRecipientNotices(userId),unread=all.filter(notice=>!notice.read_at),filtered=query.filter==="unread"?unread:all,{offset,...page}=privateHistoryWindow(filtered.length,query);
+    return {notices:filtered.slice(offset,offset+page.pageSize),...page,filter:query.filter,unreadCount:unread.length,totalAll:all.length};
+  });
 }
 export function readRecipientNotice(userId: string, id: string) {
   refreshNoticeOwners(undefined,userId);
