@@ -15,6 +15,9 @@ import { checkedApprovalStatus } from "../treasury-policy/approvals";
 import { fundingPositions, linkedFundingTotals } from "../payment-funding/accounting";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
 
+import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
+import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
+
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
 const json = (value: unknown) => JSON.stringify(value);
@@ -23,7 +26,7 @@ function atomic(value: string | bigint, allowZero = false) {
   try { return parseAtomic(value, allowZero); } catch { throw new ApiError(422, "Use a valid unsigned integer token amount within the supported range", "INVALID_AMOUNT"); }
 }
 
-const activeStates = ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered"];
+const activeStates = ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered", "reported_partial"];
 
 function assertRunning(access: AccessContext): void {
   const company = row<{ paused: number }>("SELECT paused FROM organizations WHERE id = ?", access.organizationId);
@@ -40,7 +43,7 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
 
 export function listPayments(access: AccessContext): Payment[] {
   requirePermission(access, "payments:read");
-  return rows<Payment>("SELECT * FROM payments WHERE organization_id = ? ORDER BY created_at DESC LIMIT 500", access.organizationId);
+  return rows<Payment>("SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC LIMIT 500", access.organizationId);
 }
 
 export function listLedger(access: AccessContext) {
@@ -198,14 +201,17 @@ function applyApprovalReservation(access: AccessContext, paymentId: string, exis
   return transaction(() => {
     const payment = getPayment(access, paymentId);
     if (existingOnly && (!payment.approved_at || !payment.approved_by)) throw new ApiError(409, "Review and approve this obligation before reserving its funding", "APPROVAL_REQUIRED");
-    const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string };
+    const metadata = JSON.parse(payment.metadata) as { billId?: string; runId?: string; partialOf?: string };
     if (metadata.billId) {
       const bill = row<{ status: string }>("SELECT status FROM bills WHERE id=? AND organization_id=? AND payment_id=?", metadata.billId, access.organizationId, paymentId);
       if (!bill || bill.status !== "approved") throw new ApiError(409, "Approve the underlying invoice before approving its payment", "BILL_APPROVAL_REQUIRED");
     }
     if (metadata.runId) {
-      const run = row<{ status: string }>("SELECT r.status FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=?", metadata.runId, access.organizationId, payment.id, payment.recipient_id);
-      if (!run || run.status !== "approved") throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
+      const run = row<{ status: string; approved_by: string | null }>("SELECT r.status,r.approved_by FROM payroll_runs r JOIN payroll_items i ON i.run_id=r.id WHERE r.id=? AND r.organization_id=? AND i.payment_id=? AND i.recipient_id=?", metadata.runId, access.organizationId, payment.id, payment.recipient_id);
+      const parent = metadata.partialOf && row("SELECT payment_id FROM partial_settlements WHERE payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
+      const remainder = metadata.partialOf && row<{ remainder_payment_id: string }>("SELECT remainder_payment_id FROM partial_remainders WHERE original_payment_id=? AND organization_id=?", metadata.partialOf, access.organizationId);
+      const individualRemainder = !!run?.approved_by && !!parent && !!remainder && liabilityPayments(access.organizationId, remainder.remainder_payment_id).some(entry => entry.id === payment.id);
+      if (!run || run.status !== "approved" && !individualRemainder) throw new ApiError(409, "Approve the underlying pay run before approving its payments", "RUN_APPROVAL_REQUIRED");
     }
     if (["approved", "prepared", "in_flight", "paid"].includes(payment.status)) return payment;
     if (!["draft", "approved_unfunded", "held"].includes(payment.status)) throw new ApiError(409, "This obligation cannot be approved in its current state", "PAYMENT_STATE_CHANGED");
@@ -234,7 +240,7 @@ export async function cancelPayment(access: AccessContext, paymentId: string) {
   const payment = getPayment(access, paymentId);
   if (payment.status === "cancelled") return { payment, walletActions: [] };
   const attempts = listAttempts(access, paymentId);
-  if (payment.status === "paid" || attempts.some((attempt) => activeStates.includes(attempt.state))) throw new ApiError(409, "Reconcile active delivery before cancelling", "ATTEMPT_ACTIVE");
+  if (["paid", "partially_paid"].includes(payment.status) || BigInt(payment.delivered_amount) > 0n || attempts.some((attempt) => activeStates.includes(attempt.state))) throw new ApiError(409, "Reconcile active delivery before cancelling", "ATTEMPT_ACTIVE");
   const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
   const chain = config ? await view<ChainPayment | null>(config, "get_payment", { payment_id: paymentId }) : null;
   if (chain && chain.status !== "cancelled") {
@@ -281,7 +287,7 @@ export async function preparePaymentQuote(access: AccessContext, paymentId: stri
   assertRunning(access);
   const config = configFor(access, true);
   const payment = getPayment(access, paymentId);
-  if (!payment.approved_at || payment.status === "cancelled" || payment.status === "paid") throw new ApiError(409, "Approve an unpaid obligation before execution", "APPROVAL_REQUIRED");
+  if (!payment.approved_at || ["cancelled", "paid", "partially_paid"].includes(payment.status) || BigInt(payment.delivered_amount) > 0n) throw new ApiError(409, "Approve an unpaid obligation before execution", "APPROVAL_REQUIRED");
   const recipient = ensureRecipient(payment, access);
   const attempts = rows<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at", paymentId);
   if (attempts.some((item) => activeStates.includes(item.state))) throw new ApiError(409, "An earlier attempt must be reconciled before preparing another", "ATTEMPT_ACTIVE");
@@ -499,8 +505,9 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
   requirePermission(access, "payments:read");
   const payment = getPayment(access, paymentId);
   const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? ORDER BY created_at DESC LIMIT 1", paymentId);
-  if (!attempt || payment.status === "paid" || payment.status === "cancelled" || attempt.state === "closed_unfunded") return { payment, attempt: attempt ?? null };
+  if (!attempt || ["paid", "cancelled", "partially_paid"].includes(payment.status) || attempt.state === "closed_unfunded") return { payment, attempt: attempt ?? null };
   const config = configFor(access);
+  if (await contractCodeHash(config) !== reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")) throw new ApiError(409, "Review the current treasury code before recording delivery", "TREASURY_CODE_MISMATCH");
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: paymentId });
   const chainAttempt = chain?.attempts.find((item) => item.id === attempt.id);
   if (chain && (chain.amount !== payment.amount || chain.max_fee !== payment.max_fee || chain.reference !== onchainReference(payment) || chain.recipient_id !== payment.recipient_id)) throw new ApiError(409, "The onchain obligation terms do not match", "ONCHAIN_TERMS_MISMATCH");
@@ -513,8 +520,12 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
     assertSameQuote(JSON.parse(attempt.quote), provider.quoteResponse);
     }
   } catch (error) {
+    provider = null;
     providerError = error instanceof ApiError ? error.message : "Routing evidence is temporarily unavailable";
   }
+  const measured = deliveryOutput(attempt, provider), outputs = [measured.actual, outputAmount(attempt.observed_output), outputAmount(chainAttempt?.actual_output)].filter((value): value is string => value !== null);
+  const observed = outputs.length ? outputs.reduce((left,right)=>BigInt(left)>BigInt(right)?left:right) : null;
+  let confirmedPartial: PartialReview | null = null;
   let state = provider ? providerOutcome(provider.status) : "unknown";
   let nextStatus = state === "recovery_pending" ? "recovery_pending" : "in_flight";
   let hold: string | null = state === "reported_delivered" ? "Provider reports delivery. Confirm settlement in the NEAR treasury to close the obligation" : state === "recovery_pending" ? "Verify route closure and recovered funds before retrying" : state === "unknown" ? "Payment outcome requires reconciliation; no backup may execute yet" : null;
@@ -530,21 +541,32 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
       hold = "Reconcile the prior route and confirm recovered funds on NEAR before retrying";
     }
   }
-  if (chainAttempt?.status === "delivered" && chain?.status === "paid") { state = "delivered"; nextStatus = "paid"; hold = null; }
+  const direct = isDirectExecution(JSON.parse(attempt.quote));
+  if (!direct && chainAttempt && (measured.partial || observed !== null && BigInt(observed) > 0n && BigInt(observed) < BigInt(attempt.expected_output))) { state = "reported_partial"; nextStatus = "held"; hold = "A positive short destination output was observed. No full retry or backup is allowed. Verify terminal closure and explicitly review the credited USDC entitlement."; }
+  if (!direct && provider?.status === "SUCCESS" && !measured.complete && !measured.partial) { state = "unknown"; nextStatus = "held"; hold = "Provider success has missing, invalid or zero destination output. Delivery remains unverified."; }
+  if (chainAttempt?.status === "delivered" && chain?.status === "paid") {
+    if (completeDelivery(payment, attempt, chainAttempt, provider, direct)) { state = "delivered"; nextStatus = "paid"; hold = null; }
+    else { state = measured.partial ? "reported_partial" : "unknown"; nextStatus = "held"; hold = "The recorded full-delivery claim lacks matching complete output evidence. Reconcile the actual destination amount before any further payment."; }
+  }
+  if (chainAttempt?.status === "partially_delivered" && chain) { confirmedPartial = partialProof(payment, { ...attempt, observed_output: observed }, chain, chainAttempt); state = "partially_delivered"; nextStatus = "partially_paid"; hold = "Terminal partial delivery recorded. Prepare a separately reviewed and approved remainder; the original cannot retry."; }
   if (chainAttempt?.status === "refunded") { state = "refunded_verified"; nextStatus = chain?.status === "retryable" ? "approved" : "held"; hold = nextStatus === "held" ? "Recovered funds or the approved fee budget do not cover a retry" : null; }
   if (chainAttempt && ["discarded", "transfer_failed"].includes(chainAttempt.status)) { state = "closed_unfunded"; nextStatus = chain?.status === "held" ? "held" : "approved"; hold = null; }
+  if (!direct && observed !== null && BigInt(observed) > 0n && ["refunded", "transfer_failed", "discarded"].includes(chainAttempt?.status ?? "")) { state = "reported_partial"; nextStatus = "held"; hold = "Destination delivery was observed despite a route recovery claim. A full retry or backup is blocked until authoritative partial closure."; }
   transaction(() => {
     const latest = getPayment(access, paymentId);
-    if (latest.status === "paid") return;
+    if (["paid", "partially_paid"].includes(latest.status)) return;
     const current = balance(access.organizationId);
     const reservation = chainAttempt ? atomic(chain!.reservation, true).toString() : latest.reserved_amount;
     const nextReserved = BigInt(current.reserved) - BigInt(latest.reserved_amount) + BigInt(reservation);
     if (nextReserved < 0n) throw new ApiError(409, "Treasury reservations require reconciliation", "RESERVATION_MISMATCH");
     if (reservation !== latest.reserved_amount) ledger(access.organizationId, `reservation-sync:${attempt.id}:${id()}`, "reservation_reconciled", (BigInt(reservation) - BigInt(latest.reserved_amount)).toString(), current.balance, nextReserved.toString(), { paymentId, attemptId: attempt.id, chainStatus: chain?.status });
     if (state === "delivered") ledger(access.organizationId, `paid:${paymentId}`, "payment_delivered", latest.amount, current.balance, nextReserved.toString(), { paymentId, attemptId: attempt.id, destinationReceipt: chainAttempt?.receipt });
-    const spent = chain ? (atomic(chain.incurred_cost, true) + (state === "delivered" ? atomic(attempt.amount_in) : 0n)).toString() : latest.total_spent;
-    getDb().prepare("UPDATE payments SET status=?,reserved_amount=?,chain_reserved=?,total_spent=?,delivered_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(nextStatus, reservation, chain?.reservation ?? "0", spent, state === "delivered" ? latest.amount : latest.delivered_amount, hold, now(), paymentId);
-    getDb().prepare("UPDATE payout_attempts SET state=?,provider_status=?,reconciliation=?,destination_tx_hash=?,updated_at=? WHERE id=?").run(state, provider?.status ?? attempt.provider_status, json({ provider, chain, providerError }), provider?.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? attempt.destination_tx_hash, now(), attempt.id);
+    const spent = chain ? spentSource(chain, attempt, chainAttempt) : latest.total_spent;
+    const credited = confirmedPartial?.credited_usdc ?? (state === "delivered" ? latest.amount : latest.delivered_amount);
+    if (confirmedPartial) ledger(access.organizationId, `partial-paid:${paymentId}`, "payment_partially_delivered", credited, current.balance, nextReserved.toString(), { paymentId, attemptId: attempt.id, actualOutput: confirmedPartial.actual_output, receipt: confirmedPartial.receipt_commitment });
+    getDb().prepare("UPDATE payments SET status=?,reserved_amount=?,chain_reserved=?,total_spent=?,delivered_amount=?,hold_reason=?,updated_at=? WHERE id=?").run(nextStatus, reservation, chain?.reservation ?? "0", spent, credited, hold, now(), paymentId);
+    if (confirmedPartial && chain) recordPartial(access, latest, attempt, chain, confirmedPartial, spent);
+    getDb().prepare("UPDATE payout_attempts SET state=?,provider_status=?,reconciliation=?,destination_tx_hash=?,observed_output=?,updated_at=? WHERE id=?").run(state, provider?.status ?? attempt.provider_status, json({ provider, chain, providerError }), provider?.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? attempt.destination_tx_hash, observed, now(), attempt.id);
   });
   await syncTreasury(access);
   return { payment: getPayment(access, paymentId), attempt: getAttempt(access, attempt.id), providerError };
@@ -553,6 +575,7 @@ export async function reconcilePayment(access: AccessContext, paymentId: string)
 export async function closeUnfundedAttempt(access: AccessContext, attemptId: string) {
   requirePermission(access, "payments:execute");
   const attempt = getAttempt(access, attemptId);
+  if (attempt.observed_output && BigInt(attempt.observed_output) > 0n) throw new ApiError(409, "A destination delivery was observed. Close the partial route and prepare only its unpaid remainder", "PARTIAL_DELIVERY_OBSERVED");
   if (["closed_unfunded", "refunded_verified"].includes(attempt.state)) return { attempt, walletActions: [] };
   const config = configFor(access);
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
@@ -577,15 +600,20 @@ export async function prepareSettlement(access: AccessContext, attemptId: string
   const config = configFor(access);
   const reconciled = await reconcilePayment(access, attempt.payment_id);
   if (reconciled.payment.status === "paid") return { ...reconciled, walletActions: [] };
-  if (input.outcome === "delivered" && (reconciled.attempt?.provider_status !== "SUCCESS" || !reconciled.attempt.destination_tx_hash)) throw new ApiError(409, "The provider has not supplied a matching destination transaction", "DELIVERY_UNVERIFIED");
+  if (reconciled.payment.status === "partially_paid") throw new ApiError(409, "This terminal partial payment cannot be reported or retried in full", "PARTIAL_LIABILITY");
+  const provider = JSON.parse(reconciled.attempt?.reconciliation || "{}").provider as Awaited<ReturnType<typeof checkStatus>> | null;
+  const measured = deliveryOutput(attempt, provider);
+  if (input.outcome === "delivered" && (provider?.status !== "SUCCESS" || !measured.complete || !reconciled.attempt?.destination_tx_hash)) throw new ApiError(409, "Full delivery needs a matching destination transaction and exact output at least equal to the signed quote. Missing or short output requires reconciliation", "DELIVERY_UNVERIFIED");
+  if (input.outcome === "refund_pending" && (measured.positive || reconciled.attempt?.observed_output && BigInt(reconciled.attempt.observed_output) > 0n)) throw new ApiError(409, "Destination delivery was observed. Use explicit terminal partial settlement instead of a full retry", "PARTIAL_DELIVERY_OBSERVED");
   const receipt = retainPrivateEvidence(access, attemptId, `settlement:${input.outcome}`, input.receipt);
-  return { ...reconciled, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt })] };
+  return { ...reconciled, requiresReporterAttestation: true, evidenceCommitment: receipt, walletActions: [action(config, "report_settlement", { payment_id: attempt.payment_id, attempt_id: attemptId, outcome: input.outcome, receipt, actual_output: measured.actual })] };
 }
 
 export async function prepareRefundConfirmation(access: AccessContext, attemptId: string, input: { refundAmount: string; receipt: string }) {
   requirePermission(access, "payments:approve");
   const attempt = getAttempt(access, attemptId);
   const config = configFor(access);
+  if (attempt.observed_output && BigInt(attempt.observed_output) > 0n) throw new ApiError(409, "A partially delivered route cannot become a full-refund retry", "PARTIAL_DELIVERY_OBSERVED");
   if (atomic(input.refundAmount, true) > atomic(attempt.amount_in)) throw new ApiError(422, "The refund exceeds the original source amount", "REFUND_EXCEEDS_INPUT");
   const chain = await view<ChainPayment | null>(config, "get_payment", { payment_id: attempt.payment_id });
   const chainAttempt = chain?.attempts.find((item) => item.id === attemptId);

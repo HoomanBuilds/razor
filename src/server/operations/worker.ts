@@ -76,7 +76,7 @@ export function enqueueOperations(organizationId?: string) {
           { dueAt: rule.next_run_at },
         );
       for (const payment of rows<{ id: string }>(
-        "SELECT id FROM payments WHERE organization_id=? AND status NOT IN ('paid','cancelled') AND (scheduled_for IS NULL OR scheduled_for<=?)",
+        "SELECT id FROM payments WHERE organization_id=? AND status NOT IN ('paid','cancelled','partially_paid') AND (scheduled_for IS NULL OR scheduled_for<=?)",
         organization.id,
         now,
       ))
@@ -91,7 +91,7 @@ export function enqueueOperations(organizationId?: string) {
         payment_id: string;
         state: string;
       }>(
-        "SELECT id,payment_id,state FROM payout_attempts WHERE organization_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered')",
+        "SELECT id,payment_id,state FROM payout_attempts WHERE organization_id=? AND state IN ('prepared','submitted','processing','unknown','recovery_pending','reported_delivered','reported_partial')",
         organization.id,
       )) {
         enqueue(
@@ -369,7 +369,7 @@ async function processJob(job: OperationJob): Promise<JobResult> {
       job.entity_id,
       job.organization_id,
     );
-    if (!payment || ["paid", "cancelled"].includes(payment.status))
+    if (!payment || ["paid", "cancelled", "partially_paid"].includes(payment.status))
       return { status: "completed", detail: { skipped: true } };
     notify(
       job.organization_id,
@@ -392,7 +392,7 @@ async function processJob(job: OperationJob): Promise<JobResult> {
   if (job.kind === "reconcile_payment") {
     const result = await reconcilePayment(access, job.entity_id);
     return {
-      status: ["paid", "cancelled"].includes(result.payment.status)
+      status: ["paid", "cancelled", "partially_paid"].includes(result.payment.status)
         ? "completed"
         : "queued",
       delayMs: 60_000,

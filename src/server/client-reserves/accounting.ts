@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { row, rows } from "../db";
 import type { Payment, PayoutAttempt } from "../payments/types";
+import { liabilityPayments } from "../partial-settlement/model";
 
 export interface ReserveRecord {
   id: string; organization_id: string; request_key: string; creation_fingerprint: string;
@@ -11,6 +12,7 @@ export interface ReserveRecord {
 }
 export interface ReservePosition {
   reserve: ReserveRecord; payment: Payment | null; state: string;
+  activePaymentId: string | null;
   outstanding: bigint; clientReserved: bigint; paymentCovered: bigint; inFlight: bigint;
 }
 const min = (left: bigint, right: bigint) => left < right ? left : right;
@@ -22,7 +24,7 @@ export function paymentTermsHash(payment: Payment) {
 }
 
 export function sourceIsUnresolved(payment: Payment): boolean {
-  if (["paid", "cancelled"].includes(payment.status)) return false;
+  if (["paid", "cancelled", "partially_paid"].includes(payment.status)) return false;
   const attempt = row<PayoutAttempt>("SELECT * FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1", payment.id, payment.organization_id);
   if (!attempt || ["closed_unfunded", "refunded_verified", "cancelled"].includes(attempt.state)) return false;
   const receipt = row<{ evidence: string }>("SELECT evidence FROM payment_source_receipts WHERE attempt_id=? AND organization_id=?", attempt.id, payment.organization_id);
@@ -48,16 +50,19 @@ export function reservePositions(organizationId: string): ReservePosition[] {
   return rows<ReserveRecord>("SELECT * FROM client_reserves WHERE organization_id=? ORDER BY created_at,id", organizationId).map((reserve) => {
     const principal = BigInt(reserve.amount), payment = reserve.payment_id ? row<Payment>("SELECT * FROM payments WHERE id=? AND organization_id=?", reserve.payment_id, organizationId) ?? null : null;
     const termsMatch = !reserve.payment_id || !!payment && payment.amount === reserve.amount && paymentTermsHash(payment) === reserve.payment_terms_hash;
-    const delivered = termsMatch && payment?.status === "paid" ? min(principal, BigInt(payment.delivered_amount)) : 0n;
+    const lineage = payment ? liabilityPayments(organizationId, payment.id) : [];
+    const active = lineage.filter(item => !["paid", "cancelled", "partially_paid"].includes(item.status));
+    const delivered = termsMatch && payment ? min(principal, lineage.reduce((sum, item) => sum + BigInt(item.delivered_amount), 0n)) : 0n;
     const outstanding = principal - delivered;
-    const result: ReservePosition = { reserve, payment, state: "held", outstanding, clientReserved: outstanding, paymentCovered: 0n, inFlight: 0n };
+    const result: ReservePosition = { reserve, payment, activePaymentId: active.length === 1 ? active[0].id : null, state: "held", outstanding, clientReserved: outstanding, paymentCovered: 0n, inFlight: 0n };
     if (reserve.state === "released") return { ...result, state: "released", clientReserved: 0n };
     if (reserve.state === "allocating") return { ...result, state: "allocating", clientReserved: 0n };
     if (!termsMatch) return { ...result, state: "terms_changed" };
+    if (active.length > 1) return { ...result, state: "ambiguous_lineage" };
     if (outstanding === 0n) return { ...result, state: "closed", clientReserved: 0n };
     if (payment && payment.status !== "cancelled") {
-      result.paymentCovered = min(outstanding, BigInt(payment.reserved_amount));
-      result.inFlight = sourceIsUnresolved(payment) ? outstanding - result.paymentCovered : 0n;
+      result.paymentCovered = min(outstanding, active.reduce((sum,item)=>sum+BigInt(item.reserved_amount),0n));
+      result.inFlight = active.some(sourceIsUnresolved) ? outstanding - result.paymentCovered : 0n;
       result.clientReserved = outstanding - result.paymentCovered - result.inFlight;
       result.state = result.inFlight > 0n ? "in_flight" : result.clientReserved === 0n ? "payment_reserved" : "held";
     }

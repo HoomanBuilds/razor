@@ -20,7 +20,7 @@ export function getBillTerms(access: AccessContext, id: string) {
   const current = bill(access, id);
   const installments = rows<Payment>("SELECT p.* FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? ORDER BY i.created_at", id);
   const paid = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(current.setoff_amount);
-  const committed = installments.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + BigInt(item.amount), 0n);
+  const committed = installments.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + BigInt(item.status === "partially_paid" ? item.delivered_amount : item.amount), 0n);
   const clearingSetoffs = rows<{ round_id: string; amount: string; original_payment_id: string; residual_payment_id: string | null; proof_block_hash: string; proof_block_height: string; created_at: string }>("SELECT round_id,amount,original_payment_id,residual_payment_id,proof_block_hash,proof_block_height,created_at FROM clearing_setoffs WHERE bill_id=? AND organization_id=? ORDER BY created_at", id, access.organizationId);
   return { ...current, acceptance_evidence: current.acceptance_evidence ? decrypt(current.acceptance_evidence) : null, dispute_reason: current.dispute_reason ? decrypt(current.dispute_reason) : null, installments, clearingSetoffs, paid: paid.toString(), setoffAmount: setoff.toString(), remainingLiability: (BigInt(current.amount) - paid - setoff).toString(), uncommitted: (BigInt(current.amount) - committed - setoff).toString() };
 }
@@ -63,7 +63,8 @@ export function addBillInstallment(access: AccessContext, id: string, input: { a
   requirePermission(access, "payments:prepare");
   return transaction((db) => {
     const current = getBillTerms(access, id);
-    if (current.status === "disputed" || current.installments.some((item) => !["paid", "cancelled"].includes(item.status))) throw new ApiError(409, "Reconcile the earlier installment before preparing another", "PRIOR_INSTALLMENT_UNRESOLVED");
+    if (current.status === "disputed" || current.installments.some((item) => !["paid", "cancelled", "partially_paid"].includes(item.status))) throw new ApiError(409, "Reconcile the earlier installment before preparing another", "PRIOR_INSTALLMENT_UNRESOLVED");
+    if (current.installments.some(item => item.status === "partially_paid" && !row("SELECT original_payment_id FROM partial_remainders WHERE original_payment_id=?", item.id))) throw new ApiError(409, "Prepare this terminal partial payment's explicitly reviewed remainder before another installment", "PARTIAL_REMAINDER_REQUIRED");
     const amount = positive(input.amount), maxFee = positive(input.maxFee, true);
     if (BigInt(amount) > BigInt(current.uncommitted)) throw new ApiError(409, "The installment exceeds the remaining invoice amount", "INSTALLMENT_EXCEEDS_BALANCE");
     const installmentId = randomUUID();

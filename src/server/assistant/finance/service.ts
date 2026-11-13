@@ -14,7 +14,7 @@ import { runVerifiedPrivateInference } from "../client";
 import { sha256 } from "../verification";
 import { financeSourceFingerprint, planningInput, validateModelPlan, type PlanningInput, type PlanSource, type SelectedRecipient } from "./plans";
 
-interface OpenPayment {id:string;recipient_id:string;reference:string;kind:string;status:string;amount:string;max_fee:string;total_spent:string;reserved_amount:string;scheduled_for:string|null;hold_reason:string|null;metadata:string}
+interface OpenPayment {id:string;recipient_id:string;reference:string;kind:string;status:string;amount:string;max_fee:string;total_spent:string;reserved_amount:string;scheduled_for:string|null;hold_reason:string|null;metadata:string;delivered_amount:string}
 interface StoredPlan {id:string;organization_id:string;plan_hash:string;source_fingerprint:string;payload_ciphertext:string;evidence_ciphertext:string;prepared_run_id:string|null;created_at:string;expires_at:string}
 interface Payload {instruction:string;source:PlanSource;sourceFingerprint:string;allocations:Array<{recipientId:string;opaqueId:string;version:number;amount:string}>;total:string;feeBudget:string;maximumCost:string;explanation:string;warnings:string[];verification:Record<string,unknown>;context:{availableUSDC:string;lastSyncedAt:string|null;openUnreservedUSDC?:string}}
 const activePlans=new Set<string>();
@@ -26,10 +26,10 @@ function plannerPermission(access:AccessContext) {
 
 export function financeInsights(access:AccessContext) {
   requirePermission(access,"payments:read");
-  const treasury=getTreasury(access),open=rows<OpenPayment>("SELECT id,recipient_id,reference,kind,status,amount,max_fee,total_spent,reserved_amount,scheduled_for,hold_reason,metadata FROM payments WHERE organization_id=? AND status NOT IN ('paid','cancelled') ORDER BY COALESCE(scheduled_for,created_at)",access.organizationId);
+  const treasury=getTreasury(access),open=rows<OpenPayment>("SELECT id,recipient_id,reference,kind,status,amount,max_fee,total_spent,reserved_amount,scheduled_for,hold_reason,metadata,delivered_amount FROM payments WHERE organization_id=? AND (status NOT IN ('paid','cancelled','partially_paid') OR (status='partially_paid' AND NOT EXISTS(SELECT 1 FROM partial_remainders r WHERE r.original_payment_id=payments.id))) ORDER BY COALESCE(scheduled_for,created_at)",access.organizationId);
   let upcoming=0n,unreserved=0n,drafts=0n,committed=0n,awaitingReconciliation=0n;
   const budgets=open.map(payment=>{
-    const budget=paymentBudget(payment),cost=budget.remaining,needed=budget.unreserved;
+    const missingRemainder=payment.status==="partially_paid",unpaid=BigInt(payment.amount)-BigInt(payment.delivered_amount),budget=missingRemainder?{remaining:unpaid,unreserved:unpaid,awaitingReconciliation:0n}:paymentBudget(payment),cost=budget.remaining,needed=budget.unreserved;
     awaitingReconciliation+=budget.awaitingReconciliation;
     upcoming+=cost;unreserved+=needed;if(payment.status==="draft")drafts+=cost;else committed+=cost;
     const {metadata,...summary}=payment;
@@ -40,6 +40,7 @@ export function financeInsights(access:AccessContext) {
   });
   const available=BigInt(treasury.available),shortfall=unreserved>available?unreserved-available:0n;
   const warnings:Array<Record<string,unknown>>=duplicateInvoiceWarnings(rows<{id:string;recipient_id:string;reference:string;amount:string;created_at:string}>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?",access.organizationId));
+  for(const payment of open)if(payment.status==="partially_paid")warnings.push({code:"PARTIAL_REMAINDER_REQUIRED",message:"A terminal partial delivery left unpaid entitlement. Prepare a new remainder with current recipient terms and fresh approval; the original cannot retry.",paymentId:payment.id,remainingUSDC:(BigInt(payment.amount)-BigInt(payment.delivered_amount)).toString()});
   if(!treasury.lastSyncedAt||Date.now()-Date.parse(treasury.lastSyncedAt)>300000)warnings.unshift({code:"CASH_SNAPSHOT_STALE",message:"Cash coverage uses the last recorded NEAR treasury snapshot. Sync it before making funding decisions."});
   if(shortfall>0n)warnings.unshift({code:"CASH_SHORTFALL",message:"Recorded available cash is below the unreserved remaining payment budgets. This includes draft proposals; no payment has been blocked or approved by this calculation.",amountUSDC:shortfall.toString()});
   for(const payment of open)if(BigInt(payment.total_spent)>BigInt(payment.amount)+BigInt(payment.max_fee))warnings.push({code:"BUDGET_OVERAGE",message:"Recorded payment spend exceeds its approved amount and fee budget. Review its receipts.",paymentId:payment.id});
@@ -53,7 +54,7 @@ function selectedRecipients(access:AccessContext,input:PlanningInput):SelectedRe
   return input.recipientIds.map((recipientId,index)=>{
     const recipient=row<{version:number;archived:number;preference_status:string;confirmed_at:string|null;kind:string}>("SELECT version,archived,preference_status,confirmed_at,kind FROM recipients WHERE id=? AND organization_id=?",recipientId,access.organizationId);
     if(!recipient||recipient.archived||recipient.preference_status!=="confirmed"||!recipient.confirmed_at||!["employee","contractor"].includes(recipient.kind))throw new ApiError(409,"Select active, confirmed employee or contractor profiles from this company","FINANCE_RECIPIENT_UNAVAILABLE");
-    const prior=row<{amount:string}>("SELECT amount FROM payments WHERE organization_id=? AND recipient_id=? AND kind='payroll' AND status='paid' ORDER BY updated_at DESC LIMIT 1",access.organizationId,recipientId);
+    const prior=row<{amount:string}>("SELECT amount FROM payments WHERE organization_id=? AND recipient_id=? AND kind='payroll' AND status='paid' AND NOT EXISTS(SELECT 1 FROM partial_remainders r WHERE r.remainder_payment_id=payments.id) ORDER BY updated_at DESC LIMIT 1",access.organizationId,recipientId);
     return {recipientId,opaqueId:`r${index+1}`,version:recipient.version,capMicroUSDC:cap,priorAmountMicroUSDC:prior?.amount || null};
   });
 }
