@@ -39,6 +39,7 @@ export interface BillingInvoice {
   createdAt: string;
   updatedAt: string;
   transactionHash: string | null;
+  submittedTransactionHash: string | null;
   confirmedAt: string | null;
   refundedAmount: string;
   creditReason: string | null;

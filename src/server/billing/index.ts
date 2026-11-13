@@ -1,0 +1,25 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import type { AppEnv } from "../context";
+import { getEntitlements } from "./entitlements";
+import { cancelSubscription, resumeSubscription, schedulePlanChange } from "./subscriptions";
+import { billingInvoiceCsv, billingInvoiceReceipt, billingOverview, claimInvoice, closeUnusedInvoice, createCheckout, invoiceDetail, invoicePage, reconcileInvoice, refreshInvoice, requestInvoiceRefund, submitInvoice } from "./payments";
+
+const checkout=z.object({planVersionId:z.string().min(1).max(128),payerAccount:z.string().min(2).max(64),requestKey:z.string().min(8).max(128)}).strict();
+export const billingRoutes=new Hono<AppEnv>();
+billingRoutes.get("/entitlements",c=>c.json(getEntitlements(c.get("access"))));
+billingRoutes.get("/",async c=>c.json(await billingOverview(c.get("access"))));
+billingRoutes.get("/invoices",c=>c.json(invoicePage(c.get("access"),Number(c.req.query("page")||1),Number(c.req.query("pageSize")||25))));
+billingRoutes.get("/export",c=>{c.header("Content-Type","text/csv; charset=utf-8");c.header("Content-Disposition",'attachment; filename="razor-subscription-invoices.csv"');return c.body(billingInvoiceCsv(c.get("access")));});
+billingRoutes.post("/checkout",async c=>c.json(await createCheckout(c.get("access"),checkout.parse(await c.req.json())),201));
+billingRoutes.post("/cancel",c=>c.json(cancelSubscription(c.get("access"))));
+billingRoutes.post("/resume",c=>c.json(resumeSubscription(c.get("access"))));
+billingRoutes.post("/plan-change",async c=>{const value=z.object({planVersionId:z.string().min(1).max(128)}).strict().parse(await c.req.json());return c.json(schedulePlanChange(c.get("access"),value.planVersionId));});
+billingRoutes.get("/invoices/:id",async c=>c.json(await invoiceDetail(c.get("access"),c.req.param("id"))));
+billingRoutes.post("/invoices/:id/claim",async c=>c.json(await claimInvoice(c.get("access"),c.req.param("id"))));
+billingRoutes.post("/invoices/:id/submitted",async c=>{const value=z.object({transactionHash:z.string().min(32).max(64)}).strict().parse(await c.req.json());return c.json(await submitInvoice(c.get("access"),c.req.param("id"),value.transactionHash));});
+billingRoutes.post("/invoices/:id/reconcile",async c=>c.json(await reconcileInvoice(c.get("access"),c.req.param("id"))));
+billingRoutes.post("/invoices/:id/refresh",async c=>c.json(await refreshInvoice(c.get("access"),c.req.param("id"))));
+billingRoutes.post("/invoices/:id/close-unused",async c=>c.json(await closeUnusedInvoice(c.get("access"),c.req.param("id"))));
+billingRoutes.post("/invoices/:id/refund-request",async c=>{const value=z.object({reason:z.string().trim().min(1).max(2000)}).strict().parse(await c.req.json());return c.json(await requestInvoiceRefund(c.get("access"),c.req.param("id"),value.reason));});
+billingRoutes.get("/invoices/:id/receipt",c=>{const value=billingInvoiceReceipt(c.get("access"),c.req.param("id"));if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-subscription-receipt.json"');return c.json(value);});
