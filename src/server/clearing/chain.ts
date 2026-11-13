@@ -5,9 +5,9 @@ import { NATIVE_USDC } from "../payments/policy";
 import type { ChainRound, FinalEvidence, Registration } from "./types";
 
 export function settings() {
-  const network = process.env.NEAR_NETWORK || "testnet", contractId = process.env.NEAR_CLEARING_ID, factoryId = process.env.NEAR_FACTORY_ID;
-  if ((network !== "mainnet" && network !== "testnet") || !contractId || !factoryId || !validNearAccount(contractId) || !validNearAccount(factoryId)) throw new ApiError(503, "Configure the reviewed NEAR clearing contract and treasury factory on one network", "CLEARING_SETUP_REQUIRED");
-  return { network: network as "mainnet" | "testnet", contractId, factoryId, codeHash: reviewedArtifactHash("NEAR_CLEARING_CODE_HASH", "razor_clearing.wasm"), factoryHash: reviewedArtifactHash("NEAR_FACTORY_CODE_HASH", "razor_factory.wasm"), treasuryHash: reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm") };
+  const network = process.env.NEAR_NETWORK || "testnet", contractId = process.env.NEAR_CLEARING_ID, treasuryId = process.env.NEAR_TREASURY_ID;
+  if ((network !== "mainnet" && network !== "testnet") || !contractId || !treasuryId || !validNearAccount(contractId) || !validNearAccount(treasuryId)) throw new ApiError(503, "Configure the reviewed NEAR clearing contract and shared treasury on one network", "CLEARING_SETUP_REQUIRED");
+  return { network: network as "mainnet" | "testnet", contractId, treasuryId, codeHash: reviewedArtifactHash("NEAR_CLEARING_CODE_HASH", "razor_clearing.wasm"), treasuryHash: reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm") };
 }
 
 export function readiness() {
@@ -32,23 +32,23 @@ export async function finalContext(blockHeight?: number) {
     const value = await query<{ result: number[] }>(accountId, { request_type: "call_function", method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
     try { return JSON.parse(Buffer.from(value.result).toString()) as T; } catch { throw new ApiError(502, "The clearing contract returned invalid evidence", "CLEARING_RESPONSE_INVALID"); }
   };
-  const [clearingCode, factoryCode, clearing, factory] = await Promise.all([
-    query<{ code_hash: string }>(config.contractId, { request_type: "view_account" }), query<{ code_hash: string }>(config.factoryId, { request_type: "view_account" }),
-    view<{ factory_id: string; token_contract: string; paused: boolean }>(config.contractId, "get_config"), view<{ token_contract: string; treasury_wasm_hash: string }>(config.factoryId, "get_config"),
+  const [clearingCode, treasuryCode, clearing, platform] = await Promise.all([
+    query<{ code_hash: string }>(config.contractId, { request_type: "view_account" }), query<{ code_hash: string }>(config.treasuryId, { request_type: "view_account" }),
+    view<{ treasury_id: string; token_contract: string; paused: boolean }>(config.contractId, "get_config"), view<{ architecture: string; token_contract: string }>(config.treasuryId, "get_platform_config"),
   ]);
-  if (clearingCode.code_hash !== config.codeHash || factoryCode.code_hash !== config.factoryHash || clearing.factory_id !== config.factoryId || clearing.token_contract !== factory.token_contract || factory.treasury_wasm_hash !== config.treasuryHash) throw new ApiError(409, "Clearing code, factory, treasury code or settlement token differs from the reviewed deployment", "CLEARING_CODE_MISMATCH");
+  if (clearingCode.code_hash !== config.codeHash || treasuryCode.code_hash !== config.treasuryHash || clearing.treasury_id !== config.treasuryId || clearing.token_contract !== platform.token_contract || platform.architecture !== "shared_v1") throw new ApiError(409, "Clearing code, shared treasury or settlement token differs from the reviewed deployment", "CLEARING_CODE_MISMATCH");
   if (config.network === "mainnet" && clearing.token_contract !== NATIVE_USDC.near) throw new ApiError(409, "Business clearing requires verified native USDC on NEAR mainnet", "CLEARING_ASSET_MISMATCH");
   return { config, clearing, view, query, blockHash: block.header.hash, blockHeight: String(block.header.height), timestampMs: (BigInt(block.header.timestamp_nanosec) / 1000000n).toString() };
 }
 
-export async function verifyRegistration(context: Awaited<ReturnType<typeof finalContext>>, registration: Pick<Registration, "network" | "token_contract" | "treasury_id" | "owner_account_id" | "policy_version">) {
+export async function verifyRegistration(context: Awaited<ReturnType<typeof finalContext>>, registration: Pick<Registration, "organization_id" | "treasury_company_id" | "network" | "token_contract" | "treasury_id" | "owner_account_id" | "policy_version">) {
   if (registration.network !== context.config.network || registration.token_contract !== context.clearing.token_contract) throw new ApiError(409, "All companies must use the same NEAR network and USDC settlement token", "CLEARING_ASSET_MISMATCH");
-  const [code, treasury, creation] = await Promise.all([
+  if (registration.treasury_id !== context.config.treasuryId) throw new ApiError(409, "The company is not registered in the reviewed shared treasury", "CLEARING_TREASURY_MISMATCH");
+  const [code, treasury] = await Promise.all([
     context.query<{ code_hash: string }>(registration.treasury_id, { request_type: "view_account" }),
-    context.view<{ owner_id: string; token_contract: string; paused: boolean; policy_version: string }>(registration.treasury_id, "get_config"),
-    context.view<{ account_id: string; token_contract: string; status: string } | null>(context.config.factoryId, "get_creation", { account_id: registration.treasury_id }),
+    context.view<{ architecture: string; company_id: string; owner_id: string; token_contract: string; paused: boolean; policy_version: string }>(registration.treasury_id, "get_config", {company_id: registration.treasury_company_id}),
   ]);
-  if (code.code_hash !== context.config.treasuryHash || treasury.owner_id !== registration.owner_account_id || treasury.token_contract !== registration.token_contract || !/^[1-9]\d*$/.test(treasury.policy_version) || treasury.policy_version !== registration.policy_version || treasury.paused || creation?.account_id !== registration.treasury_id || creation.token_contract !== registration.token_contract || creation.status !== "ready") throw new ApiError(409, "The participating treasury must match its current owner, reviewed factory creation, token and unpaused policy", "CLEARING_TREASURY_MISMATCH");
+  if (code.code_hash !== context.config.treasuryHash || treasury.architecture !== "shared_v1" || treasury.company_id !== registration.treasury_company_id || treasury.owner_id !== registration.owner_account_id || treasury.token_contract !== registration.token_contract || !/^[1-9]\d*$/.test(treasury.policy_version) || treasury.policy_version !== registration.policy_version || treasury.paused) throw new ApiError(409, "The participating company must match its shared registration, current owner, token and unpaused policy", "CLEARING_TREASURY_MISMATCH");
 }
 
 export async function roundEvidence(roundId: string): Promise<FinalEvidence> {
@@ -61,7 +61,7 @@ export async function roundEvidence(roundId: string): Promise<FinalEvidence> {
   const finalized = height === Number(context.blockHeight) ? context : await finalContext(height);
   const historic = await finalized.view<ChainRound | null>(context.config.contractId, "get_round", { round_id: roundId });
   if (finalized.clearing.paused || finalized.timestampMs !== round.finalized_at_ms || historic?.status !== "finalized" || historic.manifest_json !== round.manifest_json || historic.hash !== round.hash || historic.finalized_height !== round.finalized_height || historic.finalized_at_ms !== round.finalized_at_ms) throw new ApiError(409, "The exact clearing finalization could not be verified at its recorded block", "CLEARING_PROOF_INVALID");
-  await Promise.all(round.manifest.participants.map(party => verifyRegistration(finalized, { network: context.config.network, token_contract: finalized.clearing.token_contract, treasury_id: party.treasury_id, owner_account_id: party.owner_id, policy_version: party.policy_version })));
-  evidence.authority = { blockHash: finalized.blockHash, blockHeight: finalized.blockHeight, participants: round.manifest.participants.map(party => ({ companyId: party.company_id, treasuryId: party.treasury_id, ownerId: party.owner_id, policyVersion: party.policy_version })) };
+  await Promise.all(round.manifest.participants.map(party => verifyRegistration(finalized, { organization_id: party.company_id, treasury_company_id:party.treasury_company_id, network: context.config.network, token_contract: finalized.clearing.token_contract, treasury_id: party.treasury_id, owner_account_id: party.owner_id, policy_version: party.policy_version })));
+  evidence.authority = { blockHash: finalized.blockHash, blockHeight: finalized.blockHeight, participants: round.manifest.participants.map(party => ({ companyId: party.company_id, treasuryId: party.treasury_id, treasuryCompanyId:party.treasury_company_id, ownerId: party.owner_id, policyVersion: party.policy_version })) };
   return evidence;
 }
