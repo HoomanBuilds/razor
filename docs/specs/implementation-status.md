@@ -11,7 +11,7 @@ On 13 November the user clarified that payers may fund with any supported asset 
 | Feature family | Integrated behavior |
 | --- | --- |
 | `AUTH-01` through `AUTH-10` | Wallet and optional Privy sign-in, verified linking, self-serve company creation, email or verified-wallet invitations, archived roles, company switching, resumable setup and fresh-authentication recovery |
-| `WAL-01` through `WAL-08` | Separate app identity, source wallets and NEAR treasury authority; connected NEAR/EVM/Solana source flows; explicit deposit instructions for other supported sources; source gas and wallet error handling |
+| `WAL-01` through `WAL-08` | Separate app identity, source wallets and NEAR treasury authority; connected NEAR/EVM/Solana source flows; branded token/network identities and searchable asset controls; explicit deposit instructions for other supported sources; source gas and wallet error handling |
 | `ORG-01` through `ORG-05` | Company roles, exact policy/profile versions, total-cost quorum tiers, distinct obligation/route approvals, pause and bounded financial authority |
 | `TRE-01` through `TRE-09` | Live Intents catalog, independent funding legs, canonical final USDC credits, protected reserves, funding links, source refund closure, separate retained NEAR token holdings and resumable obligation funding |
 | `REC-01` through `REC-07` | Relationship profiles, permanent personal workspace, confirmed primary/backup choices, address checks, supported destination metadata, version notices and row-level CSV validation |
@@ -30,7 +30,7 @@ This table records integrated source, not 90 successful live demonstrations. Ret
 | Evidence | Result and boundary |
 | --- | --- |
 | Application suite | All **135 checks passed** on journey review candidate `2176a88`; the earlier 104-check review remains recorded in the checklist |
-| TypeScript and production build | Passed on journey review candidate `2176a88`, including full TypeScript and generated Next.js route validation. Both compiler commands share a 1.5 GB Node heap cap, one-at-a-time lock and available-memory monitor. Next.js uses one worker |
+| TypeScript and production build | Passed on final asset/mobile candidate `6c26570`, including full TypeScript and generated Next.js route validation. The financial journey build `2176a88` also passed. Both compiler commands share a 1.5 GB Node heap cap, one-at-a-time lock and available-memory monitor. Next.js uses one worker |
 | Treasury contract | **23 VM checks passed**, including quorum, earliest execution, retained assets and partial settlement |
 | Clearing contract | **6 VM checks passed** for bounded conserved reductions, consent, expiry/revocation and authority callbacks |
 | Factory contract | **4 VM checks passed** against the newly compiled treasury artifact |
@@ -45,7 +45,7 @@ The follow-up zero-cash workflow showed **242 USDC total debt**, including the e
 
 Current journey evidence is local and ignored: `.data/experience-review-tests.log`, `.data/experience-review-typecheck.log`, `.data/experience-review-build.log`, `.data/experience-review-workflow-result.json`, `.data/experience-review-browser-result.json` and its overview screenshot. The production build includes the final combined TypeScript check.
 
-Earlier evidence files are local and ignored: `.data/razor-final-tests.log`, `.data/razor-final-typecheck.log`, `.data/razor-final-build.log`, `.data/razor-final-workflow-result.json`, `.data/razor-final-browser-result.json` and associated screenshots. The older `26ced9d` workflow files remain historical evidence. The review server is stopped and no feature worktrees remain.
+Earlier evidence files are local and ignored: `.data/razor-final-tests.log`, `.data/razor-final-typecheck.log`, `.data/razor-final-build.log`, `.data/razor-final-workflow-result.json`, `.data/razor-final-browser-result.json` and associated screenshots. The older `26ced9d` workflow files remain historical evidence. The asset follow-up passed eight focused checks and five browser scenarios on `6c26570`: actual library SVGs, exact catalog selection, search and keyboard behavior, backup form values and successful recipient preference saving. Its receiving page measured exactly 390 px with a 358 px dialog after correcting grid/table minimum widths. Logs, result JSON and screenshots use the ignored `.data/asset-icons-*` prefix. The review server is stopped and no feature worktrees remain.
 
 ## Recovery and accounting fixes verified locally
 
