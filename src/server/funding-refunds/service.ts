@@ -22,8 +22,8 @@ function fundingFor(access: AccessContext, id: string) {
 }
 function closureFor(access: AccessContext, id: string) { return row<Closure>("SELECT funding_id,review_id,source_asset,source_network,refund_address,refunded_amount,reported_deposited_amount,transaction_hash,provenance,confirmed_at,confirmed_by FROM funding_refund_closures WHERE funding_id=? AND organization_id=?", id, access.organizationId); }
 function authorize(access: AccessContext, terms: RefundTerms) {
-  requirePermission(access, "payments:prepare");
   if (access.permissions.includes("payments:approve")) return "company_reporter";
+  requirePermission(access, "payments:prepare");
   const family = sourceWalletFamily(terms.source.blockchain);
   const linked = family && row("SELECT id FROM linked_wallets WHERE user_id=? AND family=? AND address=? AND (family!='near' OR network='mainnet')", access.userId, family, family === "evm" ? terms.refundTo.toLowerCase() : terms.refundTo);
   if (!linked) throw new ApiError(403, "Verify control of the original refund wallet or ask a company payment approver to review the refund", "FUNDING_REFUND_AUTHORITY_REQUIRED");
@@ -53,12 +53,12 @@ export function listFundingRefunds(access: AccessContext) {
   return { funding: funding.map(leg => {
     const quote = parseQuote(leg), closure = closureFor(access, leg.id);
     return { id: leg.id, reference: leg.reference, paymentId: leg.payment_id, status: leg.status, providerStatus: leg.provider_status, sourceAsset: leg.origin_asset, sourceSymbol: leg.origin_symbol ?? null, sourceDecimals: leg.origin_decimals ?? null, sourceNetwork: leg.origin_network ?? null, refundTo: quote.quoteRequest.refundTo, sourceTransactionHash: leg.source_tx_hash, closure: closure ?? null };
-  }), message: "Source refunds return the original source asset to the original funder's recovery address. They do not create company USDC or prove a recipient payout.", canPrepare: access.permissions.includes("payments:prepare") };
+  }), message: "Source refunds return the original source asset to the original funder's recovery address. They do not create company USDC or prove a recipient payout.", canPrepare: access.permissions.includes("payments:prepare") || access.permissions.includes("payments:approve") };
 }
 
 export function createFundingRefundService(dependencies: Dependencies = { status: checkStatus, tokens: getSupportedTokens, verify: verifySourceRefund }) {
   async function observe(access: AccessContext, fundingId: string, input: RefundInput, expectedSource?: Token) {
-    requirePermission(access, "payments:prepare");
+    if (!access.permissions.includes("payments:approve")) requirePermission(access, "payments:prepare");
     const funding = fundingFor(access, fundingId);
     assertUncredited(access, funding);
     const quote = parseQuote(funding);

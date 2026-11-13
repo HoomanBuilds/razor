@@ -134,3 +134,17 @@ test("refund review rejects another company, unauthorized reporter and changed o
   await assert.rejects(() => service.confirm(access, fundingId, { reviewId: review.reviewId, reviewToken: review.reviewToken, acknowledged: true, evidence: "The source refund was received." }), code("FUNDING_REFUND_RECEIPT_REPLAYED"));
   assert.equal(row<{ status: string }>("SELECT status FROM funding_legs WHERE id=?", fundingId)?.status, "recovery_pending");
 });
+
+
+test("a default payment approver can attest source recovery without preparer spending permissions", async () => {
+  const { access, fundingId } = fixture();
+  const approver = { ...access, permissions: ["company:read", "payments:read", "payments:approve"] };
+  const refundHash = "99".repeat(32), freshProvider = structuredClone(provider);
+  freshProvider.swapDetails!.originChainTxHashes = [{hash:sourceHash},{hash:refundHash}];
+  const service = createFundingRefundService({ status: async () => freshProvider, tokens: async () => [source], verify: verifySourceRefund });
+  assert.equal(listFundingRefunds(approver).canPrepare, true);
+  const review = await service.prepare(approver, fundingId, { transactionHash: refundHash });
+  const result = await service.confirm(approver, fundingId, { reviewId: review.reviewId, reviewToken: review.reviewToken, acknowledged: true, evidence: "Reviewed the exact refund received in the original source recovery wallet." });
+  assert.equal(result.closure.provenance, "funder_or_reporter_attestation");
+  assert.equal(result.companyUsdcCredited, "0");
+});

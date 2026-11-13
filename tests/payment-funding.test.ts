@@ -189,3 +189,12 @@ test("closed unsent history reopens only after validated provider activity, whil
   getDb().prepare("UPDATE funding_legs SET source_tx_hash='late-known-source' WHERE id=?").run(funding.id);
   assert.equal(paymentFundingTask(preparer, payment.id).canQuote, false);
 });
+
+
+test("closed source history changes the review token for a fresh funding quote", () => {
+  const { access, payment } = fixture();
+  const before = paymentFundingTask(access, payment.id).reviewToken;
+  const db = getDb(), timestamp = new Date().toISOString();
+  db.prepare("INSERT INTO funding_legs(id,organization_id,payment_id,reference,origin_asset,amount_in,expected_output,quote,deposit_address,recipient_address,status,created_at,updated_at) VALUES(?,?,?,'closed-history','asset','1','1','{}','deposit.near','treasury.near','closed_unsent',?,?)").run(randomUUID(), access.organizationId, payment.id, timestamp, timestamp);
+  assert.notEqual(paymentFundingTask(access, payment.id).reviewToken, before);
+});
