@@ -389,6 +389,7 @@ export function createRecurring(
     if (existing) {
       if (
         existing.interval_days !== input.intervalDays ||
+        existing.initial_run_at !== next.toISOString() ||
         existing.cadence !== cadence || existing.interval_months !== intervalMonths || !!existing.month_end !== !!input.monthEnd ||
         existing.max_amount !== cap ||
         !existing.snapshot_ciphertext ||
@@ -406,7 +407,7 @@ export function createRecurring(
       now = iso();
     getDb()
       .prepare(
-        "INSERT INTO recurring_rules(id,organization_id,kind,entity_id,interval_days,next_run_at,created_by,max_amount,snapshot_ciphertext,status,created_at,updated_at,cadence,interval_months,anchor_day,month_end) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?)",
+        "INSERT INTO recurring_rules(id,organization_id,kind,entity_id,interval_days,next_run_at,created_by,max_amount,snapshot_ciphertext,status,created_at,updated_at,cadence,interval_months,anchor_day,month_end,initial_run_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -424,6 +425,7 @@ export function createRecurring(
         intervalMonths,
         anchorDay,
         Number(!!input.monthEnd),
+        next.toISOString(),
       );
     return publicRule(
       row<RecurringRule>("SELECT * FROM recurring_rules WHERE id=?", id)!,

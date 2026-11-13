@@ -37,6 +37,8 @@ test("durable recurring jobs create one unapproved draft across ticks and recove
   assert.equal(generated.status, "draft");
   assert.equal(generated.approved_at, null);
   assert.equal(row<{ n: number }>("SELECT COUNT(*) AS n FROM recurring_occurrences WHERE rule_id=?", rule.id)!.n, 1);
+  assert.equal(createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: due, maxAmount: "10000000" }).id, rule.id);
+  assert.throws(() => createRecurring(access, { kind: "bill", entityId: invoice.id, intervalDays: 30, nextRunAt: new Date(Date.parse(due) + 60_000).toISOString(), maxAmount: "10000000" }), /changing its terms/);
   const notices = listNotices(access);
   const draftNotice = notices.find((notice) => notice.title === "Recurring draft ready")!;
   assert.ok(draftNotice);
