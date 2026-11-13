@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AssetGuidance, UsdcBackupGuidance } from "@/components/assets/asset-guidance";
 import { destinationGuidance } from "@/lib/destination-guidance";
 import { api, RequestError } from "@/lib/api";
 import { useWorkspace } from "./context";
@@ -28,11 +29,13 @@ function PayeeForm({recipient,tokens,catalogAvailable,onSaved,onCancel}:{recipie
     <Field label="Full name or business"><input name="name" className={control} maxLength={120} required defaultValue={recipient?.name}/></Field>
     <Field label="Email"><input name="email" type="email" className={control} defaultValue={recipient?.email || ""}/></Field>
     <Field label="Relationship"><select name="kind" className={control} defaultValue={recipient?.kind || "employee"}><option value="employee">Employee</option><option value="contractor">Contractor or freelancer</option><option value="business">Business or supplier</option></select></Field>
+    <div className="md:col-span-2 lg:col-span-3"><AssetGuidance kind="payout" tokens={tokens} selectedAssetId={assetId} onSelect={asset => { setAssetId(asset.assetId); setFilter(""); }} disabled={!!busy} /></div>
     <Field label="Find receiving asset"><input value={filter} onChange={event=>setFilter(event.target.value)} className={control} placeholder="USDC, Base, Bitcoin..."/></Field>
     <Field label="Primary asset and network"><select className={control} required value={assetId} onChange={event=>setAssetId(event.target.value)}><option value="">Choose a supported asset</option>{assetId&&!selected?<option value={assetId}>{assetId} on {recipient?.primary_network} (saved preference)</option>:null}{visible.map(token=><option key={token.assetId} value={token.assetId}>{token.symbol} on {token.blockchain}</option>)}</select></Field>
     <Field label="Catalog asset ID for CSV"><input readOnly className={`${control} font-mono text-xs`} aria-label="Selected catalog asset ID" value={assetId} onFocus={event=>event.target.select()}/></Field>
     <Field label="Primary receiving address"><input name="address" className={control} required autoComplete="off" spellCheck={false} defaultValue={recipient?.primary_address} placeholder={`Address on ${selected?.blockchain || recipient?.primary_network || "the selected network"}`}/></Field>
     <Field label="Destination tag or required memo" hint={destinationGuidance(selected?.blockchain || recipient?.primary_network || "")}><input name="primaryMemo" className={control} maxLength={120} autoComplete="off" defaultValue={recipient?.primary_memo || ""} placeholder="Leave blank when not required"/></Field>
+    <div className="md:col-span-2 lg:col-span-3"><UsdcBackupGuidance /></div>
     <Field label="Native USDC backup network"><select name="backupNetwork" className={control} defaultValue={recipient?.backup_network || ""}><option value="">No backup route</option>{BACKUPS.map(network=><option key={network.id} value={network.id}>{network.name}</option>)}</select></Field>
     <Field label="USDC backup address" hint="A native USDC primary needs a different backup network. The payee must confirm this address and consent before backup can be used."><input name="backupAddress" className={control} autoComplete="off" spellCheck={false} defaultValue={recipient?.backup_address || ""}/></Field>
     <div className="flex items-center gap-3"><Action busy={!!busy} disabled={!recipient&&!catalogAvailable}>{recipient?"Save new profile version":"Create and invite payee"}</Action>{onCancel?<Action type="button" onClick={onCancel}>Cancel edit</Action>:null}</div>

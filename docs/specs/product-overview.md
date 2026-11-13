@@ -82,7 +82,9 @@ Wallet rejection, a wrong network or a disconnect leaves a recoverable draft and
 
 ### Fund the company
 
-The owner selects an amount and supported source asset. Razor displays the conversion, fees, expiry and refund destination. A multi-asset top-up contains separately tracked funding legs. Only confirmed destination credits increase the funded settlement balance.
+The owner selects an amount and any supported source asset from the live NEAR Intents catalog. The source asset does not need to match a recipient's chosen payout asset. Razor displays the conversion, fees, expiry and refund destination. A multi-asset top-up contains separately tracked funding legs. Only confirmed destination credits increase the funded settlement balance.
+
+Razor suggests currently catalog-supported native USDC on popular networks as options to compare for fewer conversion steps and potentially lower fees. Suggestions never hide other supported assets or claim a cheapest route; the live quote determines actual conversion and routing costs, with source-network gas shown separately.
 
 The default top-up converts to USDC under terms the owner approves. Original-asset holdings can be offered separately, with their indicative value distinguished from USDC reserved for payment obligations.
 
@@ -94,7 +96,7 @@ The interface presents one guided task with separately tracked funding and payou
 
 ### Set up recipients
 
-The company invites an employee, contractor or supplier. The recipient confirms the primary asset, network and receiving address, then sets up a distinct USDC backup and authorizes when it may be used. Recurring automated payouts require a valid backup. A manual profile without one remains visible as incomplete for automatic recovery.
+The company invites an employee, contractor or supplier. The recipient can choose any supported primary payout asset from the live catalog, independently of the payer's funding asset. Native USDC options are suggestions for receiving compatibility and possible cost savings, not a primary-asset restriction. The recipient confirms the primary asset, network and receiving address, then sets up a distinct USDC backup and authorizes when it may be used. Recurring automated payouts require a valid backup. A manual profile without one remains visible as incomplete for automatic recovery.
 
 Defaults are suggestions until confirmed. Razor must not infer a network from an EVM address or copy an address to another chain without confirmation.
 
@@ -119,7 +121,7 @@ Participating companies may agree to offset compatible, accepted obligations. Ea
 | Decision | Default |
 | --- | --- |
 | Settlement amounts and payroll reserves | USDC |
-| Recipient primary asset | USDC, with the recipient explicitly choosing a supported network |
+| Recipient primary asset | Any supported asset and network chosen by the recipient; native USDC is a suggested starting option |
 | Backup asset | Native, Circle-issued USDC |
 | Suggested backup network | Base, if distinct from the primary; suggest another enabled network when necessary |
 | Backup authority | Recipient consent plus company approval and fee limits |

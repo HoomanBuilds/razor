@@ -4,7 +4,9 @@ Status: product requirements. Updated 12 November 2026.
 
 ## Purpose
 
-A recipient can prefer a supported payout token and network while authorizing a practical USDC backup. Razor uses that backup when the primary route cannot safely complete under the approved terms. Backup payments remain routed through NEAR Intents.
+A recipient can prefer a supported payout token and network while authorizing a practical USDC backup. The payer may fund with any supported source asset while the recipient independently chooses any supported primary payout asset. Native USDC on popular networks can be suggested for receiving compatibility and possible lower conversion costs, but all live catalog choices remain available. A live quote determines the actual route costs.
+
+Razor uses that backup when the primary route cannot safely complete under the approved terms. Backup payments remain routed through NEAR Intents.
 
 This is destination fallback within the NEAR payment workflow. It is not a guarantee that another provider will be available during an Intents outage.
 
@@ -12,7 +14,7 @@ This is destination fallback within the NEAR payment workflow. It is not a guara
 
 | Field | Meaning |
 | --- | --- |
-| Primary token | The recipient's preferred payout asset; default USDC |
+| Primary token | Any supported payout asset chosen by the recipient; native USDC is a suggested option |
 | Primary network | The explicitly selected destination network |
 | Primary address | The recipient-confirmed destination on that network |
 | Primary metadata | Any destination details required and supported by the route |
