@@ -118,7 +118,7 @@ export async function claimInvoice(access:AccessContext,id:string) {
 export async function submitInvoice(access:AccessContext,id:string,transactionHash:string) {
   requireBillingOwner(access);if(!/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(transactionHash))throw new ApiError(422,"Enter the original NEAR transaction hash","BILLING_HASH_INVALID");
   const invoice=lookup(access.organizationId,id);verifiedPayer(access,invoice.payer_account,invoice.network);
-  if(!invoice.confirmed_at){getDb().prepare("UPDATE billing_invoices SET submitted_hash=?,status='submitted',updated_at=? WHERE id=? AND organization_id=? AND confirmed_at IS NULL").run(transactionHash,now(),id,access.organizationId);audit(invoice,access.userId,"checkout.hash_recorded");}
+  if(!invoice.confirmed_at&&openStates.includes(invoice.status)){getDb().prepare("UPDATE billing_invoices SET submitted_hash=?,status='submitted',updated_at=? WHERE id=? AND organization_id=? AND confirmed_at IS NULL AND status IN ('prepared','claimed','submitted','expired')").run(transactionHash,now(),id,access.organizationId);audit(invoice,access.userId,"checkout.hash_recorded");}
   return reconcileInvoice(access,id);
 }
 export async function refreshInvoice(access:AccessContext,id:string) {

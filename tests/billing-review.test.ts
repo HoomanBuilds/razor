@@ -4,8 +4,9 @@ import { assertBillingReview, billingReviewIdentity, billingWalletActions } from
 import type { NearWalletAction } from "../src/lib/near-actions";
 
 function fixture() {
-  const walletActions: NearWalletAction[] = [{ receiverId: "usdc.near", actions: [{ type: "FunctionCall", params: { methodName: "ft_transfer_call", args: { receiver_id: "billing.near", amount: "29000000", msg: "signed-invoice" }, gas: "100000000000000", deposit: "1" } }] }];
-  return { invoice: { id: "invoice-one", termsHash: "exact-terms", amount: "29000000", payerAccount: "payer.near", billingContract: "billing.near", tokenContract: "usdc.near" }, network: "mainnet" as const, signerAccounts: ["payer.near"], walletActions };
+  const quoteJson=JSON.stringify({invoice_id:"invoice-one",terms_hash:"exact-terms",payer_id:"payer.near",contract_id:"billing.near",token_contract:"usdc.near",network:"mainnet",amount:"29000000"}),signature="signed-invoice";
+  const walletActions: NearWalletAction[] = [{ receiverId: "usdc.near", actions: [{ type: "FunctionCall", params: { methodName: "ft_transfer_call", args: { receiver_id: "billing.near", amount: "29000000", msg: JSON.stringify({quote_json:quoteJson,signature}) }, gas: "100000000000000", deposit: "1" } }] }];
+  return { invoice: { id: "invoice-one", termsHash: "exact-terms", amount: "29000000", payerAccount: "payer.near", billingContract: "billing.near", tokenContract: "usdc.near", quoteJson,signature }, network: "mainnet" as const, signerAccounts: ["payer.near"], walletActions };
 }
 
 test("subscription confirmation rejects changed commercial and signer bindings", () => {
@@ -14,6 +15,15 @@ test("subscription confirmation rejects changed commercial and signer bindings",
   for (const patch of [{ id: "other-invoice" }, { amount: "99000000" }, { termsHash: "new-price" }, { payerAccount: "other.near" }, { billingContract: "other.near" }, { tokenContract: "other.near" }]) assert.throws(() => assertBillingReview(reviewed, { ...reviewed, invoice: { ...reviewed.invoice, ...patch } }), /changed/);
   assert.throws(() => assertBillingReview(reviewed, { ...reviewed, network: "testnet" }), /changed/);
   assert.throws(() => assertBillingReview(reviewed, { ...reviewed, signerAccounts: ["other.near"] }), /changed/);
+});
+
+test("subscription signing binds the signed offer itself to the reviewed invoice",()=>{
+  for(const patch of [{invoice_id:"other-invoice"},{terms_hash:"other-terms"},{payer_id:"another.near"},{contract_id:"other.near"},{token_contract:"other-token.near"},{network:"testnet"},{amount:"99000000"}]){
+    const current=fixture(),quote=JSON.parse(current.invoice.quoteJson);
+    current.invoice.quoteJson=JSON.stringify({...quote,...patch});
+    (current.walletActions[0].actions[0].params.args as Record<string,unknown>).msg=JSON.stringify({quote_json:current.invoice.quoteJson,signature:current.invoice.signature});
+    assert.throws(()=>billingWalletActions(current),/signed subscription offer differs/);
+  }
 });
 
 test("subscription review snapshots exact attached amounts, signed offers and contract calls", () => {

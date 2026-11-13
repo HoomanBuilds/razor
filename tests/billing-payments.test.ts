@@ -11,6 +11,7 @@ import { billingCheckoutConfiguration, billingIssuer, billingQuoteHash, type Bil
 import { billingOverview, claimInvoice, createCheckout, invoiceDetail, invoicePage, reconcileInvoice, refreshInvoice, requestInvoiceRefund, prepareRefundForOperator, reconcileRefundForOperator, operatorBillingInvoices, billingInvoiceReceipt, closeUnusedInvoice, submitInvoice } from "../src/server/billing/payments";
 import { billingRoutes } from "../src/server/billing";
 import type { BillingInvoiceDetail } from "../src/server/billing/payment-types";
+import { tickBilling } from "../src/server/billing/worker";
 
 process.env.DATABASE_PATH=":memory:";
 process.env.DATA_ENCRYPTION_KEY="ab".repeat(32);
@@ -143,7 +144,36 @@ test("expired unused checkout closes only after the final chain has passed its s
  t.mock.timers.setTime(expiresAt+1000);blockTime=expiresAt-1;
  await assert.rejects(closeUnusedInvoice(value.access,detail.invoice.id),/final NEAR block/);
  blockTime=expiresAt+1;const closed=await closeUnusedInvoice(value.access,detail.invoice.id);assert.equal(closed.invoice.status,"cancelled");
- const fresh=await checkout(value);assert.notEqual(fresh.invoice.id,detail.invoice.id);blockTime=Date.now();
+ const fresh=await checkout(value);assert.notEqual(fresh.invoice.id,detail.invoice.id);
+ assert.equal((await submitInvoice(value.access,detail.invoice.id,"1".repeat(44))).invoice.status,"cancelled");
+ assert.equal((await checkout(value)).invoice.id,fresh.invoice.id);blockTime=Date.now();
+});
+
+test("billing worker recovers a closed checkout once and preserves leased or failed verification for retry",async()=>{
+ const value=company(),detail=await checkout(value);await claimInvoice(value.access,detail.invoice.id);paid(detail);
+ assert.equal((await tickBilling(value.access.organizationId,1)).checked,1);
+ assert.equal(getSubscriptionState(value.access.organizationId).plan.code,"pro");
+ assert.equal(row<{count:number}>("SELECT COUNT(*) AS count FROM billing_periods WHERE source_invoice_id=?",detail.invoice.id)?.count,1);
+ const past=new Date(Date.now()-1000).toISOString();
+ getDb().prepare("UPDATE billing_reconciliation_jobs SET run_at=?,lease_id='another-worker',lease_expires_at=? WHERE entity_id=?").run(past,new Date(Date.now()+60000).toISOString(),detail.invoice.id);
+ assert.deepEqual(await tickBilling(value.access.organizationId,1),{checked:0,retrying:0});
+ getDb().prepare("UPDATE billing_reconciliation_jobs SET lease_expires_at=? WHERE entity_id=?").run(past,detail.invoice.id);
+ codeHash="different-code";
+ try{assert.equal((await tickBilling(value.access.organizationId,1)).retrying,1);assert.equal(getSubscriptionState(value.access.organizationId).plan.code,"pro");}
+ finally{codeHash=reviewedCodeHash;}
+ getDb().prepare("UPDATE billing_reconciliation_jobs SET run_at=? WHERE entity_id=?").run(past,detail.invoice.id);
+ assert.equal((await tickBilling(value.access.organizationId,1)).checked,1);
+ assert.equal(row<{count:number}>("SELECT COUNT(*) AS count FROM billing_periods WHERE source_invoice_id=?",detail.invoice.id)?.count,1);
+});
+
+test("billing worker observes original-payer refunds without a browser or signing key",async()=>{
+ const value=company(),detail=await checkout(value);paid(detail);await reconcileInvoice(value.access,detail.invoice.id);
+ const requested=await requestInvoiceRefund(value.access,detail.invoice.id,"Background refund recovery"),refund=requested.invoice.refundRequest!;
+ await prepareRefundForOperator(refund.id);
+ chainRefunds.set(refund.id,{id:refund.id,invoice_id:detail.invoice.id,amount:refund.amount,status:"completed",nonce:"1"});chainInvoices.get(detail.invoice.id)!.refunded_amount=refund.amount;
+ const issuer=process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY;delete process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY;
+ try{assert((await tickBilling(value.access.organizationId,2)).checked>=1);assert.equal(getSubscriptionState(value.access.organizationId).plan.code,"free");assert.equal(row<{status:string}>("SELECT status FROM billing_refund_requests WHERE id=?",refund.id)?.status,"completed");}
+ finally{process.env.RAZOR_BILLING_ISSUER_PRIVATE_KEY=issuer;}
 });
 
 test.after(()=>{globalThis.fetch=originalFetch;});

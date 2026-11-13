@@ -2,7 +2,7 @@ import { RequestError } from "./api";
 import type { NearWalletAction } from "./near-actions";
 
 interface CheckoutReview {
-  invoice: { id: string; termsHash: string; amount: string; payerAccount: string; billingContract: string; tokenContract: string };
+  invoice: { id: string; termsHash: string; amount: string; payerAccount: string; billingContract: string; tokenContract: string; quoteJson:string; signature:string };
   network: "mainnet" | "testnet";
   signerAccounts: string[];
   walletActions: { receiverId: string; actions: { type: "FunctionCall"; params: { methodName: string; args: unknown; gas: string; deposit: string } }[] }[];
@@ -24,5 +24,9 @@ export function billingWalletActions(review: CheckoutReview): NearWalletAction[]
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new RequestError("The subscription transfer arguments are invalid. Refresh the invoice.", 409, "BILLING_CALL_INVALID");
   const values = args as Record<string, unknown>;
   if (values.receiver_id !== review.invoice.billingContract || values.amount !== review.invoice.amount || typeof values.msg !== "string" || !values.msg) throw new RequestError("Subscription amount or receiver changed. Review the saved invoice before signing.", 409, "BILLING_CALL_INVALID");
+  try {
+    const envelope=JSON.parse(values.msg),quote=JSON.parse(envelope.quote_json);
+    if(envelope.quote_json!==review.invoice.quoteJson || envelope.signature!==review.invoice.signature || quote.invoice_id!==review.invoice.id || quote.terms_hash!==review.invoice.termsHash || quote.payer_id!==review.invoice.payerAccount || quote.contract_id!==review.invoice.billingContract || quote.token_contract!==review.invoice.tokenContract || quote.network!==review.network || quote.amount!==review.invoice.amount)throw new Error();
+  }catch{throw new RequestError("The signed subscription offer differs from the invoice you reviewed. Refresh the invoice before signing.",409,"BILLING_CALL_INVALID");}
   return [{ receiverId: transaction.receiverId, actions: [{ type: "FunctionCall", params: { ...call.params, args: values } }] }];
 }
