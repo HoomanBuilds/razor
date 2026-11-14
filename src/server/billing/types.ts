@@ -1,3 +1,4 @@
+import type { CapabilityPolicy } from "./capability-model";
 export const BILLING_FEATURES = ["batch_payroll", "recurring", "private_ai", "clearing"] as const;
 export type BillingFeature = typeof BILLING_FEATURES[number];
 export type PlanCode = "free" | "pro" | "business";
@@ -12,6 +13,7 @@ export interface BillingPlan {
   features: Record<BillingFeature, boolean>;
   limits: BillingLimits;
   available: boolean;
+  capabilityPolicy?: CapabilityPolicy;
   createdAt: string;
 }
 export interface BillingPeriod {
@@ -55,6 +57,7 @@ export interface SubscriptionState {
 }
 export type BillingPlanVersion = BillingPlan;
 export interface BillingEntitlements {
+  optionalCapabilities?: import("./capabilities").OptionalCapabilityStatus;
   mode: "pilot" | "enforced";
   pilot: boolean;
   canManage: boolean;

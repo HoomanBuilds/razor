@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../context";
+import { optionalCapabilityStatus } from "./capabilities";
 import { getEntitlements } from "./entitlements";
 import { cancelSubscription, resumeSubscription, schedulePlanChange } from "./subscriptions";
 import { billingInvoiceCsv, billingInvoiceReceipt, billingOverview, claimInvoice, closeUnusedInvoice, createCheckout, invoiceDetail, invoicePage, reconcileInvoice, refreshInvoice, requestInvoiceRefund, submitInvoice } from "./payments";
 
 const checkout=z.object({planVersionId:z.string().min(1).max(128),payerAccount:z.string().min(2).max(64),requestKey:z.string().min(8).max(128)}).strict();
 export const billingRoutes=new Hono<AppEnv>();
+billingRoutes.get("/capabilities",c=>c.json(optionalCapabilityStatus(c.get("access"))));
 billingRoutes.get("/entitlements",c=>c.json(getEntitlements(c.get("access"))));
 billingRoutes.get("/",async c=>c.json(await billingOverview(c.get("access"))));
 billingRoutes.get("/invoices",c=>c.json(invoicePage(c.get("access"),Number(c.req.query("page")||1),Number(c.req.query("pageSize")||25))));
