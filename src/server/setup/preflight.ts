@@ -121,6 +121,23 @@ export async function setupPreflight(options: Options = {}) {
     add("contract-upgrade-policy", "blocked", "Configure an explicit supported contract upgrade policy and exact approved public keys for each configured upgradable contract. No private keys belong in upgrade-policy settings.");
   }
 
+  if (options.remote && appId && !failed("social-login")) {
+    try {
+      const response = await (options.fetch ?? fetch)(`https://auth.privy.io/api/v1/apps/${encodeURIComponent(appId)}`, {
+        headers: { "privy-app-id": appId }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error();
+      const app = await response.json() as { id?: unknown; google_oauth?: unknown; email_auth?: unknown; allowed_domains?: unknown };
+      if (app.id !== appId || typeof app.google_oauth !== "boolean" || typeof app.email_auth !== "boolean" || !Array.isArray(app.allowed_domains) || app.allowed_domains.some(domain => typeof domain !== "string")) throw new Error();
+      add("remote-google-login", app.google_oauth ? "pass" : "blocked", app.google_oauth ? "Google login is enabled in the configured Privy app. User authorization and Razor session creation still require a real sign-in." : "Google login is disabled in the configured Privy app. Enable Google in the app's Login Methods / Authentication dashboard and save changes. A visible Google button or local credentials do not enable this provider.", "remote");
+      add("remote-email-login", app.email_auth ? "pass" : "blocked", app.email_auth ? "Email login is enabled in the configured Privy app. Actual OTP delivery and sign-in remain unverified." : "Email login is disabled in the configured Privy app. Enable email in the app's Login Methods / Authentication dashboard and save changes.", "remote");
+      const originAllowed = Boolean(env.APP_URL && app.allowed_domains.includes(new URL(env.APP_URL).origin));
+      add("remote-login-origin", originAllowed ? "pass" : "blocked", originAllowed ? "The configured browser origin is explicitly allowed by the Privy app." : "Add the exact APP_URL origin to the configured Privy app's allowed domains and save changes.", "remote");
+    } catch {
+      add("remote-social-login", "blocked", "The configured Privy app's public login methods and allowed origins could not be verified. No credentials or OAuth authorization were sent.", "remote");
+    }
+  } else add("remote-social-login", "not_checked", "Run with --remote and valid social login configuration to read Privy's saved provider settings and allowed origins. This does not sign in a user.", "remote");
+
   if (options.remote && !failed("near-network") && !failed("near-rpc")) {
     const transport = options.fetch ?? fetch;
     const rpc = async <T>(method: string, params: unknown): Promise<T> => {

@@ -56,6 +56,7 @@ test("remote billing setup binds code, token, issuer and storage to one final bl
   let paused = false, billingReads = 0;
   const fallback = transport();
   const remote: typeof fetch = async (url, init) => {
+    if (!init?.body) return fallback(url, init);
     const request = JSON.parse(init!.body as string), params = request.params;
     if (request.method === "block") return Response.json({ result: { header: finalizedBlock } });
     const billingStorage = params.account_id === NATIVE_USDC.near && params.method_name === "storage_balance_of" && JSON.parse(Buffer.from(params.args_base64, "base64").toString()).account_id === configured.RAZOR_BILLING_CONTRACT_ID;
@@ -76,6 +77,7 @@ test("remote billing setup binds code, token, issuer and storage to one final bl
 
 function transport(options: { network?: string; treasuryCode?: string; uninitialized?: boolean; permission?: unknown; treasuryKeys?: unknown[]; keysByAccount?: Record<string, unknown[]>; responseBlockHash?: string; globalContract?: string } = {}): typeof fetch {
   return async (_url, init) => {
+    if (String(_url).startsWith("https://auth.privy.io/api/v1/apps/")) return Response.json({id:env.PRIVY_APP_ID,google_oauth:true,email_auth:true,allowed_domains:[env.APP_URL]});
     const request = JSON.parse(init!.body as string), params = request.params;
     let result: unknown;
     if (request.method === "status") result = { chain_id: options.network || "mainnet" };
@@ -209,6 +211,7 @@ test("billing preflight verifies its own approved upgrade keys before accepting 
   let billingKeys = [fullAccess(upgradeKey(12))];
   const fallback = transport({keysByAccount:{"treasury.near":[fullAccess(upgradeKey(10))], "clearing.near":[fullAccess(upgradeKey(11))]}});
   const remote: typeof fetch = async (url, init) => {
+    if (!init?.body) return fallback(url, init);
     const request = JSON.parse(init!.body as string), params = request.params;
     if (params.account_id !== configured.RAZOR_BILLING_CONTRACT_ID) return fallback(url, init);
     assert.equal(params.block_id, finalizedBlock.hash);
@@ -220,4 +223,45 @@ test("billing preflight verifies its own approved upgrade keys before accepting 
   assert.equal(status(await setupPreflight({env:configured, artifactDirectory:absentArtifacts, remote:true, fetch:remote}), "remote-billing"), "pass");
   billingKeys = [fullAccess(upgradeKey(13))];
   assert.equal(status(await setupPreflight({env:configured, artifactDirectory:absentArtifacts, remote:true, fetch:remote}), "remote-billing"), "blocked");
+});
+
+
+test("remote login readiness catches disabled providers despite valid credentials", async () => {
+  let google = false, email = true, domains = [env.APP_URL!];
+  const fallback = transport();
+  const remote: typeof fetch = async (url, init) => {
+    if (init?.body) return fallback(url, init);
+    assert.equal(String(url), "https://auth.privy.io/api/v1/apps/app-one");
+    assert.equal(init?.redirect, "error");
+    assert.deepEqual(init?.headers, {"privy-app-id":"app-one"});
+    return Response.json({id:"app-one",google_oauth:google,email_auth:email,allowed_domains:domains});
+  };
+  let report = await setupPreflight({env,artifactDirectory:absentArtifacts,remote:true,fetch:remote});
+  assert.equal(status(report,"remote-google-login"),"blocked");
+  assert.equal(status(report,"remote-email-login"),"pass");
+  assert.equal(status(report,"remote-login-origin"),"pass");
+  assert.equal(report.configurationReady,true);
+  google=true;email=false;domains=[];
+  report = await setupPreflight({env,artifactDirectory:absentArtifacts,remote:true,fetch:remote});
+  assert.equal(status(report,"remote-google-login"),"pass");
+  assert.equal(status(report,"remote-email-login"),"blocked");
+  assert.equal(status(report,"remote-login-origin"),"blocked");
+  assert.equal(report.liveWorkflowsVerified,false);
+});
+
+test("remote login settings reject mismatched apps, malformed responses and provider failures without leaking response data", async () => {
+  const fallback = transport();
+  for (const response of [
+    () => Response.json({id:"another-app",google_oauth:true,email_auth:true,allowed_domains:[env.APP_URL]}),
+    () => Response.json({id:env.PRIVY_APP_ID,google_oauth:"true",email_auth:true,allowed_domains:[env.APP_URL]}),
+    () => Response.json({error:"private-provider-response"},{status:403}),
+    () => {throw new Error("private-provider-response");},
+  ]) {
+    const remote:typeof fetch=async(url,init)=>init?.body?fallback(url,init):response();
+    const report=await setupPreflight({env,artifactDirectory:absentArtifacts,remote:true,fetch:remote});
+    assert.equal(status(report,"remote-social-login"),"blocked");
+    assert.equal(status(report,"remote-google-login"),undefined);
+    assert(!JSON.stringify(report).includes("private-provider-response"));
+    assert.equal(status(report,"remote-treasury"),"pass");
+  }
 });
