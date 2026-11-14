@@ -1,6 +1,7 @@
 import { base58 } from "@scure/base";
 import { ApiError } from "../context";
 import { nearRpc } from "../account-recovery/near";
+import { assertContractUpgradeKeys } from "../near-upgrade-policy";
 import type { Scope } from "./model";
 
 export interface DeploymentAnchor {
@@ -62,7 +63,7 @@ export async function finalizedDeployment(
   )
     throw new ApiError(
       409,
-      "The finalized account does not contain the reviewed immutable deployment",
+      "The finalized account does not contain the reviewed pinned deployment",
       "FINANCING_DEPLOYMENT_REQUIRED",
     );
   const anchor: DeploymentAnchor = {
@@ -82,12 +83,15 @@ export async function finalizedDeployment(
     },
   );
   requireBlock(keys, anchor);
-  if (!Array.isArray(keys.keys) || keys.keys.length !== 0)
+  try {
+    assertContractUpgradeKeys(accountId, keys.keys);
+  } catch {
     throw new ApiError(
       409,
-      "Retire every access key from the exact reviewed contract account before using financing. An operator assertion is not proof of immutability",
-      "FINANCING_IMMUTABLE_DEPLOYMENT_REQUIRED",
+      "The finalized contract access keys do not match its configured upgrade policy",
+      "FINANCING_UPGRADE_POLICY_UNVERIFIED",
     );
+  }
   return anchor;
 }
 export async function finalizedContractView<T>(
