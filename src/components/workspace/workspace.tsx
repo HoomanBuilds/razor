@@ -47,6 +47,7 @@ import { Bills, Payroll } from "./business";
 import { BusinessClearing } from "./business-clearing";
 import { Recipients } from "./recipients";
 import { Payments } from "./payments";
+import { Reconciliation } from "./reconciliation";
 import { Treasury } from "./treasury";
 import { FundingRequestsPanel } from "./funding-requests";
 import { ClientReservesPanel } from "./client-reserves";
@@ -450,6 +451,7 @@ function CompanyWorkspace({
       ) : section === "payments" ? (
         <WorkspaceTabs key={section} tabs={[
           { label: "Payment queue", content: <Payments /> },
+          { label: "Reconciliation", content: <Reconciliation /> },
           { label: "Payment tools", content: <PaymentManagementPanel mode="payments" /> },
           { label: "Operations", content: <OperationsPanel /> },
         ]} />
