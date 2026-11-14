@@ -4,6 +4,7 @@ import { ApiError } from "../context";
 import { requirePrivateAiConfig } from "./config";
 import { INVOICE_SYSTEM_PROMPT, parseExtraction, reviewExtraction } from "./extraction";
 import { FINANCE_SYSTEM_PROMPT } from "./finance/prompt";
+import { PAYROLL_MAPPING_SYSTEM_PROMPT } from "../payroll-import/prompt";
 import { approveDeployment, assertFreshDeployment, publicVerification, requireModelReceipt, sha256 } from "./verification";
 import { EvidenceInferenceClient } from "./capture";
 import { encodeBase64, hashBytes } from "../../lib/verification/verify";
@@ -16,7 +17,7 @@ export function invoiceMessageContent(text: string, images: InvoiceImage[] = [])
   return [{ type: "text" as const, text }, ...images.map(image => ({ type: "image_url" as const, image_url: { url: `data:${image.mimeType};base64,${image.data}`, detail: "high" as const } }))];
 }
 
-export async function runVerifiedPrivateInference(task: "invoice" | "finance", text: string, images: InvoiceImage[] = []) {
+export async function runVerifiedPrivateInference(task: "invoice" | "finance" | "payroll_mapping", text: string, images: InvoiceImage[] = []) {
   if (task !== "invoice" && images.length) throw new ApiError(422, "Images are only accepted for invoice review", "INVOICE_IMAGES_INVALID");
   const content = invoiceMessageContent(text, images);
   const config = requirePrivateAiConfig();
@@ -51,7 +52,7 @@ export async function runVerifiedPrivateInference(task: "invoice" | "finance", t
       max_tokens: 4000,
       response_format: { type: "json_object" },
       stream: false,
-      messages: [{ role: "system", content: task === "invoice" ? INVOICE_SYSTEM_PROMPT : FINANCE_SYSTEM_PROMPT }, { role: "user", content }],
+      messages: [{ role: "system", content: task === "invoice" ? INVOICE_SYSTEM_PROMPT : task === "finance" ? FINANCE_SYSTEM_PROMPT : PAYROLL_MAPPING_SYSTEM_PROMPT }, { role: "user", content }],
     }, { signal: AbortSignal.timeout(90_000), maxRetries: 0 });
     stage = "response";
     const receipt = await client.verifyResponse(completion.id);
@@ -59,7 +60,7 @@ export async function runVerifiedPrivateInference(task: "invoice" | "finance", t
     const wire = await client.capturedWire(completion.id);
     assertFreshDeployment(deployment, config.maxAttestationAgeMs);
     const output = completion.choices[0]?.message.content;
-    if (!output || completion.choices[0]?.finish_reason !== "stop") throw new ApiError(502, task === "invoice" ? "The verified response did not finish an invoice extraction" : "The verified response did not finish a finance proposal", task === "invoice" ? "INVOICE_EXTRACTION_INCOMPLETE" : "FINANCE_PLAN_INCOMPLETE");
+    if (!output || completion.choices[0]?.finish_reason !== "stop") throw new ApiError(502, task === "invoice" ? "The verified response did not finish an invoice extraction" : task === "finance" ? "The verified response did not finish a finance proposal" : "The verified response did not finish its column suggestions. Map columns manually", task === "invoice" ? "INVOICE_EXTRACTION_INCOMPLETE" : task === "finance" ? "FINANCE_PLAN_INCOMPLETE" : "IMPORT_SUGGESTION_INCOMPLETE");
     return {
       content: output,
       verification: publicVerification(config.model, deployment, receipt),
