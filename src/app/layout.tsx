@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: "Razor | Company payments",
   description: "Company payroll, invoices and payments on NEAR.",
   referrer: "no-referrer",
+  icons: { icon: "/brand/razor-mark.svg", shortcut: "/brand/razor-mark.svg" },
   robots: { index: false, follow: false },
 };
 
