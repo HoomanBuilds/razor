@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { usd } from "@/lib/format";
 import { formatUnits } from "@/lib/money";
 import { signNearActionBatch, type NearWalletAction } from "@/lib/near-actions";
-import { WalletButtons } from "@/components/auth/wallets";
+import { WalletButtons } from "@/components/auth/sign-in-panel";
 import { AssetIdentity } from "@/components/assets/asset-identity";
 import type { ownDistributionClaims, inspectOwnClaim, prepareOwnClaim } from "@/server/distributions/service";
 import { useAction, useResource } from "./workspace/hooks";
