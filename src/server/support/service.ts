@@ -1,3 +1,6 @@
+import { isSupportOperator, requireSupportOperator } from "./operators";
+import { publicSupportPublication } from "./publication";
+import { escalationInput, escalationActionInput } from "./model";
 import { randomUUID } from "node:crypto";
 import { ApiError, requirePermission } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -13,8 +16,7 @@ function sender(userId:string):Actor {
  return {userId,role:"sender"};
 }
 function operator(userId:string):Actor {
- const allowed=(process.env.RAZOR_SUPPORT_OPERATOR_USER_IDS??"").split(",").map(value=>value.trim()).filter(Boolean);
- if(!allowed.includes(userId)||!row("SELECT id FROM users WHERE id=?",userId))throw new ApiError(403,"This existing user is not an explicitly allowlisted support operator","SUPPORT_OPERATOR_REQUIRED");
+ requireSupportOperator(userId);
  return {userId,role:"operator"};
 }
 function verifyContext(userId:string,input:SupportContext) {
@@ -43,10 +45,11 @@ function contextView(ticket:CaseRecord) {
 }
 function summary(ticket:CaseRecord,actor:Actor) {
  const removed=["deleted","expired"].includes(ticket.status)||ticket.expires_at<=now();
- return {id:ticket.id,...(actor.role==="operator"?{senderId:ticket.sender_user_id}:{}),category:ticket.category,subject:removed?ticket.status==="deleted"?"Deleted case":"Expired case":decrypt(ticket.subject_ciphertext!),status:removed&&ticket.status!=="deleted"?"expired":ticket.status,version:ticket.version,createdAt:ticket.created_at,updatedAt:ticket.updated_at,expiresAt:ticket.expires_at,context:removed?null:contextView(ticket),recordedOnly:true};
+ return {id:ticket.id,...(actor.role==="operator"?{senderId:ticket.sender_user_id}:{}),category:ticket.category,subject:removed?ticket.status==="deleted"?"Deleted case":"Expired case":decrypt(ticket.subject_ciphertext!),status:removed&&ticket.status!=="deleted"?"expired":ticket.status,version:ticket.version,createdAt:ticket.created_at,updatedAt:ticket.updated_at,expiresAt:ticket.expires_at,context:removed?null:contextView(ticket),recordedOnly:true,escalation:removed?null:escalationSummary(ticket.id)};
 }
 function redact(ticket:CaseRecord,status:"deleted"|"expired",actor?:Actor) {
  const db=getDb(),at=now();
+ db.prepare("DELETE FROM support_escalations WHERE case_id=?").run(ticket.id);
  db.prepare("DELETE FROM support_messages WHERE case_id=?").run(ticket.id);
  db.prepare("DELETE FROM support_events WHERE case_id=?").run(ticket.id);
  db.prepare("UPDATE support_cases SET organization_id=NULL,subject_ciphertext=NULL,context_ciphertext=NULL,status=?,version=version+1,updated_at=? WHERE id=?").run(status,at,ticket.id);
@@ -153,3 +156,222 @@ export const operatorListCases=(userId:string,data:unknown={})=>list(operator(us
 export const operatorInspectCase=(userId:string,id:string,data:unknown={})=>inspect(operator(userId),id,data);
 export const operatorReplyCase=(userId:string,id:string,data:unknown)=>reply(operator(userId),id,data);
 export const operatorUpdateCase=(userId:string,id:string,data:unknown)=>status(operator(userId),id,data);
+
+interface EscalationRecord {
+  id: string;
+  case_id: string;
+  reason: string;
+  status: "queued" | "acknowledged" | "resolved";
+  publication_id: string | null;
+  requested_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  assigned_operator_id: string | null;
+}
+function escalationSummary(caseId: string) {
+  const value = row<EscalationRecord>(
+    "SELECT * FROM support_escalations WHERE case_id=?",
+    caseId,
+  );
+  return value
+    ? {
+        id: value.id,
+        reason: value.reason,
+        status: value.status,
+        requestedAt: value.requested_at,
+        acknowledgedAt: value.acknowledged_at,
+        resolvedAt: value.resolved_at,
+        staffingPublicationId: value.publication_id,
+        assignedOperatorAvailable: value.assigned_operator_id ? isSupportOperator(value.assigned_operator_id) : false,
+        financialAuthority: false,
+      }
+    : null;
+}
+export function requestTransferEscalation(
+  userId: string,
+  id: string,
+  data: unknown,
+) {
+  const actor = sender(userId),
+    input = escalationInput.parse(data),
+    requestHash = digest({ kind: "transfer_escalation", ...input });
+  expireSupportCases();
+  return transaction((db) => {
+    const ticket = ticketFor(actor, id);
+    available(ticket);
+    if (eventReplay(actor, ticket, input.idempotencyKey, requestHash))
+      return { case: summary(ticket, actor), replayed: true };
+    if (ticket.version !== input.expectedVersion)
+      throw new ApiError(
+        409,
+        "Refresh this private case before escalating its transfer issue",
+        "SUPPORT_VERSION_CHANGED",
+      );
+    if (["closed", "resolved"].includes(ticket.status))
+      throw new ApiError(
+        409,
+        "Reopen your case before requesting transfer escalation",
+        "SUPPORT_CLOSED",
+      );
+    const previous = row<EscalationRecord>(
+      "SELECT * FROM support_escalations WHERE case_id=?",
+      id,
+    );
+    if (previous && previous.status !== "resolved")
+      return { case: summary(ticket, actor), replayed: true };
+    rate(actor);
+    event(
+      actor,
+      ticket,
+      `transfer_escalation_requested:${input.reason}`,
+      "waiting_for_operator",
+      input.idempotencyKey,
+      requestHash,
+    );
+    const publication = publicSupportPublication(),
+      at = now();
+    db.prepare(
+      "INSERT INTO support_escalations(id,case_id,reason,status,publication_id,requested_at) VALUES(?,?,?,'queued',?,?) ON CONFLICT(case_id) DO UPDATE SET reason=excluded.reason,status='queued',publication_id=excluded.publication_id,requested_at=excluded.requested_at,acknowledged_at=NULL,resolved_at=NULL,assigned_operator_id=NULL",
+    ).run(
+      previous?.id ?? randomUUID(),
+      id,
+      input.reason,
+      publication.staffing.available
+        ? publication.staffing.publicationId
+        : null,
+      at,
+    );
+    db.prepare(
+      "UPDATE support_cases SET status='waiting_for_operator',version=version+1,updated_at=? WHERE id=?",
+    ).run(at, id);
+    audit(actor.userId, null, "support.transfer_escalation_requested", id, {
+      reason: input.reason,
+    });
+    return {
+      case: summary(
+        row<CaseRecord>("SELECT * FROM support_cases WHERE id=?", id)!,
+        actor,
+      ),
+      replayed: false,
+    };
+  });
+}
+export function operatorEscalationQueue(userId: string, page = 1) {
+  const actor = operator(userId);
+  expireSupportCases();
+  if (!Number.isSafeInteger(page) || page < 1 || page > 100000)
+    throw new ApiError(
+      422,
+      "Choose a valid escalation queue page",
+      "SUPPORT_PAGE_INVALID",
+    );
+  const where =
+      "e.status IN ('queued','acknowledged') AND c.status NOT IN ('deleted','expired','closed','resolved') AND c.expires_at>?",
+    at = now();
+  const total = row<{ count: number }>(
+    `SELECT COUNT(*) count FROM support_escalations e JOIN support_cases c ON c.id=e.case_id WHERE ${where}`,
+    at,
+  )!.count;
+  return {
+    page,
+    pageSize: SUPPORT_PAGE_SIZE,
+    total,
+    hasMore: page * SUPPORT_PAGE_SIZE < total,
+    cases: rows<CaseRecord>(
+      `SELECT c.* FROM support_escalations e JOIN support_cases c ON c.id=e.case_id WHERE ${where} ORDER BY CASE e.status WHEN 'queued' THEN 0 ELSE 1 END,e.requested_at,e.id LIMIT ? OFFSET ?`,
+      at,
+      SUPPORT_PAGE_SIZE,
+      (page - 1) * SUPPORT_PAGE_SIZE,
+    ).map((ticket) => summary(ticket, actor)),
+    notice:
+      "A queued transfer issue is a support request, not evidence of failure or authority to retry, refund, release or settle money. Acknowledgment records a real operator action only.",
+  };
+}
+export function operatorTransferEscalation(
+  userId: string,
+  id: string,
+  data: unknown,
+) {
+  const actor = operator(userId),
+    input = escalationActionInput.parse(data),
+    requestHash = digest({ kind: "transfer_escalation_action", ...input });
+  expireSupportCases();
+  return transaction((db) => {
+    const ticket = ticketFor(actor, id);
+    available(ticket);
+    if (eventReplay(actor, ticket, input.idempotencyKey, requestHash))
+      return { case: summary(ticket, actor), replayed: true };
+    const value = row<EscalationRecord>(
+      "SELECT * FROM support_escalations WHERE case_id=?",
+      id,
+    );
+    if (!value || ["closed", "resolved"].includes(ticket.status))
+      throw new ApiError(
+        409,
+        "Choose an open case with a recorded transfer escalation",
+        "SUPPORT_ESCALATION_UNAVAILABLE",
+      );
+    if (ticket.version !== input.expectedVersion)
+      throw new ApiError(
+        409,
+        "Refresh the current escalation before recording this action",
+        "SUPPORT_VERSION_CHANGED",
+      );
+    if (
+      input.action === "resolve" &&
+      (value.status !== "acknowledged" || value.assigned_operator_id !== userId)
+    )
+      throw new ApiError(
+        403,
+        "The acknowledging operator must resolve this support escalation; settlement still requires independent evidence",
+        "SUPPORT_ESCALATION_OWNER_REQUIRED",
+      );
+    if (input.action === "acknowledge" && value.status !== "queued")
+      throw new ApiError(
+        409,
+        "This escalation is already acknowledged or resolved",
+        "SUPPORT_ESCALATION_CHANGED",
+      );
+    if (
+      input.action === "take_over" &&
+      (value.status !== "acknowledged" ||
+        !value.assigned_operator_id ||
+        isSupportOperator(value.assigned_operator_id))
+    )
+      throw new ApiError(
+        409,
+        "Take over only an acknowledged escalation whose original operator is no longer authorized",
+        "SUPPORT_ESCALATION_CHANGED",
+      );
+    rate(actor);
+    event(
+      actor,
+      ticket,
+      input.action === "resolve"
+        ? "transfer_escalation_resolved"
+        : input.action === "take_over"
+          ? "transfer_escalation_reassigned"
+          : "transfer_escalation_acknowledged",
+      ticket.status,
+      input.idempotencyKey,
+      requestHash,
+    );
+    const at = now();
+    db.prepare(
+      input.action !== "resolve"
+        ? "UPDATE support_escalations SET status='acknowledged',assigned_operator_id=?,acknowledged_at=? WHERE case_id=?"
+        : "UPDATE support_escalations SET status='resolved',assigned_operator_id=?,resolved_at=? WHERE case_id=?",
+    ).run(userId, at, id);
+    db.prepare(
+      "UPDATE support_cases SET version=version+1,updated_at=? WHERE id=?",
+    ).run(at, id);
+    audit(userId, null, `support.transfer_escalation_${input.action}`, id);
+    return {
+      case: summary(
+        row<CaseRecord>("SELECT * FROM support_cases WHERE id=?", id)!,
+        actor,
+      ),
+      replayed: false,
+    };
+  });
+}

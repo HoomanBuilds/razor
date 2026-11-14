@@ -17,3 +17,24 @@ export interface CaseRecord {id:string;sender_user_id:string;organization_id:str
 export const digest=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function retentionDays() {const raw=process.env.RAZOR_SUPPORT_RETENTION_DAYS??"90";if(!/^\d+$/.test(raw)||Number(raw)<7||Number(raw)>365)throw new ApiError(503,"The operator must choose support retention from 7 to 365 days","SUPPORT_SETUP_REQUIRED");return Number(raw);}
 export const SUPPORT_PAGE_SIZE=25;
+
+export const escalationInput = z
+  .object({
+    idempotencyKey: z.string().uuid(),
+    expectedVersion: z.number().int().positive(),
+    reason: z.enum([
+      "transfer_outcome_unknown",
+      "delivery_missing",
+      "funding_credit_missing",
+      "refund_recovery_held",
+    ]),
+    noRetryAcknowledged: z.literal(true),
+  })
+  .strict();
+export const escalationActionInput = z
+  .object({
+    idempotencyKey: z.string().uuid(),
+    expectedVersion: z.number().int().positive(),
+    action: z.enum(["acknowledge", "resolve", "take_over"]),
+  })
+  .strict();

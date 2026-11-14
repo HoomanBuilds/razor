@@ -5,6 +5,8 @@ import { LifeBuoy } from "lucide-react";
 import { api } from "@/lib/api";
 import { HELP_CATEGORIES, helpCategoryLabels } from "@/lib/help/guides";
 import type { inspectSupportCase, listSupportCases } from "@/server/support/service";
+import { SupportEscalation } from "./support-escalation";
+import { SupportPublication } from "./support-publication";
 import { useIdentity } from "../auth/identity-provider";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
@@ -21,6 +23,7 @@ export function SupportInbox({organizationId}:{organizationId?:string}) {
  function refresh(){setRevision(value=>value+1);}
  return <Panel title="Your private support inbox" description="Record an issue and track replies here. Saving a case records intake; it does not promise a staff response or response time.">
   <div className="grid min-w-0 grid-cols-1 gap-6">
+   <SupportPublication revision={revision}/>
    <p className="text-sm leading-6 text-muted-foreground">Cases are private to you and explicitly authorized support operators. Linking a company does not share them with coworkers. References provide context only and never authorize spending, refunds or settlement. There are no attachments or outbound notifications.</p>
    <div className="flex flex-wrap items-center justify-between gap-3"><a href="/help" className="w-fit text-sm font-medium text-primary underline underline-offset-4">Search product guides first</a><Action type="button" disabled={!!busy||cases.refreshing||thread.refreshing} onClick={refresh}>Refresh cases and replies</Action></div>
    <details className="min-w-0 rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Record a new issue</summary><form className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2" onSubmit={event=>{
@@ -42,6 +45,7 @@ export function SupportInbox({organizationId}:{organizationId?:string}) {
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-3"><h3 className="break-words font-medium">{ticket.subject}</h3><Status value={ticket.status}/></div><p className="break-all text-xs text-muted-foreground">Case {ticket.id}. Text and context expire {new Date(ticket.expiresAt).toLocaleString()}. Minimal replay-protection metadata remains after removal.</p>
     {ticket.context?<p className="break-all text-xs">{ticket.context.available?`Verified context at submission: ${JSON.stringify(ticket.context)}`:"The original reference is no longer available to your current account. Your own conversation remains private."}</p>:null}
     {removed?<Empty>This case's text and references were removed. Company financial records are unchanged.</Empty>:<>
+     <SupportEscalation ticket={ticket} busy={busy==="escalate"} disabled={!!busy} onRequest={reason=>{const payload={expectedVersion:ticket.version,reason,noRetryAcknowledged:true},request=keyFor(`escalate:${ticket.id}`,payload);void run("escalate",async()=>{await api(`/support/${ticket.id}/escalation`,{...payload,idempotencyKey:request.key});request.done();setNotice("Transfer escalation queued privately. No refund, retry or settlement was authorized.");refresh();});}}/>
      <div className="grid min-w-0 grid-cols-1 gap-3">{thread.data.messages.map(message=><div key={message.id} className="min-w-0 rounded-lg bg-muted/50 p-3"><p className="mb-2 text-xs font-medium">{message.author==="operator"?"Support operator":"You"} · {new Date(message.createdAt).toLocaleString()}</p><p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p></div>)}</div>
      <div className="flex flex-wrap justify-between gap-3"><Action type="button" disabled={messagePage===1} onClick={()=>setMessagePage(value=>value-1)}>Earlier messages</Action><span className="text-xs">Messages page {messagePage}</span><Action type="button" disabled={messagePage*thread.data.pageSize>=thread.data.totalMessages} onClick={()=>setMessagePage(value=>value+1)}>Later messages</Action></div>
      {ticket.status!=="closed"?<form className="grid min-w-0 grid-cols-1 gap-3" onSubmit={event=>{event.preventDefault();const form=event.currentTarget,message=String(new FormData(form).get("reply")),payload={message},request=keyFor(`reply:${ticket.id}`,payload);void run("reply",async()=>{await api(`/support/${ticket.id}/replies`,{...payload,idempotencyKey:request.key});request.done();form.reset();setMessagePage(Math.ceil((thread.data!.totalMessages+1)/thread.data!.pageSize));setNotice("Your reply was recorded in this private case.");refresh();});}}><Field label="Reply" hint="Plain text only. Never include credentials, recovery phrases or raw documents."><textarea name="reply" className={`${control} min-h-24`} required minLength={10} maxLength={4000} disabled={!!busy}/></Field><div><Action busy={busy==="reply"} disabled={!!busy}>Record reply</Action></div></form>:null}
@@ -59,6 +63,6 @@ export function SupportPanel() {const {organization,session}=useWorkspace();retu
 export function PublicSupport() {
  const {session,loading,error}=useIdentity();
  if(loading)return <p role="status" className="text-sm text-muted-foreground">Checking your support sign-in...</p>;
- if(!session)return <div className="grid min-w-0 grid-cols-1 gap-3 rounded-xl border p-5"><LifeBuoy size={22} aria-hidden="true"/><h2 className="font-semibold">Need private help?</h2><p className="text-sm text-muted-foreground">Sign in to record an issue and read your own case history. Do not send keys, recovery phrases or raw documents.</p><a href="/sign-in?next=%2Fhelp%23support" className="w-fit text-sm font-medium text-primary underline underline-offset-4">Sign in for private support</a>{error?<p role="alert" className="text-sm text-destructive">{error}</p>:null}</div>;
+ if(!session)return <div className="grid min-w-0 grid-cols-1 gap-3 rounded-xl border p-5"><SupportPublication/><LifeBuoy size={22} aria-hidden="true"/><h2 className="font-semibold">Need private help?</h2><p className="text-sm text-muted-foreground">Sign in to record an issue and read your own case history. Do not send keys, recovery phrases or raw documents.</p><a href="/sign-in?next=%2Fhelp%23support" className="w-fit text-sm font-medium text-primary underline underline-offset-4">Sign in for private support</a>{error?<p role="alert" className="text-sm text-destructive">{error}</p>:null}</div>;
  return <SupportInbox key={session.user.id}/>;
 }
