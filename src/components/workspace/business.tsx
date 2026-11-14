@@ -1,5 +1,7 @@
 "use client";
 
+import { proportion } from "@/lib/payment-activity";
+
 import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { TokenLogo } from "@/components/assets/asset-identity";
