@@ -88,7 +88,7 @@ test("project and cost-center exports distinguish escrow-backed discharge from n
  db.prepare("INSERT INTO clearing_funded_accounts(round_id,organization_id,destination,deposit_due,credit_due,credit_available,pending_json) VALUES(?,?,'owner.testnet','0','90000000','90000000',?)").run(proof.round,f.access.organizationId,JSON.stringify({kind:"credit",amount:"90000000"}));
  const report=projectReports(f.access);
  for(const value of [report.projects[0],report.costCenters[0]]){assert.equal(value.dischargedDebt,"20000000");assert.equal(value.fundedDischargedDebt,"80000000");assert.equal(value.remainingLiability,"0");assert.equal(value.unpreparedLiability,"0");assert.equal(value.earnedReceipts,"0");assert.equal(value.sourceSpent,"0");assert.equal(value.settledPayments,"0");assert.equal(value.cashResult,"0");assert.equal(value.openBudget,"0");}
- const [header,project]=projectExport(f.access).split("\r\n"),columns=header.split(",");assert.equal(columns[8],'"debt_discharged_without_cash_micro_usdc"');assert.equal(columns.at(-1),'"escrow_backed_debt_discharge_micro_usdc"');assert.ok(project.endsWith(',"80000000"'));
+ const [header,project]=projectExport(f.access).split("\r\n"),columns=header.split(",");assert.equal(columns[8],'"debt_discharged_without_cash_micro_usdc"');assert.equal(columns[columns.length-2],'"escrow_backed_debt_discharge_micro_usdc"');assert.equal(columns.at(-1),'"accepted_supplier_credit_micro_usdc"');assert.ok(project.endsWith(',"80000000","0"'));
  assert.equal(paymentSummary(f.access).treasury.available,"50000000");
 });
 
