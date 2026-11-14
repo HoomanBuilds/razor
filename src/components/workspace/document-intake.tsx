@@ -15,6 +15,7 @@ interface Summary {
 }
 interface InvoiceDocument extends Summary {
   text: string; needsVision: boolean; similarDocumentIds: string[];
+  sources: Array<{ provider: string; channelName: string; receivedAt: string }>;
   analysis: { id: string | null; draft: ExtractedInvoice; verification: unknown } | null;
 }
 interface Configuration {
@@ -77,6 +78,7 @@ export function InvoiceDocumentIntake() {
     {document && <div className="mt-6 space-y-5 rounded-lg border p-4">
       <div className="flex flex-wrap justify-between gap-3"><h3 className="break-all text-sm font-semibold">Review {document.filename}</h3><a className="text-sm text-primary" href={`/api${base}/documents/${document.id}/original`} download>Download original</a></div>
       <p className="break-all font-mono text-xs text-muted-foreground">Source SHA-256: {document.sourceHash}</p>
+      {document.sources.length > 0 && <div className="space-y-1 text-xs text-muted-foreground">{document.sources.map((source, index) => <p key={index}>Received through {source.channelName} ({source.provider}) on {new Date(source.receivedAt).toLocaleString()}.</p>)}</div>}
       {document.error && <p role="status" className="text-sm text-amber-900">{document.error.message}</p>}
       {document.similarDocumentIds.length > 0 && <p role="alert" className="text-sm text-amber-900">Another saved file has matching normalized source text. Check existing bills before creating another obligation.</p>}
       <div className="flex flex-wrap gap-3"><Action type="button" disabled={!!busy} onClick={changed}>Refresh saved status</Action>{!document.billId && <><Action type="button" busy={busy === "extract"} disabled={!!busy || processing || document.mediaType !== "application/pdf" || !config.data?.processor.ready} onClick={() => void run("extract", async () => { await mutate(`${base}/documents/${document.id}/extract`, { revision: document.revision }); })}>Retry PDF extraction</Action><Action type="button" busy={busy === "analyze"} disabled={!!busy || processing || !config.data?.privateAi.ready} onClick={() => void run("analyze", async () => { await mutate(`${base}/documents/${document.id}/analyze`, { revision: document.revision }); })}>Analyze privately</Action></>}</div>
