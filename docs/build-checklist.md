@@ -4,7 +4,7 @@ Use this document to compare the actual build with the intended product througho
 
 Track the separately authorized competitive improvements in the [competitive feature checklist](specs/competitive-gap-checklist.md). Its 22 workstreams preserve every identified gap with granular acceptance IDs and their own evidence log. Review it alongside this checklist throughout implementation; no existing verified box changes merely because scope expands.
 
-The 14 November extension review records thirteen verified acceptance checks in that companion, with 290 application checks, typecheck, production build and focused HTTP/browser evidence on `b6dd47f`. Later payroll execution, purchasing-budget and portable-verifier source integration is still awaiting its combined review. This does not change the baseline verification count below or establish live settlement.
+The 14 November extension review records 25 verified acceptance checks in that companion. The latest `2c1ef4e` build has full typecheck/production-build evidence, 380 full-suite application checks plus 21 focused mapping checks, 66 native contract checks, 91 actual-WASM calls and scoped HTTP/CLI/browser evidence. Real provider delivery and funding/settlement remain separate open gates. This does not change the baseline verification count below. Claimable distributions, staff expenses and procurement receiving are the next three active implementation workstreams.
 
 Product: a NEAR-based company payments and payroll platform with easy onboarding, connected source wallets, supported-asset funding, recipient preferences, USDC backup, private financial analysis and optional business netting.
 
