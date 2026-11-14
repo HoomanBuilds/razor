@@ -94,13 +94,132 @@ struct Instance {
     storage_usage: u64,
     now_ms: u64,
     signer_account_pk: Vec<u8>,
+    initial_storage_usage: u64,
+    code_hash: String,
+    baseline: Option<Box<Instance>>,
+    measurements: Vec<CallMeasurement>,
 }
 
 struct CallResult {
     value: Value,
+    raw_return: ReturnData,
     error: Option<String>,
     logs: Vec<Value>,
+    raw_logs: Vec<String>,
     actions: Value,
+    execution: Execution,
+}
+
+#[derive(Clone, Copy)]
+struct Execution {
+    burnt_gas: u64,
+    used_gas: u64,
+    storage_before: u64,
+    storage_after: u64,
+}
+
+impl Execution {
+    fn storage_delta(&self) -> i128 {
+        self.storage_after as i128 - self.storage_before as i128
+    }
+
+    fn report(&self) -> Value {
+        json!({"burnt_gas":self.burnt_gas.to_string(),"used_gas":self.used_gas.to_string(),
+            "storage_before_bytes":self.storage_before.to_string(),"storage_after_bytes":self.storage_after.to_string(),
+            "committed_storage_delta_bytes":self.storage_delta().to_string()})
+    }
+}
+
+struct CallMeasurement {
+    caller: String,
+    method: String,
+    rejected: bool,
+    baseline: Execution,
+    candidate: Execution,
+}
+
+impl CallMeasurement {
+    fn new(caller: &str, method: &str, baseline: &CallResult, candidate: &CallResult) -> Self {
+        assert_eq!(
+            baseline.raw_return, candidate.raw_return,
+            "{method}: return bytes or kind changed"
+        );
+        assert_eq!(
+            baseline.raw_logs, candidate.raw_logs,
+            "{method}: raw event logs changed"
+        );
+        assert_eq!(
+            baseline.execution.storage_delta(),
+            candidate.execution.storage_delta(),
+            "{method}: committed storage delta changed"
+        );
+        Self {
+            caller: caller.into(),
+            method: method.into(),
+            rejected: candidate.error.is_some(),
+            baseline: baseline.execution,
+            candidate: candidate.execution,
+        }
+    }
+
+    fn report(&self, index: usize) -> Value {
+        json!({"sequence":index+1,"caller":self.caller,"method":self.method,"rejected":self.rejected,
+            "baseline":self.baseline.report(),"candidate":self.candidate.report(),
+            "delta_candidate_minus_baseline":{"burnt_gas":(self.candidate.burnt_gas as i128-self.baseline.burnt_gas as i128).to_string(),
+                "used_gas":(self.candidate.used_gas as i128-self.baseline.used_gas as i128).to_string(),
+                "committed_storage_bytes":(self.candidate.storage_delta()-self.baseline.storage_delta()).to_string()}})
+    }
+}
+
+fn assert_interface(name: &str, baseline: &[u8], candidate: &[u8], exact_imports: bool) {
+    let (old_imports, old_exports) = interface(baseline);
+    let (new_imports, new_exports) = interface(candidate);
+    assert_eq!(old_exports, new_exports, "{name}: public Wasm ABI changed");
+    if exact_imports {
+        assert_eq!(old_imports, new_imports, "{name}: host imports changed");
+    } else {
+        for (key, signature) in new_imports {
+            assert_eq!(
+                old_imports.get(&key),
+                Some(&signature),
+                "{name}: new or changed host import {key}"
+            );
+        }
+    }
+}
+
+fn comparison_report(
+    baseline: &Instance,
+    candidate: &Instance,
+    calls: &[CallMeasurement],
+) -> Value {
+    let totals = |select: fn(&CallMeasurement) -> Execution| {
+        calls
+            .iter()
+            .map(select)
+            .fold((0u128, 0u128), |(burnt, used), call| {
+                (burnt + call.burnt_gas as u128, used + call.used_gas as u128)
+            })
+    };
+    let (old_burnt, old_used) = totals(|call| call.baseline);
+    let (new_burnt, new_used) = totals(|call| call.candidate);
+    let artifact = |instance: &Instance| {
+        json!({"code_bytes":instance.initial_storage_usage-100,
+        "sha256":instance.code_hash,"initial_storage_bytes":instance.initial_storage_usage,
+        "final_storage_bytes":instance.storage_usage,
+        "committed_state_bytes":(instance.storage_usage as i128-instance.initial_storage_usage as i128).to_string()})
+    };
+    assert_eq!(
+        baseline.storage_usage as i128 - baseline.initial_storage_usage as i128,
+        candidate.storage_usage as i128 - candidate.initial_storage_usage as i128,
+        "Final storage changed after excluding the initial code-size baseline"
+    );
+    json!({"baseline":artifact(baseline),"candidate":artifact(candidate),
+        "execution_totals":{"baseline":{"burnt_gas":old_burnt.to_string(),"used_gas":old_used.to_string()},
+            "candidate":{"burnt_gas":new_burnt.to_string(),"used_gas":new_used.to_string()},
+            "delta_candidate_minus_baseline":{"burnt_gas":(new_burnt as i128-old_burnt as i128).to_string(),
+                "used_gas":(new_used as i128-old_used as i128).to_string()}},
+        "calls":calls.iter().enumerate().map(|(index, call)| call.report(index)).collect::<Vec<_>>()})
 }
 
 impl Instance {
@@ -111,6 +230,10 @@ impl Instance {
         config.vm_kind = VMKind::Wasmtime;
         Self {
             storage_usage: code.len() as u64 + 100,
+            initial_storage_usage: code.len() as u64 + 100,
+            code_hash: format!("{:x}", Sha256::digest(&code)),
+            baseline: None,
+            measurements: Vec::new(),
             now_ms: NOW_MS,
             signer_account_pk: vec![0; 33],
             external: MockedExternal::with_code(ContractCode::new(code, None)),
@@ -119,6 +242,29 @@ impl Instance {
             cache: MockContractRuntimeCache::default(),
             account,
         }
+    }
+
+    fn artifact(name: &str, directory: &Path, baseline: Option<&Path>) -> Self {
+        let read = |directory: &Path| {
+            fs::read(directory.join(format!("razor_{name}.wasm")))
+                .expect("Missing shared Wasm artifact")
+        };
+        let candidate = read(directory);
+        let baseline = baseline.map(|directory| {
+            let code = read(directory);
+            assert_interface(name, &code, &candidate, true);
+            Box::new(Self::new(format!("{name}.near"), code))
+        });
+        let mut instance = Self::new(format!("{name}.near"), candidate);
+        instance.baseline = baseline;
+        instance
+    }
+
+    fn comparison(&self) -> Value {
+        self.baseline
+            .as_ref()
+            .map(|baseline| comparison_report(baseline, self, &self.measurements))
+            .unwrap_or(Value::Null)
     }
 
     fn call(
@@ -140,6 +286,12 @@ impl Instance {
         deposit: u128,
         promises: Vec<Result<Vec<u8>, ()>>,
     ) -> CallResult {
+        let baseline_result = self.baseline.as_mut().map(|baseline| {
+            baseline.now_ms = self.now_ms;
+            baseline.signer_account_pk = self.signer_account_pk.clone();
+            baseline.call_with_results(caller, method, args, deposit, promises.clone())
+        });
+        let storage_before = self.storage_usage;
         let old_storage = self.external.fake_trie.clone();
         let action_start = self.external.action_log.len();
         let context = VMContext {
@@ -180,6 +332,10 @@ impl Instance {
         );
         let result = run(prepared, &mut self.external, &context, self.fees.clone())
             .expect("Runtime failure");
+        let burnt_gas = result.burnt_gas.as_gas();
+        let used_gas = result.used_gas.as_gas();
+        let raw_return = result.return_data.clone();
+        let raw_logs = result.logs.clone();
         let error = result.aborted.map(|value| value.to_string());
         let value = match result.return_data {
             ReturnData::Value(bytes) => {
@@ -203,12 +359,51 @@ impl Instance {
                 None => serde_json::from_str(&value).unwrap_or(Value::String(value)),
             })
             .collect();
-        CallResult {
+        let result = CallResult {
             value,
+            raw_return,
             error,
             actions,
             logs,
+            raw_logs,
+            execution: Execution {
+                burnt_gas,
+                used_gas,
+                storage_before,
+                storage_after: self.storage_usage,
+            },
+        };
+        if let Some(old) = baseline_result {
+            assert_eq!(
+                old.error, result.error,
+                "{}::{method}: error changed",
+                self.account
+            );
+            assert_eq!(
+                old.value, result.value,
+                "{}::{method}: return value changed",
+                self.account
+            );
+            assert_eq!(
+                old.logs, result.logs,
+                "{}::{method}: event changed",
+                self.account
+            );
+            assert_eq!(
+                old.actions, result.actions,
+                "{}::{method}: promise actions changed",
+                self.account
+            );
+            assert_eq!(
+                self.baseline.as_ref().unwrap().external.fake_trie,
+                self.external.fake_trie,
+                "{}::{method}: persisted state changed",
+                self.account
+            );
+            self.measurements
+                .push(CallMeasurement::new(caller, method, &old, &result));
         }
+        result
     }
 }
 
@@ -217,6 +412,8 @@ struct Pair {
     optimized: Instance,
     name: String,
     calls: usize,
+    strict: bool,
+    measurements: Vec<CallMeasurement>,
 }
 
 fn strip_factory_artifact_terms(value: &mut Value) {
@@ -229,26 +426,23 @@ fn strip_factory_artifact_terms(value: &mut Value) {
 
 impl Pair {
     fn new(name: &str, baseline: &Path, optimized: &Path) -> Self {
+        Self::with_mode(name, baseline, optimized, false)
+    }
+
+    fn with_mode(name: &str, baseline: &Path, optimized: &Path, strict: bool) -> Self {
         let read = |directory: &Path| {
             fs::read(directory.join(format!("razor_{name}.wasm"))).expect("Missing Wasm artifact")
         };
         let old_code = read(baseline);
         let new_code = read(optimized);
-        let (old_imports, old_exports) = interface(&old_code);
-        let (new_imports, new_exports) = interface(&new_code);
-        assert_eq!(old_exports, new_exports, "{name}: public Wasm ABI changed");
-        for (key, signature) in new_imports {
-            assert_eq!(
-                old_imports.get(&key),
-                Some(&signature),
-                "{name}: new or changed host import {key}"
-            );
-        }
+        assert_interface(name, &old_code, &new_code, strict);
         Self {
             original: Instance::new(format!("{name}.near"), old_code),
             optimized: Instance::new(format!("{name}.near"), new_code),
             name: name.into(),
             calls: 0,
+            strict,
+            measurements: Vec::new(),
         }
     }
 
@@ -265,6 +459,15 @@ impl Pair {
             .original
             .call(caller, method, &args, deposit, promise.clone());
         let new = self.optimized.call(caller, method, &args, deposit, promise);
+        if self.strict {
+            assert_eq!(
+                old.error, new.error,
+                "{}::{method}: error changed",
+                self.name
+            );
+            self.measurements
+                .push(CallMeasurement::new(caller, method, &old, &new));
+        }
         for result in [&old, &new] {
             match expected_error {
                 Some(expected) => assert!(
@@ -328,7 +531,12 @@ impl Pair {
     }
 
     fn report(&self) -> Value {
-        json!({"contract":self.name,"differential_calls":self.calls})
+        let mut report = json!({"contract":self.name,"differential_calls":self.calls});
+        if self.strict {
+            report["comparison"] =
+                comparison_report(&self.original, &self.optimized, &self.measurements);
+        }
+        report
     }
 }
 
@@ -470,7 +678,10 @@ fn signed_offer(key: &SigningKey, invoice: &str) -> Value {
 }
 
 fn check_billing(baseline: &Path, optimized: &Path) -> Value {
-    let mut pair = Pair::new("billing", baseline, optimized);
+    check_billing_pair(Pair::new("billing", baseline, optimized))
+}
+
+fn check_billing_pair(mut pair: Pair) -> Value {
     let key = SigningKey::from_bytes(&[7; 32]);
     let init = json!({"owner_id":"owner.near","token_contract":TOKEN,"network":"mainnet","issuer_public_key":format!("ed25519:{}",bs58::encode(key.verifying_key().to_bytes()).into_string())});
     pair.ok("owner.near", "new", init.clone(), 0);
@@ -606,11 +817,8 @@ fn actual_call_with_results(
     result.value
 }
 
-fn check_shared_treasury(directory: &Path) -> Value {
-    let mut instance = Instance::new(
-        "treasury.near".into(),
-        fs::read(directory.join("razor_treasury.wasm")).expect("Missing shared treasury artifact"),
-    );
+fn check_shared_treasury(directory: &Path, baseline: Option<&Path>) -> Value {
+    let mut instance = Instance::artifact("treasury", directory, baseline);
     let mut calls = 0;
     let scope = |organization: &str, owner: &str| {
         let suffix = Sha256::digest(owner.as_bytes())
@@ -891,7 +1099,11 @@ fn check_shared_treasury(directory: &Path) -> Value {
     );
     let standing = check_native_standing(&mut instance, &mut calls, &a, &b);
     let distributions = check_claim_distribution(&mut instance, &mut calls, &a);
-    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true,"native_standing":standing,"claim_distribution":distributions})
+    let mut report = json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true,"native_standing":standing,"claim_distribution":distributions});
+    if baseline.is_some() {
+        report["comparison"] = instance.comparison();
+    }
+    report
 }
 
 fn assert_native_transfer_actions(
@@ -1385,11 +1597,8 @@ fn check_claim_distribution(instance: &mut Instance, calls: &mut usize, company:
         "reference":"wasm-claims","total":"200","allocations":[{"claim_id":"fixed-claim","recipient_id":"standing-vendor","recipient_version":"1","amount":"200","destination":"vendor.near"}]}})
 }
 
-fn check_shared_clearing(directory: &Path) -> Value {
-    let mut instance = Instance::new(
-        "clearing.near".into(),
-        fs::read(directory.join("razor_clearing.wasm")).expect("Missing clearing artifact"),
-    );
+fn check_shared_clearing(directory: &Path, baseline: Option<&Path>) -> Value {
+    let mut instance = Instance::artifact("clearing", directory, baseline);
     let mut calls = 0;
     actual_call(
         &mut instance,
@@ -1443,7 +1652,11 @@ fn check_shared_clearing(directory: &Path) -> Value {
         Some("PAUSED"),
         None,
     );
-    json!({"contract":"shared_clearing","actual_wasm_calls":calls})
+    let mut report = json!({"contract":"shared_clearing","actual_wasm_calls":calls});
+    if baseline.is_some() {
+        report["comparison"] = instance.comparison();
+    }
+    report
 }
 
 fn clearing_fixture_manifest(id: &str, cash: bool) -> Value {
@@ -1639,11 +1852,8 @@ fn assert_cash_counters(value: &Value, expected: (u128, u128, u128, u128)) {
     assert_eq!(values.0, values.1 + values.2 + values.3);
 }
 
-fn check_funded_clearing(directory: &Path) -> Value {
-    let mut instance = Instance::new(
-        "clearing.near".into(),
-        fs::read(directory.join("razor_clearing.wasm")).expect("Missing clearing artifact"),
-    );
+fn check_funded_clearing(directory: &Path, baseline: Option<&Path>) -> Value {
+    let mut instance = Instance::artifact("clearing", directory, baseline);
     let mut calls = 0;
     macro_rules! invoke {
         ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr, $promise:expr) => {
@@ -1987,12 +2197,16 @@ fn check_funded_clearing(directory: &Path) -> Value {
     );
     let final_config = read!("get_config", json!({}));
     assert_cash_counters(&final_config, (77, 0, 30, 47));
-    json!({"contract":"funded_clearing","actual_wasm_calls":calls,"fixture_only":true,"live_network":false,
+    let mut report = json!({"contract":"funded_clearing","actual_wasm_calls":calls,"fixture_only":true,"live_network":false,
         "legacy_manifest":{"manifest_json":legacy_wire,"manifest_hash":legacy_hash,"registration_cost":legacy_cost},
         "cash_manifest":{"manifest_json":wire,"manifest_hash":hash,"registration_cost":cash_cost,"onchain_manifest_json":finalized["manifest_json"],"onchain_hash":finalized["hash"]},
         "finalized_credit":finalized["cash"],"excess_deposit":recorded,"accepted_event":accepted_event,"unresolved_refund":held["cash"],"final_config":final_config,
         "checks":{"original_net_validated":true,"all_consent_exact_funding":true,"partial_excess_duplicate":true,"fixed_destination_nonce_and_replay":true,
-        "cancelled_depositor_refund":true,"deadline_blocks_late_credit":true,"unknown_stays_pending":true,"global_counters_conserved":true}})
+        "cancelled_depositor_refund":true,"deadline_blocks_late_credit":true,"unknown_stays_pending":true,"global_counters_conserved":true}});
+    if baseline.is_some() {
+        report["comparison"] = instance.comparison();
+    }
+    report
 }
 
 fn main() {
@@ -2002,23 +2216,45 @@ fn main() {
         "Run with RAYON_NUM_THREADS=1 to bound runtime compilation"
     );
     let mut args = env::args_os().skip(1);
-    let first = args
-        .next()
-        .expect("Pass --shared ARTIFACT_DIRECTORY or BASELINE OPTIMIZED");
-    if first == "--shared" {
-        let directory = PathBuf::from(args.next().expect("Pass shared artifact directory"));
+    let first = args.next().expect(
+        "Pass --shared DIRECTORY, --shared-compare BASELINE OPTIMIZED or BASELINE OPTIMIZED",
+    );
+    if first == "--shared" || first == "--shared-compare" {
+        let compare = first == "--shared-compare";
+        let first_directory = PathBuf::from(args.next().expect("Pass shared artifact directory"));
+        let (directory, baseline) = if compare {
+            (
+                PathBuf::from(
+                    args.next()
+                        .expect("Pass optimized shared artifact directory"),
+                ),
+                Some(first_directory),
+            )
+        } else {
+            (first_directory, None)
+        };
         assert!(
             args.next().is_none(),
-            "Pass only --shared and its artifact directory"
+            "Pass --shared DIRECTORY or --shared-compare BASELINE OPTIMIZED"
         );
-        let treasury = check_shared_treasury(&directory);
-        let clearing = check_shared_clearing(&directory);
-        let funded_clearing = check_funded_clearing(&directory);
-        let billing = check_billing(&directory, &directory);
-        println!(
-            "{}",
-            json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","architecture":"shared_v1","actual_wasm":true,"live_network":false,"results":[treasury,clearing,billing,funded_clearing]})
-        );
+        let treasury = check_shared_treasury(&directory, baseline.as_deref());
+        let clearing = check_shared_clearing(&directory, baseline.as_deref());
+        let funded_clearing = check_funded_clearing(&directory, baseline.as_deref());
+        let billing = if let Some(baseline) = baseline.as_deref() {
+            check_billing_pair(Pair::with_mode("billing", baseline, &directory, true))
+        } else {
+            check_billing(&directory, &directory)
+        };
+        let mut report = json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","architecture":"shared_v1","actual_wasm":true,"live_network":false,"results":[treasury,clearing,billing,funded_clearing]});
+        if compare {
+            report["mode"] = json!("shared_compare");
+            report["checks"] = json!({"exact_imports_and_exports":true,"scenario_results_and_errors":true,
+                "event_logs_and_actions":true,"persisted_state":true,"committed_storage_deltas":true});
+            report["measurement_scope"] = json!(
+                "Local pinned-runtime outcomes only, not measured mainnet gas or a deployment quote. Gas is decimal raw gas units; 1000000000000 gas = 1 Tgas. Burnt gas includes local VM execution and loading; used gas also includes gas reserved for promises, so summed used gas is not a network bill. Failed calls retain zero committed storage delta. Initial mock storage is code bytes plus 100; only that code-size baseline may differ. External callback outcomes are supplied and promise actions are not sent."
+            );
+        }
+        println!("{report}");
         return;
     }
     let baseline = PathBuf::from(first);
