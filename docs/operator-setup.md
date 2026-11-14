@@ -29,6 +29,8 @@ Review the output, fund your operator accounts for code/storage and gas, and run
 
 The current manifest requires `treasuryStateVersion: 3`. Standing authority and claimable distributions add company collections and cannot read populated version-1 or version-2 state as an upgrade. The planner rejects stale manifests and produces fresh-account plans only; it does not inspect targets or implement a funded-state migration. Follow [native standing authority](specs/native-standing-authority.md) before enabling that optional worker.
 
+The current clearing manifest also requires `clearingStateVersion: 2` and a fresh empty clearing account. Optional cash-backed mode is disabled by deployment. Follow `optionalCashClearingSetup` in the unsigned plan: inspect native USDC `storage_balance_of` for the clearing contract, obtain the live `storage_balance_bounds.min` if registration is needed, and explicitly authorize token storage. The separate owner then calls `enable_cash` once with the network and null test token on mainnet, or the explicit configured test token on testnet. Existing debt-discharge clearing needs no cash-mode enablement. Company deposits, round storage, recipient storage and withdrawals remain separate authorized operations. See [cash-backed clearing](specs/funded-business-clearing.md).
+
 Copy the resulting public account IDs and code-hash pins into the matching `.env.local` fields. Mainnet shared treasury initialization must use the canonical native USDC token already defined by the application. Rebuild the app when changing `NEXT_PUBLIC_PRIVY_APP_ID`, because the browser bundle reads it at build time.
 
 ```sh
@@ -100,7 +102,7 @@ The command uses required gateway/model verification, encryption and signed-resp
 
 `review.json` contains plaintext extracted fields and is sensitive. The optional evidence packet contains encrypted wire bytes and public attestation data by default. Use `--packet-mode metadata` to redact wire bytes or omit `--packet` to save no evidence file. Neither packet mode exports decryption keys or authenticates separately supplied plaintext invoice fields. The local `/verify` page reports each claim's limits; exporter metadata and fixture signatures do not establish real hardware attestation.
 
-Open the review JSON in the company's private-processing panel and compare it with the original document. Reading the local file uploads nothing. A finance preparer with document access may explicitly import only the reviewed source hash/type, confirmed payee, reference, description, agreed USDC amount, cost ceiling and optional due date into an ordinary bill draft. The raw document, complete extraction, payment instructions, credentials and evidence packet are excluded. Foreign-currency amounts require a separately agreed USDC obligation; import does not convert them or approve payment. These selected fields are human assertions. Exact retries return the existing bill; conflicting terms or reuse of the source under another reference are rejected.
+Open the review JSON in the company's private-processing panel and compare it with the original document. Reading the local file uploads nothing through the reviewed client, but its full plaintext becomes accessible to the website code in that browser. Use the company CLI without opening its output in the website if all plaintext must remain outside hosted browser code. A finance preparer with document access may explicitly import only the reviewed source hash/type, confirmed payee, reference, description, agreed USDC amount, cost ceiling and optional due date into an ordinary bill draft. The raw document, complete extraction, payment instructions, credentials and evidence packet are excluded. Foreign-currency amounts require a separately agreed USDC obligation; import does not convert them or approve payment. These selected fields are human assertions. Exact retries return the existing bill; conflicting terms or reuse of the source under another reference are rejected.
 
 Original documents, environment files and exported artifacts remain until the company removes them. Razor deletion or expiry cannot revoke downloaded copies; revoke the API key in the company's NEAR AI account when appropriate. The local SDK-fixture checks are not evidence of successful live private inference, real hardware verification or real payment settlement.
 
@@ -133,3 +135,17 @@ Record a source deposit, canonical NEAR USDC credit, primary payout and reconcil
 For worker evidence, prepare and approve an exact route near its execution window. A recurring calendar template creates drafts; it does not grant authority to approve a new route or changed amount/destination. Demonstrate interruption recovery with the same signed transaction and enforce pause, expiry and budget limits.
 
 Update the [build checklist](build-checklist.md) only with the behavior actually observed. Keep local fixtures, testnet results, read-only deployment checks and real mainnet settlements distinct.
+
+## Operate private support intake
+
+The public `/help` page has searchable product guides. Signed-in users record and manage their own private cases there or in the company Help & support section. Company association never shares a case with coworkers. The service verifies optional references at submission and hides their context after access is revoked. Support messages are plain text with no attachments, payment authority or outbound notifications. Recording a case does not promise staffing, priority service or a response time.
+
+Explicitly allowlist actual existing operator user IDs in the server-only `RAZOR_SUPPORT_OPERATOR_USER_IDS` environment setting. The local operator CLI uses OS/database access; no remote operator route is exposed. Keep access to the database and `DATA_ENCRYPTION_KEY` restricted. Start with:
+
+```sh
+node --max-old-space-size=512 --env-file-if-exists=.env.local --import tsx scripts/support-admin.ts --help
+```
+
+Commands are `list`, `inspect`, `reply` and `status`, with an exact `--operator-user`. Inspect prints private case text to that terminal. Replies use a regular bounded UTF-8 `--message-file`; never put credentials or raw customer documents into it. Replies and status changes require a stable `--key` UUID, and status changes require the current `--version`. Removing an operator from the allowlist immediately blocks future operations. These controls cannot send a payment, refund, email or Slack message.
+
+`RAZOR_SUPPORT_RETENTION_DAYS` defaults to 90 and permits 7 through 365. Each case keeps its original expiry even if policy later changes. The ordinary unscoped worker expires at most 1000 cases per tick; company-scoped ticks skip this global housekeeping task. Reads also hide expired text/context immediately. Sender deletion removes active conversation/context and retains minimal idempotency/audit metadata. Apply the same retention policy to operator exports and backups.

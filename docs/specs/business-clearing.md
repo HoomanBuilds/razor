@@ -1,6 +1,6 @@
 # Consented business invoice clearing
 
-Razor can offset accepted company-to-company USDC invoices before paying the remaining liabilities. This optional workflow works alongside ordinary payroll and company payments. Employee wages and personal contractor payments cannot enter clearing.
+Razor supports debt-discharge clearing and optional [cash-backed native-USDC clearing](funded-business-clearing.md). This document describes debt discharge: offset accepted company-to-company USDC invoices before paying the remaining liabilities. This optional workflow works alongside ordinary payroll and company payments. Employee wages and personal contractor payments cannot enter clearing.
 
 For example, company A owes B 100 USDC and B owes A 70 USDC. Both owners may agree to discharge 70 USDC of each invoice. A retains a 30 USDC payment draft. The invoice ledger records 140 USDC of discharged invoice face value, 30 USDC of planned transfers and zero delivered tokens until an ordinary payout settles. Canceling debt does not create treasury cash or profit.
 
@@ -29,7 +29,7 @@ Only then does one database transaction retire the original drafts, record each 
 
 ## Accounting and privacy
 
-`bills.setoff_amount` is cumulative microUSDC debt discharge. Remaining liability is original invoice amount minus actual delivered funds minus this amount. `clearing_setoffs` preserves the round, bill, original and residual payment IDs, manifest hash and final proof block. This record never credits the treasury ledger or counts as delivered tokens, source cost or revenue.
+`bills.setoff_amount` is cumulative microUSDC debt discharge. Remaining liability is original invoice amount minus actual delivered funds, this noncash amount and any separately recorded `bills.funded_clearing_amount` from cash-backed clearing. `clearing_setoffs` preserves the round, bill, original and residual payment IDs, manifest hash and final proof block. This record never credits the treasury ledger or counts as delivered tokens, source cost or revenue.
 
 Invoice terms, recipient history and accounting exports show discharge separately. Exported round totals distinguish discharged invoice face value, planned residual transfer volume, actual residual deliveries and indicative starting liquidity. Round totals must not be summed across participant exports. Starting liquidity is a mathematical lower bound that assumes timely reuse of incoming USDC; destination chains, timing and payout costs may require more funding.
 
@@ -38,7 +38,7 @@ The public NEAR manifest exposes treasury accounts, opaque obligation IDs and US
 ## Deployment and integration
 
 - Build `contracts/razor-clearing` with the existing serialized contract build script. The artifact is `razor_clearing.wasm`; compiled artifacts stay ignored.
-- Deploy and initialize a separate clearing account using `new({ owner_id, treasury_id, token_contract })`. Use the reviewed shared treasury account and its native NEAR USDC token. This contract holds no USDC and transfers no payment funds.
+- Deploy and initialize a separate clearing account using `new({ owner_id, treasury_id, token_contract })`. Use the reviewed shared treasury account and its native NEAR USDC token. Debt-discharge actions move no USDC. Optional cash mode on the same state-version-2 contract requires separate owner enablement and token registration.
 - Configure `NEAR_CLEARING_ID`, `NEAR_CLEARING_CODE_HASH`, `NEAR_TREASURY_ID`, `NEAR_TREASURY_CODE_HASH` and `NEAR_NETWORK`. Code hashes can come from locally built reviewed artifacts where supported by the shared artifact verifier. `NEAR_RPC_URL` must serve the selected network and the historical finalized block needed for reconciliation; use an archival endpoint when old blocks are no longer available.
 - Mount `clearingRoutes` under the authenticated company API at `/clearing`, and mount `BusinessClearing` in the company workspace. Map `CLEARING_LOCKED` and `CLEARED_LIABILITY` database guards to HTTP 409.
 - Registration attaches a non-refundable NEAR storage budget. Consent, finalization and revocation attach one yoctoNEAR and wallet gas. Users review exact arguments and sign in the linked NEAR wallet. No server key signs owner consent.
