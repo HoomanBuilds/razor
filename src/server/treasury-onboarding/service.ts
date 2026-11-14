@@ -85,7 +85,7 @@ async function companyRecord(config: Settings, companyId: string, ownerAccount: 
 export async function getOnboardingConfig(access: AccessContext) {
   requirePermission(access, "company:manage");
   const network = process.env.NEAR_NETWORK || "testnet", verifiedWallets = rows<{ address: string; network: string }>("SELECT address,network FROM linked_wallets WHERE user_id=? AND family='near' AND network=?", access.userId, network);
-  const common = { architecture: "shared_v1", companyId: row<{company_id: string | null}>("SELECT company_id FROM treasury_config WHERE organization_id=?", access.organizationId)?.company_id ?? null, network, verifiedWallets, ownerWalletSetup: { ...ownerWalletProviders(network), needsWallet: !verifiedWallets.length, mode: "external_owner_wallet" } };
+  const common = { architecture: "shared_v1", companyId: row<{company_id: string | null}>("SELECT company_id FROM treasury_config WHERE organization_id=?", access.organizationId)?.company_id ?? null, network, verifiedWallets, ownerWalletSetup: { ...ownerWalletProviders(network), needsWallet: !verifiedWallets.length, mode: "native_near_signer" } };
   try {
     const { config, platform } = await verifiedPlatform();
     return { ...common, ready: !platform.paused, treasuryId: config.treasuryId, factoryId: config.treasuryId, settlementEnabled: network === "mainnet", factory: { ...platform, treasury_wasm_hash: config.treasuryCodeHash, treasury_funding: "0", factory_storage_fee: "0", minimum_deposit: "0" }, reason: platform.paused ? "New company registration is paused. Existing treasury records remain available." : null };
