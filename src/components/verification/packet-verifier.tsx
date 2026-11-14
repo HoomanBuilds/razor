@@ -8,6 +8,7 @@ import { verifyPacket } from "@/lib/verification/verify";
 export function PacketVerifier() {
   const [packet, setPacket] = useState<PortablePacket | null>(null), [trust, setTrust] = useState<VerifierTrust | undefined>(), [claims, setClaims] = useState<VerificationClaim[] | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [rpcUrl, setRpcUrl] = useState(""), [networkEnabled, setNetworkEnabled] = useState(false);
+  const [hardwareEnabled, setHardwareEnabled] = useState(false);
   async function readFile(file: File | undefined, kind: "packet" | "trust") {
     setClaims(null); setError("");
     if (kind === "packet") setPacket(null); else setTrust(undefined);
@@ -23,7 +24,7 @@ export function PacketVerifier() {
   async function verify() {
     if (!packet) return;
     setBusy(true); setClaims(null); setError("");
-    try { setClaims(await verifyPacket(packet, { trust, ...(networkEnabled ? { lookupHistory: historicalNearLookup(rpcUrl) } : {}) })); }
+    try { setClaims(await verifyPacket(packet, { trust, verifyHardware: hardwareEnabled, ...(networkEnabled ? { lookupHistory: historicalNearLookup(rpcUrl) } : {}) })); }
     catch { setError("Verification could not run. Check the packet, trust inputs and RPC URL."); }
     finally { setBusy(false); }
   }
@@ -32,7 +33,8 @@ export function PacketVerifier() {
     <fieldset disabled={busy} className="grid gap-5 rounded-xl border p-5">
       <label className="grid gap-2 text-sm font-medium">Evidence packet (JSON, up to 40 MB)<input type="file" accept="application/json,.json" onChange={event => void readFile(event.target.files?.[0], "packet")} /></label>
       <label className="grid gap-2 text-sm font-medium">Optional independently reviewed trust input (JSON, up to 100 KB)<input type="file" accept="application/json,.json" onChange={event => void readFile(event.target.files?.[0], "trust")} /><span className="font-normal text-xs leading-5 text-muted-foreground">Obtain expected signer, deployment hashes and financial references from a source you trust. An allowlist supplied by the packet author does not establish trust. This input checks expectations; it does not replace Intel/NVIDIA hardware verification.</span></label>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={networkEnabled} onChange={event => { setNetworkEnabled(event.target.checked); setClaims(null); }} /><span>Enable historical NEAR RPC lookups. This sends public contract, payment and transaction references to the RPC you choose. Offline checks make no network requests.</span></label>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={hardwareEnabled} onChange={event => { setHardwareEnabled(event.target.checked); setClaims(null); }} /><span>Revalidate hardware reports with the official NEAR SDK. This permits Intel/NVIDIA collateral and attestation-service requests, including SDK proxy endpoints. Public quote/GPU evidence may leave this device. Current hardware trust does not prove the original execution time or decrypted content.</span></label>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={networkEnabled} onChange={event => { setNetworkEnabled(event.target.checked); setClaims(null); }} /><span>Enable historical NEAR RPC lookups. This sends public contract, payment and transaction references to the RPC you choose. When both network options are off, checks remain offline.</span></label>
       {networkEnabled && <label className="grid gap-2 text-sm font-medium">Archival NEAR RPC URL<input type="url" required className="rounded-md border bg-background p-2 font-normal" placeholder="https://your-archival-near-rpc" value={rpcUrl} onChange={event => { setRpcUrl(event.target.value); setClaims(null); }} /><span className="font-normal text-xs text-muted-foreground">The selected RPC is a trusted observation source. Lookups use the execution block, with no fallback to current state. RPC responses are not light-client proofs.</span></label>}
       <button type="button" disabled={!packet || busy || networkEnabled && !rpcUrl} onClick={() => void verify()} className="justify-self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{busy ? "Checking evidence..." : "Verify locally"}</button>
     </fieldset>

@@ -20,6 +20,7 @@ export interface HistoricalObservation {
 export interface VerificationOptions {
   trust?: VerifierTrust;
   lookupHistory?: (reference: ChainReference) => Promise<HistoricalObservation>;
+  verifyHardware?: boolean;
 }
 
 export async function verifyPacket(input: PortablePacket, options: VerificationOptions = {}): Promise<VerificationClaim[]> {
@@ -63,7 +64,10 @@ export async function verifyPacket(input: PortablePacket, options: VerificationO
     for (const [name, reports, approved] of [["gateway", inference.gatewayReport ? [inference.gatewayReport] : [], trust?.approvedGatewayComposeSha256], ["model", inference.modelReports, trust?.approvedModelComposeSha256]] as const) {
       add(`${name}_reported_deployment`, !approved?.length ? "not_checked" : !reports.length ? "unavailable" : reports.every(report => approved.includes(hashText(report.appCompose))) ? "passed" : "failed", "Only compares raw reported compose hashes with separately reviewed inputs. Hardware measurement binding has not been independently established.");
     }
-    add("hardware_attestation", inference.modelReports.length && inference.gatewayReport ? "not_checked" : "unavailable", "Raw reports are provided where retained. Offline verification does not revalidate Intel/NVIDIA collateral, quote measurement bindings, TLS observation, nonce origin or historical freshness. Packet verification booleans are never trusted.");
+    if (options.verifyHardware) {
+      const { verifyHardware } = await import("./hardware");
+      claims.push(...await verifyHardware(packet, trust));
+    } else add("hardware_attestation", inference.modelReports.length && inference.gatewayReport ? "not_checked" : "unavailable", "Hardware verification is disabled in offline mode. Enable it explicitly to revalidate retained reports with the official NEAR SDK and current Intel/NVIDIA collateral. Historical freshness, plaintext and settlement remain separate claims.");
     add("attestation_freshness_at_execution", "not_checked", "The observed execution time is an exporter assertion. Authenticated historical collateral and time evidence are required; current verification cannot establish freshness at past execution.");
     add("decrypted_plaintext_binding", "not_checked", "No decryption keys or plaintext are included. Signed encrypted wire hashes do not prove a separately supplied invoice, extracted amount, recipient or model conclusion.");
   } else add("inference_evidence", "unavailable", "No signed inference material was retained for this record.");

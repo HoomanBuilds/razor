@@ -42,6 +42,13 @@ export const verifierTrustSchema = z.object({
   expectedSubject: z.object({ kind: z.enum(["invoice_analysis", "finance_proposal", "payment_evidence"]), id: z.string().min(1).max(128) }).strict().optional(),
   expectedModel: z.string().max(256).optional(), expectedSigner: identity.optional(),
   approvedGatewayComposeSha256: z.array(digest).max(100).optional(), approvedModelComposeSha256: z.array(digest).max(100).optional(),
+  hardware: z.object({
+    acceptedTcbStatuses: z.array(z.enum(["UpToDate", "SWHardeningNeeded", "ConfigurationNeeded", "ConfigurationAndSWHardeningNeeded", "OutOfDate", "OutOfDateConfigurationNeeded", "TDRelaunchAdvised", "TDRelaunchAdvisedConfigurationNeeded"])).min(1).max(8).default(["UpToDate"]),
+    requireGpuEvidence: z.boolean().default(true),
+    expectedGatewayNonce: z.string().min(1).max(256).optional(),
+    expectedGatewaySpki: z.string().min(1).max(256).optional(),
+    expectedModelNonces: z.array(z.object({ signer: identity, nonce: z.string().min(1).max(256) }).strict()).max(64).optional(),
+  }).strict().optional(),
   expectedChain: chainReferenceSchema.omit({ blockHash: true, blockHeight: true, transactionHash: true, signerId: true }).optional(),
 }).strict();
 

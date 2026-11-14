@@ -50,7 +50,11 @@ All endpoints require an authenticated organization membership with `documents:m
 
 Expired rows are removed when the assistant is used. The exported `purgeAssistantRetention()` can also run from the server's scheduled worker. Deletion removes database records; backups and SQLite page retention follow the operator's storage policy. No invoice text is written to application logs. SDK response buffers are cleared after each analysis.
 
-Retained evidence includes verified attestation reports, the signed receipt and input/output digests. SDK internal encrypted wire buffers and ephemeral decryption keys are discarded, so this is a verification record rather than a complete independent offline replay bundle.
+Retained evidence includes attestation reports, the signed receipt, input/output digests and the actual encrypted request/response wire bodies when captured. Historical records without those bodies remain incomplete. Ephemeral decryption keys are discarded; encrypted wire verification is not a complete decrypted replay bundle.
+
+The public packet verifier and standalone `scripts/verify-evidence.ts` CLI work offline for byte hashes and completion signatures. Hardware revalidation is an explicit network option (`--hardware` in the CLI). It uses the installed official NEAR AI SDK to revalidate Intel quote/signing-key and deployment measurements, require NVIDIA GPU evidence by default, and bind the completion signature to the authenticated model signer. Network mode can disclose public quote/GPU evidence to collateral and attestation services through SDK endpoints. Nothing is uploaded to the Razor application.
+
+Independently reviewed trust inputs can specify approved compose hashes, accepted TCB statuses, original challenge nonces and an independently observed original gateway TLS SPKI fingerprint. The default accepted TCB is `UpToDate`; stale, revoked or unknown TCB values are never silently accepted. Packet-provided nonces and TLS fingerprints do not establish their own freshness or observation. Current collateral validation does not prove historical freshness at execution, source-build provenance, decrypted invoice content, model correctness or destination settlement. Each claim retains its own passed, failed, unavailable or not-checked result.
 
 The review screen must show extracted currency, warnings and recipient observations. Foreign currency amounts require an explicit USDC-denominated obligation entered by the payer. Invoice payment instructions never replace a receiver-confirmed payout profile.
 
