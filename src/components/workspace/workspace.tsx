@@ -3,6 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
+  ArrowUpRight,
+  ChevronRight,
+  Command,
+  Plus,
+  Search,
   Boxes,
   BookOpen,
   Building2,
@@ -34,6 +39,10 @@ import { InvoiceInbox } from "./invoice-inbox";
 import { useAction, useResource } from "./hooks";
 import { Action, control, Field, Panel } from "./shared";
 import { Overview } from "./overview";
+import { focusWorkspaceForm } from "./page-metrics";
+import { FinanceInsightsPanel } from "./finance-insights";
+import { NetworkLogo } from "@/components/assets/asset-identity";
+import { WorkspaceTabs } from "./workspace-tabs";
 import { Bills, Payroll } from "./business";
 import { BusinessClearing } from "./business-clearing";
 import { Recipients } from "./recipients";
@@ -67,7 +76,7 @@ import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
 const navigation = [
-  { id: "overview", title: "Overview", icon: LayoutDashboard },
+  { id: "overview", title: "Dashboard", icon: LayoutDashboard },
   { id: "payments", title: "Payments", icon: Wallet },
   { id: "payroll", title: "Payroll", icon: CalendarDays },
   { id: "bills", title: "Bills", icon: ReceiptText },
@@ -85,6 +94,34 @@ const navigation = [
   { id: "settings", title: "Company settings", icon: Settings2 },
   { id: "support", title: "Help & support", icon: LifeBuoy },
 ] as const;
+
+
+const navigationGroups = [
+  { title: "Workspace", sections: ["overview", "payments", "treasury", "payroll", "bills", "recipients"] },
+  { title: "Operations", sections: ["expenses", "procurement", "distributions", "clearing", "financing"] },
+  { title: "Insights", sections: ["assistant", "activity", "accounting"] },
+  { title: "Company", sections: ["billing", "settings", "support"] },
+];
+
+const descriptions: Record<Section, string> = {
+  overview: "Your money, payments and next steps. All in one place.",
+  payments: "Prepare, approve and track every company payment.",
+  treasury: "Manage company funds and move money across supported networks.",
+  payroll: "Pay your team, on their terms.",
+  bills: "Keep supplier invoices and payments in sync.",
+  recipients: "One place for your employees, contractors and suppliers.",
+  expenses: "Give every business expense a clear path to reimbursement.",
+  procurement: "Manage purchases, agreements and supplier commitments.",
+  distributions: "Create and manage claimable USDC distributions.",
+  clearing: "Settle what companies owe each other with less movement of funds.",
+  financing: "Manage invoice financing and working capital.",
+  assistant: "Make sense of your finances with private intelligence.",
+  activity: "Follow your company's payment activity and financial records.",
+  accounting: "Keep payment records ready for your books.",
+  billing: "Your plan, usage and subscription payments.",
+  settings: "Manage company preferences, access and recovery.",
+  support: "Find answers and get help with your workspace.",
+};
 
 export function WorkspaceApp() {
   return (
@@ -107,6 +144,9 @@ function Workspace() {
   const [revision, setRevision] = useState(0);
   const [sidebar, setSidebar] = useState(false);
   const [notice, setNotice] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const searchDialog = useRef<HTMLDialogElement>(null);
   const [creating, setCreating] = useState(false);
   const [switching, setSwitching] = useState(false);
   const switchingLock = useRef(false);
@@ -138,11 +178,56 @@ function Workspace() {
     window.history.replaceState(null, "", workspacePath(organization.id, visibleSection, params.get("payment") ?? undefined, params.get("invoice") ?? undefined));
   }, [organization?.id, visibleSection]);
   useEffect(() => {
-    if (!sidebar) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setSidebar(false); };
+    if (!sidebar || !scope) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const mobile = window.matchMedia("(max-width: 1023px)").matches;
+    const navigation = document.getElementById("company-navigation");
+    if (!navigation) return;
+    const previousOverflow = document.body.style.overflow;
+    const focusable = () => Array.from(navigation?.querySelectorAll<HTMLElement>('a[href],button:not(:disabled),select:not(:disabled),input:not(:disabled),[tabindex="0"]') ?? []);
+    if (mobile) {
+      document.body.style.overflow = "hidden";
+      focusable()[0]?.focus();
+    }
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setSidebar(false); return; }
+      if (!mobile || event.key !== "Tab") return;
+      const items = focusable(), first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
     window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [sidebar]);
+    return () => {
+      window.removeEventListener("keydown", close);
+      if (mobile) {
+        document.body.style.overflow = previousOverflow;
+        if (previous?.isConnected) previous.focus();
+      }
+    };
+  }, [sidebar, scope]);
+  useEffect(() => {
+    const search = (event: KeyboardEvent) => {
+      if (!document.getElementById("company-navigation")) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(value => !value);
+      }
+    };
+    window.addEventListener("keydown", search);
+    return () => window.removeEventListener("keydown", search);
+  }, []);
+  useEffect(() => {
+    const dialog = searchDialog.current;
+    if (!scope) {
+      dialog?.close();
+      setSearchOpen(false);
+      setSidebar(false);
+      return;
+    }
+    if (!dialog) return;
+    if (searchOpen && !dialog.open) dialog.showModal();
+    else if (!searchOpen && dialog.open) dialog.close();
+  }, [searchOpen, scope]);
   if (loading)
     return (
       <main className="grid min-h-screen place-items-center">
@@ -203,38 +288,25 @@ function Workspace() {
     setSidebar(false);
     window.history.pushState(null, "", workspacePath(organization.id, next, paymentId));
   };
+  const currentTitle = visibleSection === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : navigation.find(item => item.id === visibleSection)?.title;
+  const allowedNavigation = navigation.filter(item => canOpenSection(item.id, organization.permissions));
+  const matches = allowedNavigation.filter(item => `${item.title} ${descriptions[item.id]}`.toLowerCase().includes(searchTerm.toLowerCase().trim()));
+  const userName = session.user.name || session.user.email || "Your account";
   return (
-    <div className="min-h-screen">
-      <aside
-        id="company-navigation"
-        className={`${sidebar ? "flex" : "hidden"} fixed inset-y-0 left-0 z-40 w-64 flex-col overflow-y-auto border-r bg-card p-5 lg:flex`}
-      >
-        <div className="flex items-center justify-between">
-          <a
-            href="/"
-            className="text-2xl font-black tracking-tight text-primary"
-          >
-            Razor
-            <span className="ml-1 inline-block size-2 rounded-full bg-primary" />
+    <div className="workspace-surface min-h-screen">
+      <aside id="company-navigation" aria-label="Company navigation" className={`${sidebar ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
+        <div className={`flex h-14 shrink-0 items-center ${sidebar ? "justify-between px-2" : "justify-center"}`}>
+          <a href="/" aria-label="Razor home" className="flex items-center gap-3 font-semibold tracking-tight">
+            <span className="grid size-10 place-items-center rounded-xl bg-primary text-xl font-semibold text-white">R</span>
+            <span className={`${sidebar ? "" : "lg:hidden"} text-2xl`}>Razor</span>
           </a>
-          <button
-            onClick={() => setSidebar(false)}
-            aria-label="Close navigation"
-            className="lg:hidden"
-          >
-            <X size={20} />
-          </button>
+          {sidebar && <button onClick={() => setSidebar(false)} aria-label="Collapse navigation" className="rounded-full p-2 text-muted-foreground hover:bg-muted"><X size={17}/></button>}
         </div>
-        <div className="mt-8">
-          <label
-            htmlFor="company"
-            className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-          >
-            Company workspace
-          </label>
+        <div className={`${sidebar ? "" : "lg:hidden"} mt-4 rounded-2xl bg-muted p-3`}>
+          <label htmlFor="company" className="text-[11px] font-medium text-muted-foreground">Company workspace</label>
           <select
             id="company"
-            className={`${control} mt-2 font-medium`}
+            className={`${control} mt-2 text-xs font-medium`}
             value={organization.id}
             disabled={switching}
             onChange={async (event) => {
@@ -264,130 +336,57 @@ function Workspace() {
               </option>
             ))}
           </select>
-          <p className="mt-2 text-xs capitalize text-muted-foreground">
-            {organization.role}
-          </p>
-          <a href="/receive" className="mt-3 block text-xs text-primary">
-            My personal payments
-          </a>
-          <button
-            className="mt-3 text-xs text-primary"
-            onClick={() => setCreating(true)}
-          >
-            + Create another company
-          </button>
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs"><span className="capitalize text-muted-foreground">{organization.role}</span><button onClick={() => setCreating(true)} className="flex items-center gap-1 text-primary"><Plus size={12}/> Create company</button></div>
         </div>
-        <nav className="mt-7 grid gap-1">
-          {navigation.filter(item => canOpenSection(item.id, organization.permissions)).map((item) => (
-            <button
-              key={item.id}
-              onClick={() => navigate(item.id)}
-              aria-current={visibleSection === item.id ? "page" : undefined}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${visibleSection === item.id ? "bg-secondary font-semibold text-primary" : "text-muted-foreground hover:bg-muted"}`}
-            >
-              <item.icon size={18} />
-              {item.id === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : item.title}
-            </button>
-          ))}
+        {!sidebar && <button type="button" className="mt-4 hidden size-11 shrink-0 self-center place-items-center rounded-xl bg-muted text-sm font-medium lg:grid" title={`${organization.name}: switch company`} aria-label={`Switch company from ${organization.name}`} onClick={() => setSidebar(true)}>{organization.name.slice(0,2).toUpperCase()}</button>}
+        <nav aria-label="Workspace sections" className="mt-5 min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]">
+          {navigationGroups.map(group => {
+            const items = allowedNavigation.filter(item => group.sections.includes(item.id));
+            if (!items.length) return null;
+            return <div key={group.title}>
+              <p className={`${sidebar ? "" : "lg:sr-only"} mb-2 px-3 text-[10px] font-medium uppercase tracking-[.12em] text-muted-foreground`}>{group.title}</p>
+              <div className="grid gap-1">{items.map(item => <button type="button" key={item.id} title={item.title} onClick={() => navigate(item.id)} aria-current={visibleSection === item.id ? "page" : undefined} aria-label={item.title} className={`group flex min-h-10 items-center rounded-xl text-left text-[13px] transition-colors ${sidebar ? "gap-3 px-3" : "justify-center lg:mx-auto lg:size-11 lg:w-11"} ${visibleSection === item.id ? "bg-secondary font-medium text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
+                <item.icon size={19} strokeWidth={visibleSection === item.id ? 2 : 1.7} className="shrink-0" aria-hidden="true"/>
+                <span className={sidebar ? "" : "lg:sr-only"}>{item.id === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : item.title}</span>
+              </button>)}</div>
+            </div>;
+          })}
         </nav>
-        <div className="mt-auto space-y-4 pt-8">
-          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
-            <ShieldCheck className="mb-2 text-primary" size={18} />
-            NEAR company authority
-            <br />
-            <span className="mt-1 block">
-              NEAR Intents cross-chain settlement
-            </span>
-          </div>
-          <a href="/account" className="mb-3 block px-2 text-xs text-primary">Account and recovery</a>
-          <button
-            className="flex w-full items-center gap-2 px-2 text-xs text-muted-foreground"
-            onClick={() =>
-              void signOut().catch((cause) => setNotice(errorMessage(cause)))
-            }
-          >
-            <LogOut size={15} />
-            Sign out
-          </button>
+        <div className={`shrink-0 space-y-2 border-t border-border/60 pt-3 ${sidebar ? "px-2" : "flex flex-col items-center"}`}>
+          <a href="/receive" title="My personal payments" aria-label="My personal payments" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "px-2" : "size-10 justify-center"}`}><Wallet size={18}/><span className={sidebar ? "" : "lg:sr-only"}>My personal payments</span></a>
+          <a href="/account" title="Account and recovery" aria-label="Account and recovery" className={`flex items-center gap-3 rounded-xl text-xs ${sidebar ? "p-2" : "justify-center"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm font-medium text-white">{userName[0].toUpperCase()}</span><span className={sidebar ? "min-w-0 truncate" : "lg:sr-only"}>{userName}</span></a>
+          <button title="Sign out" aria-label="Sign out" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "w-full px-2" : "size-10 justify-center"}`} onClick={() => void signOut().catch(cause => setNotice(errorMessage(cause)))}><LogOut size={17}/><span className={sidebar ? "" : "lg:sr-only"}>Sign out</span></button>
         </div>
       </aside>
-      {sidebar && (
-        <button
-          className="fixed inset-0 z-30 bg-black/20 lg:hidden"
-          aria-label="Close navigation overlay"
-          onClick={() => setSidebar(false)}
-        />
-      )}
-      <div className="min-w-0 lg:ml-64">
-        <header className="flex h-20 items-center justify-between gap-4 border-b bg-card px-5 sm:px-8">
-          <div className="flex items-center gap-4">
-            <button
-              className="lg:hidden"
-              aria-label="Open navigation"
-              aria-expanded={sidebar}
-              aria-controls="company-navigation"
-              onClick={() => setSidebar(true)}
-            >
-              <Menu size={22} />
-            </button>
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                {visibleSection === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : navigation.find((item) => item.id === visibleSection)?.title}
-              </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {organization.name}
-              </p>
-            </div>
+      {sidebar && <button className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] lg:hidden" aria-label="Close navigation overlay" onClick={() => setSidebar(false)}/>}
+      <div className={`min-w-0 ${sidebar ? "lg:ml-64" : "lg:ml-[84px]"}`}>
+        <header className="flex min-h-18 items-center justify-between gap-3 px-5 sm:px-8 lg:px-10">
+          <div className="flex min-w-0 items-center gap-3">
+            <button className="rounded-full p-2 text-muted-foreground hover:bg-muted" aria-label={sidebar ? "Collapse navigation" : "Expand navigation"} aria-expanded={sidebar} aria-controls="company-navigation" onClick={() => setSidebar(value => !value)}><Menu size={19}/></button>
+            <button type="button" onClick={() => setSidebar(true)} className="max-w-48 truncate text-sm font-medium" title="Switch company">{organization.name}</button>
+            <ChevronRight size={13} className="hidden shrink-0 text-muted-foreground sm:block"/>
+            <span className="hidden truncate text-sm text-muted-foreground sm:block">{currentTitle}</span>
           </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => void refreshIdentity().then(() => setRevision(value => value + 1)).catch(cause => setNotice(errorMessage(cause)))}
-              aria-label="Refresh workspace"
-              className="rounded-md p-2 text-muted-foreground hover:bg-muted"
-            >
-              <RefreshCw size={17} />
-            </button>
-            <div className="hidden text-right text-xs sm:block">
-              <p className="font-medium">
-                {session.user.name || session.user.email || "Your account"}
-              </p>
-              <p className="mt-1 text-muted-foreground">Company payments</p>
-            </div>
-            <div className="grid size-9 place-items-center rounded-full bg-secondary text-sm font-semibold text-primary">
-              {(session.user.name ||
-                session.user.email ||
-                "R")[0].toUpperCase()}
-            </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => { setSearchTerm(""); setSearchOpen(true); }} aria-label="Search workspace pages" className="flex h-10 items-center gap-3 rounded-full bg-muted px-3 text-sm text-muted-foreground hover:bg-secondary"><Search size={17}/><span className="hidden md:block">Find a page</span><kbd className="hidden items-center gap-0.5 rounded border border-border bg-white px-1.5 py-0.5 text-[10px] md:flex"><Command size={10}/>K</kbd></button>
+            <button onClick={() => void refreshIdentity().then(() => setRevision(value => value + 1)).catch(cause => setNotice(errorMessage(cause)))} aria-label="Refresh workspace" title="Refresh workspace" className="grid size-10 place-items-center rounded-full bg-muted text-muted-foreground hover:bg-secondary"><RefreshCw size={16}/></button>
+            <a href="/account" aria-label="Open account settings" className="ml-1 grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{userName[0].toUpperCase()}</a>
           </div>
         </header>
-        <main className="mx-auto max-w-screen-2xl p-5 sm:p-8">
-          {notice && (
-            <div
-              role="status"
-              className="mb-5 flex items-center justify-between gap-3 rounded-lg border bg-card p-4 text-sm"
-            >
-              {notice}
-              <button onClick={() => setNotice("")} aria-label="Dismiss notice">
-                <X size={16} />
-              </button>
-            </div>
-          )}
-          <CompanyWorkspace
-            key={scope}
-            session={session}
-            organization={organization}
-            section={visibleSection}
-            revision={revision}
-            refresh={() => { if (activeScope.current === scope) setRevision(value => value + 1); }}
-            navigate={navigate}
-            notify={message => { if (activeScope.current === scope) setNotice(message); }}
-          />
+        <main className="mx-auto max-w-[1536px] px-5 pb-8 pt-5 sm:px-8 sm:pt-8 lg:px-10">
+          <div className="mb-8 flex flex-wrap items-start justify-between gap-4 lg:mb-10">
+            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div><p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p></div>
+            {visibleSection === "overview" && organization.permissions.includes("payments:prepare") && organization.permissions.includes("recipients:read") && <button className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-white transition-colors hover:bg-primary/90" onClick={() => { navigate("payments"); focusWorkspaceForm("payment-compose"); }}><Plus size={17}/>New payment</button>}
+          </div>
+          {notice && <div role="status" className="mb-6 flex items-center justify-between gap-3 rounded-2xl border bg-muted p-4 text-sm">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss notice" className="rounded-full p-1 hover:bg-white"><X size={16}/></button></div>}
+          <div className="workspace-content"><CompanyWorkspace key={scope} session={session} organization={organization} section={visibleSection} revision={revision} refresh={() => { if (activeScope.current === scope) setRevision(value => value + 1); }} navigate={navigate} notify={message => { if (activeScope.current === scope) setNotice(message); }}/></div>
         </main>
-        <footer className="px-8 pb-6 text-xs text-muted-foreground">
-          Status reflects confirmed evidence. Review held transfers before
-          trying another payout.
-        </footer>
+        <footer className="mx-auto flex max-w-[1536px] flex-wrap items-center justify-between gap-3 px-5 pb-6 text-[11px] leading-5 text-muted-foreground sm:px-8 lg:px-10"><span className="inline-flex items-center gap-1.5"><ShieldCheck size={13}/>Company authority on NEAR. Cross-chain settlement through NEAR Intents.</span><span>Payment status follows confirmed evidence.</span></footer>
       </div>
+      <dialog ref={searchDialog} aria-labelledby="workspace-search-title" onCancel={() => setSearchOpen(false)} onClose={() => setSearchOpen(false)} onClick={event => { if (event.target === event.currentTarget) setSearchOpen(false); }} className="fixed inset-x-0 top-[16vh] m-auto max-h-[65vh] w-[calc(100%_-_2rem)] max-w-lg overflow-hidden rounded-3xl border border-border bg-white p-0 shadow-xl backdrop:bg-black/20 backdrop:backdrop-blur-sm">
+        <div className="flex items-center gap-3 border-b px-5 py-4"><Search size={19} className="shrink-0 text-muted-foreground"/><label id="workspace-search-title" htmlFor="workspace-page-search" className="sr-only">Find a workspace page</label><input id="workspace-page-search" autoFocus value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="Where would you like to go?" className="min-w-0 flex-1 bg-transparent py-1 text-sm outline-none"/><button aria-label="Close page search" onClick={() => setSearchOpen(false)} className="rounded-full p-1 text-muted-foreground hover:bg-muted"><X size={17}/></button></div>
+        <div className="max-h-[48vh] overflow-y-auto p-2">{matches.length ? matches.map(item => <button key={item.id} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-muted" onClick={() => { navigate(item.id); setSearchOpen(false); }}><item.icon size={18} className="shrink-0 text-primary"/><span className="min-w-0 flex-1"><span className="block text-sm font-medium">{item.title}</span><span className="mt-0.5 block text-xs text-muted-foreground">{descriptions[item.id]}</span></span><ArrowUpRight size={15} className="shrink-0 text-muted-foreground"/></button>) : <p className="px-4 py-8 text-center text-sm text-muted-foreground">No matching pages. Try payments, payroll or treasury.</p>}</div>
+      </dialog>
     </div>
   );
 }
@@ -413,7 +412,7 @@ function CompanyWorkspace({
   const [invoiceReview, setInvoiceReview] = useState<InvoiceReview | null>(
     null,
   );
-  const { data, error } = useResource<{ recipients: Recipient[] }>(
+  const { data, error, loading: recipientsLoading } = useResource<{ recipients: Recipient[] }>(
     organization.permissions?.includes("recipients:read") ? `${base}/recipients` : null,
     revision,
   );
@@ -425,6 +424,8 @@ function CompanyWorkspace({
         organization,
         base,
         recipients: data?.recipients ?? [],
+        recipientsLoading,
+        recipientsError: error,
         revision,
         billing: billing.data,
         billingError: billing.error,
@@ -447,11 +448,11 @@ function CompanyWorkspace({
       {section === "overview" ? (
         <Overview />
       ) : section === "payments" ? (
-        <div className="grid gap-6">
-          <Payments />
-          <PaymentManagementPanel mode="payments" />
-          <OperationsPanel />
-        </div>
+        <WorkspaceTabs key={section} tabs={[
+          { label: "Payment queue", content: <Payments /> },
+          { label: "Payment tools", content: <PaymentManagementPanel mode="payments" /> },
+          { label: "Operations", content: <OperationsPanel /> },
+        ]} />
       ) : section === "payroll" ? (
         <Payroll />
       ) : section === "expenses" ? (
@@ -459,40 +460,51 @@ function CompanyWorkspace({
       ) : section === "distributions" ? (
         <DistributionsPanel />
       ) : section === "accounting" ? (
-        <div className="grid gap-6"><AccountingPanel /><NetSuitePanel /></div>
+        <WorkspaceTabs key={section} tabs={[{ label: "Accounting", content: <AccountingPanel /> }, { label: "NetSuite", content: <NetSuitePanel /> }]} />
       ) : section === "support" ? (
         <SupportPanel />
       ) : section === "procurement" ? (
-        <div className="grid gap-6"><ProcurementPanel /><CompanyPrivateAgreements /><VendorCommitments /></div>
+        <WorkspaceTabs key={section} tabs={[{ label: "Purchases", content: <ProcurementPanel /> }, { label: "Private agreements", content: <CompanyPrivateAgreements /> }, { label: "Commitments", content: <VendorCommitments /> }]} />
       ) : section === "bills" ? (
-        <div className="grid gap-6">
-          <InvoiceInbox />
-          <Bills />
-        </div>
+        <WorkspaceTabs key={section} tabs={[{ label: "Bills", content: <Bills /> }, { label: "Invoice inbox", content: <InvoiceInbox /> }]} />
       ) : section === "clearing" ? (
         <BusinessClearing />
       ) : section === "recipients" ? (
         <Recipients />
       ) : section === "treasury" ? (
-        <div className="grid gap-6">
-          <Treasury />
-          <RetainedAssetsPanel />
-          <FundingRefundsPanel />
-          <ClientReservesPanel />
-          <FundingRequestsPanel />
-        </div>
+        <WorkspaceTabs key={section} tabs={[
+          { label: "Funds", content: <Treasury /> },
+          { label: "Retained assets", content: <RetainedAssetsPanel /> },
+          { label: "Refunds", content: <FundingRefundsPanel /> },
+          { label: "Client reserves", content: <ClientReservesPanel /> },
+          { label: "Funding requests", content: <FundingRequestsPanel /> },
+        ]} />
       ) : section === "financing" ? (
         <WorkingCapitalPanel />
       ) : section === "assistant" ? (
-        <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
+        organization.permissions.includes("documents:manage") ? <WorkspaceTabs key={section} tabs={[
+          { label: "Invoice analysis", content: <Assistant /> },
+          { label: "Finance insights", content: <FinanceInsightsPanel /> },
+          { label: "Private processing", content: <CompanyPrivateProcessing /> },
+        ]} /> : <Assistant />
       ) : section === "activity" ? (
-        <div className="grid gap-6"><CompanyInsightsPanel /><WorkflowFeedbackSummary /><ActivityLog /><ProjectReportsPanel /><EvidenceSharesPanel /></div>
+        <WorkspaceTabs key={section} tabs={[{ label: "Financial insights", content: <CompanyInsightsPanel /> }, { label: "Activity log", content: <ActivityLog /> }, { label: "Project reports", content: <ProjectReportsPanel /> }, { label: "Evidence sharing", content: <EvidenceSharesPanel /> }, { label: "Workflow feedback", content: <WorkflowFeedbackSummary /> }]} />
       ) : section === "billing" ? (
         <Billing />
       ) : (
-        <div className="grid gap-6"><CompanySettings /><TreasuryRecoveryPanel /><NotificationInbox /></div>
+        <WorkspaceTabs key={section} tabs={[
+          { label: "Profile", content: <CompanySettings /> },
+          { label: "Wallets", content: <CompanySettings view="wallets" /> },
+          ...(organization.permissions?.includes("company:manage") ? [
+            { label: "Policies", content: <CompanySettings view="policies" /> },
+            { label: "Team access", content: <CompanySettings view="team" /> },
+            { label: "Integrations", content: <CompanySettings view="integrations" /> },
+          ] : []),
+          { label: "Treasury recovery", content: <TreasuryRecoveryPanel /> },
+          { label: "Notifications", content: <NotificationInbox /> },
+        ]} />
       )}
-      <div className="mt-6"><WorkflowFeedback /></div>
+      <div className="mt-8"><WorkflowFeedback /></div>
     </WorkspaceContext.Provider>
   );
 }

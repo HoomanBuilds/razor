@@ -1,24 +1,32 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/geist-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
-  --background: #f6f7f9;
-  --foreground: #14201e;
+  --background: #ffffff;
+  --foreground: #12141c;
   --card: #ffffff;
-  --card-foreground: #14201e;
-  --primary: #125c4b;
+  --card-foreground: #12141c;
+  --primary: #1749ff;
   --primary-foreground: #ffffff;
-  --secondary: #e9efec;
-  --secondary-foreground: #163f32;
-  --muted: #eff2f1;
-  --muted-foreground: #64726e;
-  --border: #dce4e1;
-  --input: #dce4e1;
-  --ring: #338a70;
+  --secondary: #eef1ff;
+  --secondary-foreground: #1740ce;
+  --muted: #f5f5f7;
+  --muted-foreground: #676974;
+  --border: #e8e8ed;
+  --input: #dedee6;
+  --ring: #1749ff;
   --destructive: #b83e3e;
-  --accent: #e6f1ec;
-  --accent-foreground: #125c4b;
+  --accent: #eef1ff;
+  --accent-foreground: #1740ce;
   --popover: #ffffff;
-  --popover-foreground: #14201e;
+  --popover-foreground: #12141c;
   --radius: 0.75rem;
 }
 
@@ -45,7 +53,43 @@
 
 * { box-sizing: border-box; }
 *, ::before, ::after { border-color: var(--border); }
-body { margin: 0; background: var(--background); color: var(--foreground); font-family: Arial, Helvetica, sans-serif; }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: "Geist", Arial, Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 a { color: inherit; }
+
+button, a, input, select, textarea, summary { -webkit-tap-highlight-color: transparent; }
+button, a, summary { touch-action: manipulation; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+::selection { background: #dfe6ff; }
+.workspace-surface { background: #fff; }
+.workspace-content { animation: workspace-enter 160ms ease-out; }
+.workspace-content [role="alert"] { overflow-wrap: anywhere; }
+.workspace-content details > summary { list-style: none; }
+.workspace-content details > summary::-webkit-details-marker { display: none; }
+.workspace-content details > summary::after { content: "+"; margin-left: .75rem; color: var(--muted-foreground); }
+.workspace-content details[open] > summary::after { content: "-"; }
+.workspace-panel { background: #f7f7f9; border: 1px solid #ededf1; border-radius: 1.25rem; }
+.workspace-panel > .workspace-panel-body > form { padding: 1.25rem; border: 1px solid var(--border); border-radius: .875rem; background: white; }
+.workspace-panel .workspace-panel { background: white; }
+.workspace-table { border-collapse: separate; border-spacing: 0; }
+.workspace-table thead th { background: #f0f0f3; border-bottom: 1px solid var(--border); }
+.workspace-table thead th:first-child { border-radius: .625rem 0 0 .625rem; }
+.workspace-table thead th:last-child { border-radius: 0 .625rem .625rem 0; }
+.workspace-table tbody tr { transition: background 120ms ease; }
+.workspace-table tbody tr:hover { background: #fff; }
+.workspace-table td { border-bottom: 1px solid var(--border); }
+.workspace-table tbody tr:last-child td { border-bottom: 0; }
+.workspace-table td.tabular-nums, .workspace-table td:has(> .tabular-nums), .workspace-table th[data-numeric="true"] { text-align: right; }
+.workspace-nav-group summary::-webkit-details-marker { display: none; }
+.workspace-nav-group summary { list-style: none; }
+.workspace-nav-group[open] .workspace-nav-chevron { transform: rotate(90deg); }
+@keyframes workspace-enter { from { opacity: .55; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }
+@media (max-width: 640px) { .workspace-panel { border-radius: 1rem; } .workspace-panel > .workspace-panel-body > form { padding: 1rem; } }
+
+.workspace-panel-white { background: #fff; border-color: var(--border); }
+.workspace-panel-brand { background: #f3f5ff; border-color: #e5eaff; }
+.workspace-content details.group\/panel > summary::after { display: none; }
+.workspace-panel-brand > div:first-child h2 { color: #1739ae; }

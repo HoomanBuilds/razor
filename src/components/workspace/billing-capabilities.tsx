@@ -69,7 +69,7 @@ export function OptionalCapabilityUsage({
 }) {
   if (!value)
     return (
-      <Panel title="Optional feature capacities">
+      <Panel collapsible title="Optional feature capacities">
         <p className="text-sm text-muted-foreground">
           Refresh the plan to read its versioned creation policy. Existing
           payments and recovery remain available.
@@ -79,8 +79,8 @@ export function OptionalCapabilityUsage({
   const { policy } = value;
   return (
     <Panel
-      title="Optional feature capacities"
-      description="Creation allowances are fixed to your current plan version and usage period. Using an allowance never creates a charge or automatic upgrade."
+      collapsible title="Optional feature capacities"
+      description="Your plan's optional resource allowances." help="Creation allowances are fixed to your current plan version and usage period. Using an allowance never creates a charge or automatic upgrade."
     >
       <div className="grid min-w-0 grid-cols-1 gap-4">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">

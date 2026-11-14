@@ -90,7 +90,7 @@ export function AccountingPanel() {
   return (
     <Panel
       title="Accounting connections"
-      description="Connect your own QuickBooks or Xero company, review mappings and approve exact bookkeeping requests. These APIs record accounting entries and do not move bank or crypto funds."
+      tone="white" description="Connect QuickBooks or Xero. Bookkeeping entries only; no funds move." help="Connect your own QuickBooks or Xero company, review mappings and approve exact bookkeeping requests. These APIs record accounting entries and do not move bank or crypto funds."
     >
       <div className="grid min-w-0 grid-cols-1 gap-6">
         <p className="text-xs leading-5 text-muted-foreground">
@@ -99,11 +99,11 @@ export function AccountingPanel() {
           Exported bill titles and chosen payee contacts are disclosed to your
           accounting provider only after posting review.
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           {data?.providers.map((provider) => (
             <div
               key={provider.provider}
-              className="grid min-w-0 gap-2 rounded-lg border p-3 text-sm"
+              className="grid min-w-0 content-start gap-3 rounded-2xl border border-border bg-muted/50 p-5 text-sm"
             >
               <strong>
                 {provider.provider === "quickbooks"
@@ -161,7 +161,7 @@ export function AccountingPanel() {
           </Field>
         )}
         {connection && (
-          <div className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">
+          <div className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-border bg-white p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm font-medium">
                 {connection.entity_name ?? "Company selection"}{" "}
@@ -273,7 +273,7 @@ export function AccountingPanel() {
                   </Action>
                 </form>
                 {canApprove && catalog.data?.items.length ? (
-                  <details className="min-w-0 rounded-lg border p-3">
+                  <details className="min-w-0 rounded-xl border border-border bg-white p-4">
                     <summary className="cursor-pointer text-sm font-medium">
                       Review account, contact and FX mappings
                     </summary>
@@ -552,7 +552,7 @@ export function AccountingPanel() {
                 )}
                 {mapping && (
                   <form
-                    className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border p-3 sm:grid-cols-2"
+                    className="grid min-w-0 grid-cols-1 gap-3 rounded-xl border border-border bg-white p-4 sm:grid-cols-2"
                     onSubmit={(event) => {
                       event.preventDefault();
                       const values = new FormData(event.currentTarget);
@@ -704,7 +704,7 @@ export function AccountingPanel() {
             data.jobs.map((job) => (
               <article
                 key={job.id}
-                className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border p-4"
+                className="grid min-w-0 grid-cols-1 gap-3 rounded-2xl border border-border bg-white p-5"
               >
                 <div className="flex flex-wrap justify-between gap-3">
                   <p className="text-sm font-medium">
