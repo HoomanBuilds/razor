@@ -34,7 +34,7 @@ function frozen(f: ReturnType<typeof fixture>, id: string) { return JSON.parse(d
 function chainFor(plan: FrozenPlan): ChainDistribution { return { id: plan.id, reference: plan.reference, network: plan.network, token_contract: plan.token, deadline_ms: plan.deadlineMs, total: plan.total,
   unclaimed: plan.total, pending: "0", paid: "0", reclaimed: "0", policy_version: plan.policyVersion, terms_hash: distributionTermsHash(plan), required_approvals: plan.requiredApprovals, approvals: [plan.owner], status: "active",
   claims: plan.allocations.map(({ destination, ...allocation }) => ({ allocation, destination, status: "ready", nonce: "0", sent_day: "0" })) }; }
-interface Remote { chain?: ChainDistribution | null; voided?: boolean; registered?: boolean; version?: string; recipientChanged?: boolean; missing?: boolean; afterRecipients?: () => void }
+interface Remote { chain?: ChainDistribution | null; voided?: boolean; registered?: boolean; version?: string; recipientChanged?: boolean; missing?: boolean; afterRecipients?: () => void; beforeReply?: (method: string | undefined) => Promise<void> }
 async function rpc<T>(f: ReturnType<typeof fixture>, remote: Remote, action: () => Promise<T>) {
   const original = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
@@ -52,7 +52,9 @@ async function rpc<T>(f: ReturnType<typeof fixture>, remote: Remote, action: () 
     if (method === "get_balance") value = { balance: (100000000n - BigInt(remote.chain?.paid ?? "0") - BigInt(remote.chain?.pending ?? "0")).toString(), reserved: remote.chain?.unclaimed ?? "0", available: "0", in_flight: remote.chain?.pending ?? "0", confirmed_at_ms: String(Date.now()) };
     if (method === "storage_balance_of") value = remote.registered === false ? null : { total: "1250000000000000000000" };
     if (method === "storage_balance_bounds") value = { min: "1250000000000000000000" };
-    return Response.json({ result: { result: [...Buffer.from(JSON.stringify(value))] } });
+    const result = [...Buffer.from(JSON.stringify(value))];
+    await remote.beforeReply?.(method);
+    return Response.json({ result: { result } });
   };
   try { return await action(); } finally { globalThis.fetch = original; }
 }
@@ -252,5 +254,95 @@ test("rejected wallet dialogs can explicitly retry only the same ready claim and
     remote.chain.claims[0].status = "paid"; remote.chain.status = "complete"; remote.chain.pending = "0"; remote.chain.paid = remote.chain.total;
     await assert.rejects(() => prepareOwnClaim(f.recipientUser, claimId), code("DISTRIBUTION_CLAIM_HELD"));
     assert.equal(remote.chain.claims[0].allocation.claim_id, claimId);
+  });
+});
+
+function delayNextDistribution(remote: Remote) {
+  let started!: () => void, release!: () => void, waiting = true;
+  const captured = new Promise<void>(resolve => { started = resolve; }), resumed = new Promise<void>(resolve => { release = resolve; });
+  remote.beforeReply = async method => { if (method === "get_distribution" && waiting) { waiting = false; started(); await resumed; } };
+  return { captured, release };
+}
+
+test("a deferred no-chain inspection cannot undo signing or resurrect a released unsigned review", { timeout: 5000 }, async () => {
+  const f = fixture(), remote: Remote = {};
+  await rpc(f, remote, async () => {
+    const signing = createDistribution(f.access, input(f)), preview = await prepareDistribution(f.access, signing.id);
+    const delayedSigning = delayNextDistribution(remote), oldSigning = inspectDistribution(f.access, signing.id);
+    await delayedSigning.captured;
+    await beginDistribution(f.access, signing.id, { planHash: preview.planHash!, signerAccount: f.ownerAccount });
+    delayedSigning.release(); await oldSigning;
+    assert.equal(saved(f, signing.id).stage, "signing"); assert.equal(saved(f, signing.id).local_reserved, "20000000");
+    await assert.rejects(() => releaseUnsignedDistribution(f.access, signing.id), code("DISTRIBUTION_CREATION_HELD"));
+    const cancelled = createDistribution(f.access, input(f)); await prepareDistribution(f.access, cancelled.id);
+    const delayedCancellation = delayNextDistribution(remote), oldCancellation = inspectDistribution(f.access, cancelled.id);
+    await delayedCancellation.captured;
+    await releaseUnsignedDistribution(f.access, cancelled.id);
+    delayedCancellation.release(); await oldCancellation;
+    assert.equal(saved(f, cancelled.id).stage, "voided"); assert.equal(saved(f, cancelled.id).local_reserved, "0");
+    assert.equal(distributionLocalReserve(f.access.organizationId), "20000000");
+    await assert.rejects(() => prepareDistribution(f.access, cancelled.id), code("DISTRIBUTION_CREATION_HELD"));
+  });
+});
+
+test("a deferred missing pool cannot erase newer funded backing or claim observations", { timeout: 5000 }, async () => {
+  const f = fixture(), remote: Remote = {}, draft = createDistribution(f.access, input(f));
+  await rpc(f, remote, async () => {
+    await prepareDistribution(f.access, draft.id);
+    const delayed = delayNextDistribution(remote), old = inspectDistribution(f.access, draft.id), rejected = assert.rejects(old, code("DISTRIBUTION_OBSERVATION_STALE"));
+    await delayed.captured;
+    remote.chain = chainFor(frozen(f, draft.id)); await inspectDistribution(f.access, draft.id);
+    delayed.release(); await rejected;
+    const current = saved(f, draft.id);
+    assert.equal(current.stage, "observed"); assert.equal(current.chain_status, "active"); assert.equal(current.chain_reserved, "20000000"); assert.equal(current.local_reserved, "0");
+    assert.equal(getTreasury(f.access).reserved, "20000000");
+    assert.equal(row<{ observed_status: string }>("SELECT observed_status FROM claim_distribution_allocations WHERE distribution_id=?", draft.id)!.observed_status, "ready");
+  });
+});
+
+test("older pool snapshots cannot overwrite terminal paid or reclaimed counters", { timeout: 5000 }, async () => {
+  for (const terminal of ["paid", "reclaimed"] as const) {
+    const f = fixture(), remote: Remote = {}, draft = createDistribution(f.access, input(f));
+    await rpc(f, remote, async () => {
+      await prepareDistribution(f.access, draft.id); remote.chain = chainFor(frozen(f, draft.id)); await inspectDistribution(f.access, draft.id);
+      const delayed = delayNextDistribution(remote), old = inspectDistribution(f.access, draft.id), rejected = assert.rejects(old, code("DISTRIBUTION_OBSERVATION_STALE"));
+      await delayed.captured;
+      remote.chain.unclaimed = "0"; remote.chain[terminal] = remote.chain.total; remote.chain.status = terminal === "paid" ? "complete" : "closed";
+      remote.chain.claims[0].status = terminal; remote.chain.claims[0].nonce = terminal === "paid" ? "1" : "0";
+      await inspectDistribution(f.access, draft.id);
+      delayed.release(); await rejected;
+      const current = saved(f, draft.id);
+      assert.equal(current.chain_status, terminal === "paid" ? "complete" : "closed"); assert.equal(current[`${terminal}_amount`], "20000000"); assert.equal(current.chain_reserved, "0"); assert.equal(current.pending_amount, "0");
+      const own = row<{ observed_status: string; observed_nonce: string }>("SELECT observed_status,observed_nonce FROM claim_distribution_allocations WHERE distribution_id=?", draft.id)!;
+      assert.equal(own.observed_status, terminal); assert.equal(own.observed_nonce, terminal === "paid" ? "1" : "0");
+    });
+  }
+});
+
+test("a stale pending claim cannot erase a newer same-nonce failed attempt or its fresh wallet fence", { timeout: 5000 }, async () => {
+  const f = fixture(), remote: Remote = {}, draft = createDistribution(f.access, input(f));
+  await rpc(f, remote, async () => {
+    await prepareDistribution(f.access, draft.id); remote.chain = chainFor(frozen(f, draft.id)); await inspectDistribution(f.access, draft.id);
+    const claimId = remote.chain.claims[0].allocation.claim_id, first = await prepareOwnClaim(f.recipientUser, claimId);
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: first.planHash, reviewGeneration: first.reviewGeneration, signerAccount: f.address });
+    finishOwnClaimWallet(f.recipientUser, claimId, first.reviewGeneration);
+    remote.chain.claims[0].nonce = "1"; remote.chain.claims[0].status = "pending"; remote.chain.unclaimed = "0"; remote.chain.pending = remote.chain.total;
+    const delayed = delayNextDistribution(remote), old = inspectOwnClaim(f.recipientUser, claimId), rejected = assert.rejects(old, code("DISTRIBUTION_OBSERVATION_STALE"));
+    await delayed.captured;
+    remote.chain.claims[0].status = "ready"; remote.chain.unclaimed = remote.chain.total; remote.chain.pending = "0";
+    const retry = await prepareOwnClaim(f.recipientUser, claimId);
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: retry.planHash, reviewGeneration: retry.reviewGeneration, signerAccount: f.address });
+    delayed.release(); await rejected;
+    const current = row<{ observed_status: string; observed_nonce: string; source_unknown: number; wallet_lease_generation: string; review_generation: string }>("SELECT * FROM claim_distribution_allocations WHERE id=?", claimId)!;
+    assert.equal(current.observed_status, "ready"); assert.equal(current.observed_nonce, "1"); assert.equal(current.source_unknown, 1); assert.equal(current.review_generation, retry.reviewGeneration); assert.equal(current.wallet_lease_generation, retry.reviewGeneration);
+    finishOwnClaimWallet(f.recipientUser, claimId, retry.reviewGeneration);
+    const last = await prepareOwnClaim(f.recipientUser, claimId); assert.equal(last.retrySameClaim, true);
+    remote.chain.claims[0].nonce = "0";
+    const delayedNonce = delayNextDistribution(remote), oldNonce = inspectOwnClaim(f.recipientUser, claimId), rejectedNonce = assert.rejects(oldNonce, code("DISTRIBUTION_OBSERVATION_STALE"));
+    await delayedNonce.captured;
+    remote.chain.claims[0].nonce = "1"; await inspectOwnClaim(f.recipientUser, claimId);
+    delayedNonce.release(); await rejectedNonce;
+    const preserved = row<{ observed_nonce: string; source_unknown: number; review_generation: string }>("SELECT * FROM claim_distribution_allocations WHERE id=?", claimId)!;
+    assert.equal(preserved.observed_nonce, "1"); assert.equal(preserved.source_unknown, 1); assert.equal(preserved.review_generation, last.reviewGeneration);
   });
 });

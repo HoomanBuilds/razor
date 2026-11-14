@@ -9,7 +9,7 @@ import { getTreasury, syncTreasury } from "../payments/service";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { NATIVE_USDC } from "../../lib/native-usdc";
 import type { TreasuryConfig } from "../payments/types";
-import { assertChainTerms, distributionInput, pageInput, hash, sumEntitlements, type Allocation, type ChainDistribution, type DistributionRow, type FrozenPlan, type Payload, type Policy } from "./model";
+import { assertChainTerms, distributionInput, pageInput, hash, sumEntitlements, type Allocation, type ChainClaim, type ChainDistribution, type DistributionRow, type FrozenPlan, type Payload, type Policy } from "./model";
 
 const now = () => new Date().toISOString();
 const payload = (value: DistributionRow) => JSON.parse(decrypt(value.payload_ciphertext)) as Payload;
@@ -95,6 +95,27 @@ export async function releaseUnsignedDistribution(access: AccessContext, id: str
     audit(live.userId, live.organizationId, "distribution.unsigned_review_released", id); return { cancelled: true, onchainTransactionRequired: false };
   });
 }
+interface ClaimObservation { observed_status: string | null; observed_nonce: string }
+function staleObservation(): never { throw new ApiError(409, "A newer distribution observation is already recorded. Refresh the original pool or fixed claim; existing backing and wallet fences remain held", "DISTRIBUTION_OBSERVATION_STALE"); }
+function claimAdvances(claim: ChainClaim, previous: ClaimObservation) {
+  const nonce = BigInt(claim.nonce), seen = BigInt(previous.observed_nonce);
+  if (nonce < seen) return false;
+  if (["paid", "reclaimed"].includes(previous.observed_status ?? "")) return nonce === seen && claim.status === previous.observed_status;
+  if (nonce === seen && previous.observed_status === "ready") return claim.status === "ready" || claim.status === "reclaimed";
+  return true;
+}
+function observeClaim(claim: ChainClaim, previous: ClaimObservation) {
+  if (!claimAdvances(claim, previous)) staleObservation();
+  const resolved = claim.status !== "ready" || BigInt(claim.nonce) > BigInt(previous.observed_nonce);
+  getDb().prepare("UPDATE claim_distribution_allocations SET observed_status=?,source_unknown=CASE WHEN ? THEN 0 ELSE source_unknown END,observed_nonce=? WHERE id=?")
+    .run(claim.status, Number(resolved), claim.nonce, claim.allocation.claim_id);
+}
+function poolAdvances(chain: ChainDistribution, current: DistributionRow) {
+  const transitions: Record<string, string[]> = { proposed: ["proposed", "active", "complete", "closed", "cancelled"], active: ["active", "complete", "closed"], complete: ["complete"], closed: ["closed"], cancelled: ["cancelled"] };
+  return (!current.chain_status || transitions[current.chain_status]?.includes(chain.status))
+    && BigInt(chain.paid) >= BigInt(current.paid_amount) && BigInt(chain.reclaimed) >= BigInt(current.reclaimed_amount)
+    && !(current.stage === "voided" && chain.status !== "cancelled");
+}
 export async function inspectDistribution(access: AccessContext, id: string) {
   const live = accessFor(access), value = local(live, id), frozen = plan(value);
   if (!frozen) return { ...summary(value), chain: null, policy: null, problems: [value.stage === "voided" ? "This unfunded draft was cancelled" : "The owner must review native setup and funding"], eligibleSigners: [] as string[], storage: null, heldClaims: [] as string[] };
@@ -105,15 +126,23 @@ export async function inspectDistribution(access: AccessContext, id: string) {
   if (chain) assertChainTerms(chain, frozen);
   accessFor(live);
   transaction(db => {
-    const clear = voided || chain && chain.status !== "proposed";
-    db.prepare("UPDATE claim_distributions SET stage=?,local_reserved=CASE WHEN ? THEN '0' ELSE local_reserved END,chain_status=?,chain_reserved=?,pending_amount=?,paid_amount=?,reclaimed_amount=?,last_error=NULL,updated_at=? WHERE id=? AND organization_id=?")
-      .run(voided ? "voided" : chain ? "observed" : value.stage, Number(!!clear), chain?.status ?? null, chain?.unclaimed ?? "0", chain?.pending ?? "0", chain?.paid ?? "0", chain?.reclaimed ?? "0", now(), id, live.organizationId);
-    for (const claim of chain?.claims ?? []) {
-      const previous = row<{ observed_nonce: string }>("SELECT observed_nonce FROM claim_distribution_allocations WHERE id=? AND distribution_id=?", claim.allocation.claim_id, id);
-      const resolved = claim.status !== "ready" || previous && BigInt(claim.nonce) > BigInt(previous.observed_nonce);
-      db.prepare("UPDATE claim_distribution_allocations SET observed_status=?,source_unknown=CASE WHEN ? THEN 0 ELSE source_unknown END,observed_nonce=? WHERE id=? AND distribution_id=?")
-        .run(claim.status, Number(!!resolved), claim.nonce, claim.allocation.claim_id, id);
+    const current = local(live, id);
+    if (current.plan_hash !== value.plan_hash) staleObservation();
+    if (!chain) {
+      if (current.chain_status) staleObservation();
+      if (voided) db.prepare("UPDATE claim_distributions SET stage='voided',local_reserved='0',last_error=NULL,updated_at=? WHERE id=? AND organization_id=?").run(now(), id, live.organizationId);
+      else db.prepare("UPDATE claim_distributions SET last_error=NULL,updated_at=? WHERE id=? AND organization_id=?").run(now(), id, live.organizationId);
+      return;
     }
+    if (!poolAdvances(chain, current) || voided && !["proposed", "cancelled"].includes(chain.status)) staleObservation();
+    for (const claim of chain.claims) {
+      const previous = row<ClaimObservation>("SELECT observed_status,observed_nonce FROM claim_distribution_allocations WHERE id=? AND distribution_id=?", claim.allocation.claim_id, id);
+      if (!previous || !claimAdvances(claim, previous)) staleObservation();
+    }
+    const clear = voided || chain.status !== "proposed";
+    db.prepare("UPDATE claim_distributions SET stage=?,local_reserved=CASE WHEN ? THEN '0' ELSE local_reserved END,chain_status=?,chain_reserved=?,pending_amount=?,paid_amount=?,reclaimed_amount=?,last_error=NULL,updated_at=? WHERE id=? AND organization_id=?")
+      .run(voided || current.stage === "voided" ? "voided" : "observed", Number(clear), chain.status, chain.unclaimed, chain.pending, chain.paid, chain.reclaimed, now(), id, live.organizationId);
+    for (const claim of chain.claims) observeClaim(claim, row<ClaimObservation>("SELECT observed_status,observed_nonce FROM claim_distribution_allocations WHERE id=? AND distribution_id=?", claim.allocation.claim_id, id)!);
   });
   const problems = [];
   if (voided) problems.push("This creation identity was cancelled on NEAR. A delayed creation cannot fund it");
@@ -184,7 +213,7 @@ export async function prepareDistributionControl(access: AccessContext, id: stri
 }
 
 interface OwnAllocation {
-  id: string; distribution_id: string; organization_id: string; payload_ciphertext: string; source_unknown: number; observed_nonce: string;
+  id: string; distribution_id: string; organization_id: string; payload_ciphertext: string; source_unknown: number; observed_nonce: string; observed_status: string | null;
   review_generation: string | null; review_hash: string | null; review_expires_at: string | null; review_consumed: number;
   wallet_lease_generation: string | null; wallet_lease_expires_at: string | null;
 }
@@ -215,7 +244,11 @@ export async function inspectOwnClaim(userId: string, id: string) {
   if (claim && (!profile?.active || profile.version !== claim.allocation.recipient_version || profile.primary.address !== claim.destination)) problems.push("The approved receiving profile changed. This claim cannot redirect; ask the company to review it");
   const current = getRecipient(own.organization_id, allocation.recipientId);
   if (current.archived || current.preference_status !== "confirmed" || current.version !== allocation.recipientVersion || current.user_id !== allocation.boundUserId || current.primary_address !== allocation.address) problems.push("Your Razor receiving profile changed. This app will not retry the old allocation. The company must review its onchain receiving record; changing an app profile alone cannot revoke a public onchain claim");
-  if (claim) getDb().prepare("UPDATE claim_distribution_allocations SET observed_status=?,observed_nonce=?,source_unknown=CASE WHEN ?!='ready' OR observed_nonce!=? THEN 0 ELSE source_unknown END WHERE id=? AND bound_user_id=?").run(claim.status, claim.nonce, claim.status, claim.nonce, id, userId);
+  transaction(() => {
+    const previous = ownAllocation(userId, id), current = row<DistributionRow>("SELECT * FROM claim_distributions WHERE id=?", own.distribution_id)!;
+    if (current.plan_hash !== distribution.plan_hash || !chain && previous.observed_status || chain && !poolAdvances(chain, current)) staleObservation();
+    if (claim) observeClaim(claim, previous);
+  });
   const latest = ownAllocation(userId, id);
   return { claim, amount: allocation.amount, address: allocation.address, network: config.network, deadline: payload(distribution).deadline, problems, eligibleSigners: linked(userId, config), sourceUnknown: !!latest.source_unknown, walletLeaseExpiresAt: latest.wallet_lease_expires_at };
 }
