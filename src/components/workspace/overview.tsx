@@ -23,6 +23,7 @@ interface Summary {
 
 export function Overview() {
   const { base, revision, recipients, recipientsLoading, recipientsError, navigate, organization, session } = useWorkspace();
+  const accountHref = `/account?returnTo=${encodeURIComponent(typeof window === "undefined" ? "/app" : window.location.pathname + window.location.search)}`;
   const permissions = organization.permissions ?? [];
   const canReadPayments = hasPermissions(permissions, ["payments:read"]);
   const canPrepare = hasPermissions(permissions, ["payments:prepare", "recipients:read"]);
@@ -37,7 +38,7 @@ export function Overview() {
   const signerLinked = session.wallets.some(wallet => wallet.family === "near" && wallet.network === signingNetwork);
   const steps: { title: string; done: boolean; section: Section; detail: string; href?: string; show: boolean }[] = [
     { title: "Company created", done: true, section: "settings", detail: organization.name, show: true },
-    { title: "Link your signing wallet", done: signerLinked, section: "treasury", detail: "Verify a NEAR wallet to approve company actions.", href: "/account", show: canManage || canPrepare },
+    { title: "Link your signing wallet", done: signerLinked, section: "treasury", detail: "Verify a NEAR wallet to approve company actions.", href: accountHref, show: canManage || canPrepare },
     { title: "Connect your treasury", done: !!treasury?.config, section: "treasury", detail: "Verify your company's NEAR contract and authority.", show: canManage },
     { title: "Add your first payee", done: recipients.length > 0, section: "recipients", detail: "Invite an employee, contractor or supplier.", show: canManageRecipients },
     { title: "Add company funds", done: BigInt(treasury?.balance ?? "0") > 0n || (summary.data?.paidCount ?? 0) > 0, section: "treasury", detail: "Fund with any currently supported source asset.", show: canPrepare },

@@ -17,6 +17,8 @@ import { assertSeatCapacity, completeAiUsage, financeSeatUsage, reserveAiUsage }
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "ab".repeat(32);
 
+const pilotPolicy = { mode: "pilot", notice: "Bounded complimentary test capabilities", limits: { private_tender: 1, financing_request: 1, claim_pool: 1, procurement_rfq: 1, accounting_plan: 1, integration_credential: 1 } };
+
 function fixture() {
   const id = randomUUID(), at = new Date().toISOString(), db = getDb();
   db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,'Owner',?)").run(id, at);
@@ -39,18 +41,21 @@ test("billing catalog stores immutable versions and rejects obsolete offers whil
   assert.deepEqual(listPublishedPlans().map(plan => plan.code), ["free", "pro", "business"]);
   assert.throws(() => getDb().prepare("UPDATE billing_plan_versions SET monthly_amount='1' WHERE id=?").run(original.id), /IMMUTABLE/);
   assert.throws(() => getDb().prepare("DELETE FROM billing_plan_versions WHERE id=?").run(original.id), /IMMUTABLE/);
-  const revised = publishPlanVersion({ code: "pro", name: "Pro next", monthlyAmount: "31000000", features: original.features, limits: original.limits });
+  process.env.RAZOR_BILLING_OPERATOR_USER_IDS = access.userId;
+  assert.throws(() => retirePlanVersion(original.id), (error: ApiError) => error.code === "BILLING_OPERATOR_REQUIRED");
+  assert.throws(() => retirePlanVersion(original.id, fixture().access.userId), (error: ApiError) => error.code === "BILLING_OPERATOR_REQUIRED");
+  const revised = publishPlanVersion({ code: "pro", name: "Pro next", monthlyAmount: "31000000", features: original.features, limits: original.limits, capabilityPolicy: pilotPolicy }, access.userId);
   assert.equal(revised.version, original.version + 1);
   assert.throws(() => quotePurchase(access.organizationId, original.id), (error: ApiError) => error.code === "BILLING_PLAN_OFFER_CHANGED");
   const terms = quotePurchase(access.organizationId, revised.id), invoice = randomUUID();
-  retirePlanVersion(revised.id);
+  retirePlanVersion(revised.id, access.userId);
   assert.equal(getPlanVersion(revised.id).available, false);
   assert.equal(applyPurchase(access.organizationId, invoice, terms).status, "activated");
   assert.equal(getSubscriptionState(access.organizationId).plan.monthlyAmount, "31000000");
-  assert.throws(() => retirePlanVersion(original.id), /replacement/);
-  assert.throws(() => publishPlanVersion({ code: "free", name: "Bad", monthlyAmount: "00", features: original.features, limits: original.limits }));
-  assert.throws(() => publishPlanVersion({ code: "business", name: "Bad", monthlyAmount: "0", features: original.features, limits: original.limits }));
-  assert.throws(() => publishPlanVersion({ code: "business", name: "Bad", monthlyAmount: "1000000000001", features: original.features, limits: original.limits }));
+  assert.throws(() => retirePlanVersion(original.id, access.userId), /replacement/);
+  assert.throws(() => publishPlanVersion({ code: "free", name: "Bad", monthlyAmount: "00", features: original.features, limits: original.limits, capabilityPolicy: pilotPolicy }, access.userId));
+  assert.throws(() => publishPlanVersion({ code: "business", name: "Bad", monthlyAmount: "0", features: original.features, limits: original.limits, capabilityPolicy: pilotPolicy }, access.userId));
+  assert.throws(() => publishPlanVersion({ code: "business", name: "Bad", monthlyAmount: "1000000000001", features: original.features, limits: original.limits, capabilityPolicy: pilotPolicy }, access.userId));
 });
 
 test("pilot access is complimentary and bounded while enforced companies start on Free", () => {
@@ -156,6 +161,10 @@ test("only the actual owner may change subscriptions and paid Business wins over
   const { access } = fixture(), administrator = fixture().access;
   process.env.RAZOR_BILLING_MODE = "pilot";
   const outsider = { ...administrator, organizationId: access.organizationId };
+  assert.throws(() => getEntitlements(outsider), (error: ApiError) => error.code === "COMPANY_ACCESS_DENIED");
+  const roleId = randomUUID(), at = new Date().toISOString();
+  getDb().prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,'Administrator',?,0,?)").run(roleId, access.organizationId, JSON.stringify(PERMISSIONS), at);
+  getDb().prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)").run(access.organizationId, administrator.userId, roleId, at);
   assert.equal(getEntitlements(outsider).canManage, false);
   assert.throws(() => cancelSubscription(outsider), (error: ApiError) => error.code === "BILLING_OWNER_REQUIRED");
   assert.throws(() => schedulePlanChange(outsider, latestPlan("free").id), /Only/);
@@ -207,10 +216,10 @@ test("seat capacity counts pending invitations, avoids counting its own acceptan
 
 test("parallel server processes reserve the final AI slot once", async () => {
   const directory = mkdtempSync(join(tmpdir(), "razor-billing-quota-")), company = randomUUID(), invoke = promisify(execFile);
-  const env = { ...process.env, DATABASE_PATH: join(directory, "quota.sqlite"), RAZOR_BILLING_MODE: "pilot" };
+  const env = { ...process.env, DATABASE_PATH: join(directory, "quota.sqlite"), RAZOR_BILLING_MODE: "pilot", RAZOR_BILLING_OPERATOR_USER_IDS: company };
   const run = (source: string) => invoke(process.execPath, ["--max-old-space-size=192", "--import", "tsx", "--input-type=module", "-e", source], { env, cwd: process.cwd() });
   try {
-    await run(`import {getDb} from './src/server/db.ts';import {publishPlanVersion,latestPlan} from './src/server/billing/catalog.ts';const db=getDb(),at=new Date().toISOString(),id=${JSON.stringify(company)};db.prepare('INSERT INTO users(id,name,created_at) VALUES(?,?,?)').run(id,'Owner',at);db.prepare('INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)').run(id,'Company',id,at,at);const p=latestPlan('pro');publishPlanVersion({code:'pro',name:'Quota fixture',monthlyAmount:p.monthlyAmount,features:p.features,limits:{financeSeats:10,aiAttempts:1}});`);
+    await run(`import {getDb} from './src/server/db.ts';import {publishPlanVersion,latestPlan} from './src/server/billing/catalog.ts';const db=getDb(),at=new Date().toISOString(),id=${JSON.stringify(company)};db.prepare('INSERT INTO users(id,name,created_at) VALUES(?,?,?)').run(id,'Owner',at);db.prepare('INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)').run(id,'Company',id,at,at);db.prepare('INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,?,?,1,?)').run(id,id,'Owner',JSON.stringify(['company:read','documents:manage']),at);db.prepare('INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)').run(id,id,id,at);const p=latestPlan('pro');publishPlanVersion({code:'pro',name:'Quota fixture',monthlyAmount:p.monthlyAmount,features:p.features,limits:{financeSeats:10,aiAttempts:1},capabilityPolicy:${JSON.stringify(pilotPolicy)}},id);`);
     const source = `import {reserveAiUsage} from './src/server/billing/usage.ts';const id=${JSON.stringify(company)};try{reserveAiUsage({userId:id,organizationId:id,permissions:['company:read','documents:manage']});process.stdout.write('reserved');}catch(error){if(error.code!=='BILLING_AI_LIMIT')throw error;process.stdout.write(error.code);}`;
     const results = await Promise.all([run(source), run(source)]);
     assert.deepEqual(results.map(result => result.stdout).sort(), ["BILLING_AI_LIMIT", "reserved"]);

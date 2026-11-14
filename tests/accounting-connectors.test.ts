@@ -282,7 +282,7 @@ test("Xero posts an exact reviewed draft and fences its lost response with a rea
   if (path.endsWith("/Accounts/bank")) return {status:200,body:{Accounts:[bank]}};
   if (path.endsWith("/TaxRates")) return {status:200,body:{TaxRates:[{TaxType:"NONE",Name:"No tax",EffectiveRate:0,Status:"ACTIVE"}]}};
   if (path.endsWith("/Contacts") || path.endsWith("/Contacts/vendor")) return {status:200,body:{Contacts:[{ContactID:"vendor",Name:"Mapped company supplier",ContactStatus:"ACTIVE"}]}};
-  if (path.endsWith("/Invoices") && request.method === "GET") return {status:200,body:{Invoices:stored?[stored]:[]}};
+  if ((path.endsWith("/Invoices") || path.endsWith(`/Invoices/${invoice}`)) && request.method === "GET") return {status:200,body:{Invoices:stored?[stored]:[]}};
   if (path.endsWith("/Invoices") && request.method === "POST") {
    assert.ok(request.headers["Idempotency-Key"]); const payload = JSON.parse(request.body!).Invoices[0];
    assert.equal(payload.DueDate,"2027-01-15"); assert.equal(payload.Date,new Date().toISOString().slice(0,10));
@@ -300,4 +300,5 @@ test("Xero posts an exact reviewed draft and fences its lost response with a rea
  assert.equal((await reconcileAccountingJob(f.access,plan.job.id,false,transport)).matched,true);
  assert.equal(row<Job>("SELECT * FROM accounting_jobs WHERE id=?",plan.job.id)!.external_id,invoice);
  assert.equal(calls.filter(item=>item.method==="POST"&&item.url.endsWith("/Invoices")).length,1);
+ assert.equal(calls.filter(item=>item.method==="GET"&&item.url.endsWith(`/Invoices/${invoice}`)).length,1);
 });

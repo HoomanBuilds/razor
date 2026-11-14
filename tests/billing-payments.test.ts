@@ -48,6 +48,9 @@ function company() {
  getDb().prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(user,"Billing owner",at);
  getDb().prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(organizationId,"Billing company",user,at,at);
  getDb().prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES(?,?,'near',?,'testnet',?)").run(randomUUID(),user,payer,at);
+ const role=randomUUID();
+ getDb().prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,'Owner',?,1,?)").run(role,organizationId,JSON.stringify(["company:read","company:manage"]),at);
+ getDb().prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)").run(organizationId,user,role,at);
  return {access:{userId:user,organizationId,permissions:["company:read","company:manage"]} satisfies AccessContext,payer};
 }
 async function checkout(value:ReturnType<typeof company>,planVersionId="pro-1") {return createCheckout(value.access,{planVersionId,payerAccount:value.payer,requestKey:randomUUID()});}

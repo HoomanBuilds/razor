@@ -1133,10 +1133,10 @@ function AgreementPanel({
           ? "Private sourcing and agreements"
           : "My sealed sourcing invitations"
       }
-      description="Company-owned sealed offers, bounded negotiation and exact-party commercial acceptance. Ordinary purchase and payment approvals stay separate."
+      description="Your sealed offers, negotiations and commercial agreements." help="Company-owned sealed offers use exact-party commercial acceptance. Ordinary purchase and payment approvals stay separate."
     >
       <div className="grid min-w-0 gap-5">
-        <KeyControl
+        <details className="rounded-2xl border border-border bg-white px-5 py-4"><summary className="cursor-pointer text-sm font-medium">{localKey?"Private key loaded":"Privacy keys and operator tools"}</summary><div className="mt-4 grid gap-4"><KeyControl
           value={localKey}
           busy={!!busy}
           run={run}
@@ -1152,7 +1152,7 @@ function AgreementPanel({
           from a reviewed local checkout. Only the optional suggestion command
           contacts NEAR AI Cloud. Its fees, credentials and local file retention
           belong to that company.
-        </p>
+        </p></div></details>
         {resource.loading ? (
           <Empty>Loading private sourcing records...</Empty>
         ) : resource.data?.tenders.length ? (

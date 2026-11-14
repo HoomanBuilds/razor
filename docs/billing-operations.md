@@ -47,12 +47,12 @@ Calendar-month periods retain their original anchor day. Early renewal prepays a
 npm run billing:admin -- catalog
 npm run billing:admin -- publish-plan --operator-user EXISTING_OPERATOR_ID --input /path/to/reviewed-plan.json
 npm run billing:admin -- publish-plan --operator-user EXISTING_OPERATOR_ID --input /path/to/reviewed-plan.json --apply
-npm run billing:admin -- retire-plan --id PLAN_VERSION --apply
+npm run billing:admin -- retire-plan --operator-user EXISTING_OPERATOR_ID --id PLAN_VERSION --apply
 npm run billing:admin -- status --company COMPANY_ID
 npm run billing:admin -- invoices --company COMPANY_ID --page 1 --page-size 25
 ```
 
-Publishing requires an existing user explicitly listed in `RAZOR_BILLING_OPERATOR_USER_IDS`. A publication JSON contains `capabilityPolicy` and `code` (`free`, `pro` or `business`), `name`, `monthlyAmount` in integer microUSDC, all four boolean `features` (`batch_payroll`, `recurring`, `private_ai`, `clearing`), and `limits` (`financeSeats`, `aiAttempts`). Free must cost zero; paid plans must be positive. Private AI requires a positive bounded allowance. Publishing creates a new immutable version. Retiring requires another available version of that code. New quotes use the latest published offer; existing frozen terms remain recoverable. Preview before applying a change.
+Publishing and retiring require an existing user explicitly listed in `RAZOR_BILLING_OPERATOR_USER_IDS`. A publication JSON contains `capabilityPolicy` and `code` (`free`, `pro` or `business`), `name`, `monthlyAmount` in integer microUSDC, all four boolean `features` (`batch_payroll`, `recurring`, `private_ai`, `clearing`), and `limits` (`financeSeats`, `aiAttempts`). Free must cost zero; paid plans must be positive. Private AI requires a positive bounded allowance. Publishing creates a new immutable version. Retiring requires another available version of that code. New quotes use the latest published offer; existing frozen terms remain recoverable. Preview before applying a change.
 
 ```sh
 npm run billing:admin -- reconcile-invoice --company COMPANY_ID --id INVOICE_ID --apply
