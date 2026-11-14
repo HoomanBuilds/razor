@@ -7,6 +7,7 @@ import { getAccess, audit } from "../identity/session";
 import { getRecipient } from "../identity/recipients";
 import { createCommitment, matchBillCommitment } from "../vendor-commitments/service";
 import { procurementInvoiceReview, receivingTotals } from "./matching";
+import { commercialInput, commercialParameters, commercialTotals, type CommercialTerms } from "./commercial";
 
 const stamp = () => new Date().toISOString();
 const quantity = z.string().regex(/^[1-9]\d{0,11}$/);
@@ -19,12 +20,13 @@ const purchasingPermissions = (permissions: string[]) => ["payments:prepare", "p
 export const requestInput = z.object({ reference: z.string().trim().min(1).max(120), specification: text, quantity, unit: z.string().trim().min(1).max(40), budget: money,
   deliveryFrom: z.string().date(), deliveryTo: z.string().date(), quoteDeadline: z.string().datetime(), evidence: text,
   supplierIds: z.array(z.string().min(1).max(128)).min(1).max(20), approvingRoleId: z.string().min(1).max(128), inventoryItemId: z.string().min(1).max(128).optional() }).strict();
-export const quoteInput = z.object({ recipientId: z.string().min(1).max(128), expectedVersion: z.number().int().min(0), unitPrice: money, deliveryDate: z.string().date(), validUntil: z.string().datetime(), terms: text }).strict();
+const legacyQuoteInput = z.object({ recipientId: z.string().min(1).max(128), expectedVersion: z.number().int().min(0), unitPrice: money, deliveryDate: z.string().date(), validUntil: z.string().datetime(), terms: text }).strict();
+export const quoteInput = z.union([legacyQuoteInput, legacyQuoteInput.extend({ payoutProfileVersion: z.number().int().positive(), commercial: commercialInput }).strict()]);
 export const receiptInput = z.object({ requestKey, kind: z.enum(["accepted", "rejected", "returned"]), quantity, evidence: text }).strict();
 export const inventoryInput = z.object({ sku: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(120), unit: z.string().trim().min(1).max(40), threshold: quantity,
   reorderQuantity: quantity, reorderBudget: money, supplierIds: z.array(z.string().min(1)).min(1).max(20), approvingRoleId: z.string().min(1) }).strict();
 interface RequestRow { id: string; organization_id: string; reference: string; specification_ciphertext: string; quantity: string; unit: string; budget: string; delivery_from: string; delivery_to: string; quote_deadline: string; evidence_ciphertext: string; approving_role_id: string; inventory_item_id: string | null; state: string; created_by: string; created_at: string; updated_at: string }
-interface QuoteRow { request_id: string; recipient_id: string; version: number; supplier_version: number; supplier_user_id: string; supplier_snapshot_ciphertext: string; unit_price: string; total: string; delivery_date: string; valid_until: string; terms_ciphertext: string; created_at: string }
+interface QuoteRow { request_id: string; recipient_id: string; version: number; supplier_version: number; supplier_user_id: string; supplier_snapshot_ciphertext: string; unit_price: string; total: string; delivery_date: string; valid_until: string; terms_ciphertext: string; created_at: string; commercial_version: number; commercial_terms_ciphertext: string | null }
 interface AwardRow { id: string; request_id: string; organization_id: string; recipient_id: string; quote_version: number; commitment_id: string; commitment_version: number; terms_hash: string; awarded_by: string; awarded_at: string }
 interface ItemRow { id: string; organization_id: string; sku: string; name_ciphertext: string; unit: string; on_hand: string; threshold: string; reorder_quantity: string; reorder_budget: string; supplier_ids: string; approving_role_id: string; generation: number; policy_version: number; reorder_error: string | null }
 function accessFor(access: AccessContext, permission: string) { const live = getAccess(access.userId, access.organizationId); requirePermission(live, "company:read"); requirePermission(live, permission); return live; }
@@ -58,7 +60,18 @@ function invitationProblems(request: RequestRow) {
     : "A supplier invitation identity changed or was not captured. Cancel this RFQ and create a new reviewed request for the current supplier account. Existing quotes remain historical records."];
 }
 function publicRequest(value: RequestRow) { const { specification_ciphertext, evidence_ciphertext, ...rest } = value; return { ...rest, specification: decrypt(specification_ciphertext), evidence: decrypt(evidence_ciphertext) }; }
-function publicQuote(value: QuoteRow) { const { supplier_snapshot_ciphertext, terms_ciphertext, ...rest } = value; return { ...rest, supplier: JSON.parse(decrypt(supplier_snapshot_ciphertext)) as { name: string; asset: string; network: string }, terms: decrypt(terms_ciphertext) }; }
+function legacyQuote(value: QuoteRow) { return { request_id: value.request_id, recipient_id: value.recipient_id, version: value.version, supplier_version: value.supplier_version, supplier_user_id: value.supplier_user_id, unit_price: value.unit_price, total: value.total, delivery_date: value.delivery_date, valid_until: value.valid_until, created_at: value.created_at, supplier: JSON.parse(decrypt(value.supplier_snapshot_ciphertext)) as { name: string; asset: string; network: string }, terms: decrypt(value.terms_ciphertext) }; }
+function quoteTerms(value: QuoteRow) {
+  const commercial = value.commercial_version === 2 && value.commercial_terms_ciphertext ? JSON.parse(decrypt(value.commercial_terms_ciphertext)) as CommercialTerms : null;
+  if (value.commercial_version === 2) {
+    if (!commercial || !/^[1-9]\d{0,30}$/.test(commercial.lineSubtotal)) throw new ApiError(409, "The exact stored commercial quote is inconsistent", "PROCUREMENT_QUOTE_CHANGED");
+    const checked = commercialTotals("1", commercial.lineSubtotal, commercialParameters(commercial));
+    if (checked.commercialTotal !== value.total || commercial.commercialTotal !== checked.commercialTotal || commercial.fixedCharges !== checked.fixedCharges) throw new ApiError(409, "The exact stored commercial quote is inconsistent", "PROCUREMENT_QUOTE_CHANGED");
+  }
+  return commercial;
+}
+function quoteHashTerms(value: QuoteRow) { const legacy = legacyQuote(value), commercial = quoteTerms(value); return commercial ? { ...legacy, commercialVersion: 2, commercial } : legacy; }
+function publicQuote(value: QuoteRow) { const commercial = quoteTerms(value); return { ...legacyQuote(value), commercialVersion: value.commercial_version, commercial, fullTermsHash: digest(quoteHashTerms(value)), priceBoundary: commercial ? "Exact USDC subtotal plus fixed included charges. Excluded charges and supplier conversion estimates are not part of the PO total or a payment cost ceiling." : "Legacy all-inclusive unit price; detailed tax, charge and delivery breakdown was not captured. Original totals and historical award hashes are preserved." }; }
 function quoteFor(requestId: string, recipientId: string, version: number) { const quote = row<QuoteRow>("SELECT * FROM procurement_quotes WHERE request_id=? AND recipient_id=? AND version=?", requestId, recipientId, version); if (!quote) throw new ApiError(404, "Quote version not found", "NOT_FOUND"); return quote; }
 function awardFor(organizationId: string, id: string) { const value = row<AwardRow>("SELECT * FROM procurement_awards WHERE id=? AND organization_id=?", id, organizationId); if (!value) throw new ApiError(404, "Purchase award not found", "NOT_FOUND"); return value; }
 function itemFor(organizationId: string, id: string) { const value = row<ItemRow>("SELECT * FROM procurement_inventory WHERE id=? AND organization_id=?", id, organizationId); if (!value) throw new ApiError(404, "Inventory item not found", "NOT_FOUND"); return value; }
@@ -115,7 +128,8 @@ export function supplierRequests(userId: string) {
     ORDER BY q.created_at DESC,q.id LIMIT 100`, userId, userId, userId, userId, userId).map(value => {
     const { recipient_id, company_name, invitation_active, ...request } = value;
     const role = row<{ permissions_json: string }>("SELECT permissions_json FROM organization_roles WHERE id=? AND organization_id=? AND archived_at IS NULL", request.approving_role_id, request.organization_id);
-    return { ...publicRequest(request), recipientId: recipient_id, companyName: company_name, historicalOnly: !invitation_active, reviewerActive: !!role && purchasingPermissions(JSON.parse(role.permissions_json)),
+    const payout = invitation_active ? eligibleSupplier(userId, request, recipient_id) : null;
+    return { ...publicRequest(request), recipientId: recipient_id, companyName: company_name, historicalOnly: !invitation_active, reviewerActive: !!role && purchasingPermissions(JSON.parse(role.permissions_json)), payoutProfile: payout ? { recipientId: payout.id, version: payout.version, asset: payout.primary_asset, network: payout.primary_network } : null,
       quotes: rows<QuoteRow>("SELECT * FROM procurement_quotes WHERE request_id=? AND recipient_id=? AND supplier_user_id=? ORDER BY version DESC", request.id, recipient_id, userId).map(publicQuote),
       awardedToYou: !!row("SELECT a.id FROM procurement_awards a JOIN procurement_quotes q ON q.request_id=a.request_id AND q.recipient_id=a.recipient_id AND q.version=a.quote_version WHERE a.request_id=? AND a.recipient_id=? AND q.supplier_user_id=?", request.id, recipient_id, userId),
       visibility: invitation_active ? "Only your quotes are shown. Receiving and payment records remain in your ordinary recipient workspace." : "Historical access to your own quote submissions only. This receiving profile no longer grants new invitation or quoting authority." };
@@ -134,15 +148,17 @@ export function submitQuote(userId: string, requestId: string, data: unknown) {
     if (previous >= 20) throw new ApiError(409, "This supplier reached twenty quote versions for this RFQ. Ask the company to create a new sourcing request", "PROCUREMENT_QUOTE_LIMIT");
     if (input.deliveryDate < request.delivery_from || input.deliveryDate > request.delivery_to) throw new ApiError(422, "The quote delivery date is outside the RFQ window", "PROCUREMENT_DELIVERY_INVALID");
     if (input.validUntil <= stamp() || input.validUntil.slice(0, 10) > request.delivery_to) throw new ApiError(422, "Choose quote validity before the delivery window ends", "PROCUREMENT_QUOTE_EXPIRY");
-    const total = BigInt(request.quantity) * BigInt(input.unitPrice);
+    const commercial = "commercial" in input ? commercialTotals(request.quantity, input.unitPrice, input.commercial) : null;
+    if ("payoutProfileVersion" in input && input.payoutProfileVersion !== supplier.version) throw new ApiError(409, "The actual confirmed payout profile changed. Refresh its asset and network before revising the quote", "PROCUREMENT_PAYOUT_CHANGED");
+    const total = commercial ? BigInt(commercial.commercialTotal) : BigInt(request.quantity) * BigInt(input.unitPrice);
     if (total > BigInt(request.budget) || total > 10n ** 30n) throw new ApiError(422, "The all-inclusive quote exceeds the RFQ budget", "PROCUREMENT_BUDGET_EXCEEDED");
-    db.prepare("INSERT INTO procurement_quotes(request_id,recipient_id,version,supplier_version,supplier_user_id,supplier_snapshot_ciphertext,unit_price,total,delivery_date,valid_until,terms_ciphertext,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
-      .run(requestId, input.recipientId, previous + 1, supplier.version, userId, encrypt(JSON.stringify({ name: supplier.name, asset: supplier.primary_asset, network: supplier.primary_network })), input.unitPrice, total.toString(), input.deliveryDate, input.validUntil, encrypt(input.terms), stamp());
+    db.prepare("INSERT INTO procurement_quotes(request_id,recipient_id,version,supplier_version,supplier_user_id,supplier_snapshot_ciphertext,unit_price,total,delivery_date,valid_until,terms_ciphertext,created_at,commercial_version,commercial_terms_ciphertext) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(requestId, input.recipientId, previous + 1, supplier.version, userId, encrypt(JSON.stringify({ name: supplier.name, asset: supplier.primary_asset, network: supplier.primary_network })), input.unitPrice, total.toString(), input.deliveryDate, input.validUntil, encrypt(input.terms), stamp(), commercial ? 2 : 1, commercial ? encrypt(JSON.stringify(commercial)) : null);
     audit(userId, request.organization_id, "procurement.quote_submitted", requestId, { recipientId: input.recipientId, version: previous + 1 }); return publicQuote(quoteFor(requestId, input.recipientId, previous + 1));
   });
 }
-export function awardQuote(access: AccessContext, id: string, data: { recipientId: string; quoteVersion: number; reviewToken: string; purchaseReference: string }) {
-  const parsed = z.object({ recipientId: z.string().min(1), quoteVersion: z.number().int().positive(), reviewToken: z.string().regex(/^[a-f0-9]{64}$/), purchaseReference: z.string().trim().min(1).max(120) }).strict().parse(data);
+export function awardQuote(access: AccessContext, id: string, data: unknown) {
+  const parsed = z.object({ recipientId: z.string().min(1), quoteVersion: z.number().int().positive(), reviewToken: z.string().regex(/^[a-f0-9]{64}$/), purchaseReference: z.string().trim().min(1).max(120), quoteTermsHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), commercialAcknowledged: z.literal(true).optional() }).strict().parse(data);
   return transaction(db => {
     const request = requestFor(access.organizationId, id), live = assertReviewer(access, request); requirePermission(live, "payments:prepare");
     const existing = row<AwardRow>("SELECT * FROM procurement_awards WHERE request_id=?", id);
@@ -152,8 +168,14 @@ export function awardQuote(access: AccessContext, id: string, data: { recipientI
     if (!row("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? AND recipient_id=? AND invited_user_id=?", id, parsed.recipientId, supplier.user_id)) throw new ApiError(409, "Supplier invitation ownership changed or was not captured. Cancel this RFQ and create a new reviewed invitation", "PROCUREMENT_INVITATION_REVIEW_REQUIRED");
     if (quote.valid_until <= stamp() || request.delivery_to < stamp().slice(0, 10)) throw new ApiError(409, "This quote expired before award. Request a new valid revision", "PROCUREMENT_QUOTE_EXPIRED");
     if (quote.version !== row<{ version: number }>("SELECT MAX(version) AS version FROM procurement_quotes WHERE request_id=? AND recipient_id=?", id, parsed.recipientId)!.version || quote.supplier_version !== supplier.version || quote.supplier_user_id !== supplier.user_id) throw new ApiError(409, "Supplier details or quote revision changed", "PROCUREMENT_QUOTE_CHANGED");
-    const commitment = createCommitment(live, { recipientId: parsed.recipientId, reference: parsed.purchaseReference, settlementUnit: "USDC", scope: `${review.specification}\nQuantity: ${request.quantity} ${request.unit}\n${decrypt(quote.terms_ciphertext)}`, allowance: quote.total, cadence: "total", startsOn: stamp().slice(0, 10), endsOn: request.delivery_to, targetState: "active", reason: `Human-reviewed award of ${request.reference}, quote ${quote.version}` });
-    const termsHash = digest({ request: { id, quantity: request.quantity, unit: request.unit, budget: request.budget, specification: review.specification }, quote: publicQuote(quote), commitmentId: commitment.id, commitmentVersion: 1 });
+    const commercial = quoteTerms(quote), fullHash = digest(quoteHashTerms(quote));
+    if (commercial && (parsed.quoteTermsHash !== fullHash || !parsed.commercialAcknowledged)) throw new ApiError(409, "Explicitly review this full commercial quote, exclusions and supplier-only conversion estimate before award", "PROCUREMENT_COMMERCIAL_REVIEW_REQUIRED");
+    if (BigInt(quote.total) > BigInt(request.budget) || commercial && (commercialTotals(request.quantity, quote.unit_price, commercialParameters(commercial)).commercialTotal !== quote.total)) throw new ApiError(409, "The quote no longer matches its exact commercial total and RFQ budget", "PROCUREMENT_BUDGET_EXCEEDED");
+    const requestTerms = commercial ? { id, quantity: request.quantity, unit: request.unit, budget: request.budget, specification: review.specification, deliveryFrom: request.delivery_from, deliveryTo: request.delivery_to, quoteDeadline: request.quote_deadline, requiredEvidence: review.evidence, organizationId: request.organization_id, approvingRoleId: request.approving_role_id } : { id, quantity: request.quantity, unit: request.unit, budget: request.budget, specification: review.specification };
+    const sourceHash = digest({ request: requestTerms, quote: quoteHashTerms(quote) });
+    const scope = commercial ? `RFQ ${request.reference}, quote ${quote.version}. Quantity: ${request.quantity} ${request.unit}. Exact commercial total: ${quote.total} microUSDC. Full immutable RFQ and commercial source SHA-256: ${sourceHash}. Review all source conditions in Purchasing. Excluded charges and indicative supplier conversion costs are not included in this PO allowance and require separate commercial approval.\nSpecification: ${review.specification.slice(0, 1000)}` : `${review.specification}\nQuantity: ${request.quantity} ${request.unit}\n${decrypt(quote.terms_ciphertext)}`;
+    const commitment = createCommitment(live, { recipientId: parsed.recipientId, reference: parsed.purchaseReference, settlementUnit: "USDC", scope, allowance: quote.total, cadence: "total", startsOn: stamp().slice(0, 10), endsOn: request.delivery_to, targetState: "active", reason: `Human-reviewed award of ${request.reference}, quote ${quote.version}` });
+    const termsHash = digest({ request: requestTerms, quote: quoteHashTerms(quote), commitmentId: commitment.id, commitmentVersion: 1 });
     const awardId = randomUUID();
     db.prepare("INSERT INTO procurement_awards(id,request_id,organization_id,recipient_id,quote_version,commitment_id,commitment_version,terms_hash,awarded_by,awarded_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(awardId, id, live.organizationId, parsed.recipientId, parsed.quoteVersion, commitment.id, 1, termsHash, live.userId, stamp());
     db.prepare("UPDATE procurement_requests SET state='awarded',updated_at=? WHERE id=?").run(stamp(), id); audit(live.userId, live.organizationId, "procurement.quote_awarded", awardId, { commitmentId: commitment.id, termsHash }); return inspectRequest(live, id);
