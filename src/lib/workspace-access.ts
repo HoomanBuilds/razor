@@ -32,5 +32,5 @@ export function workspacePath(companyId: string, section: Section, paymentId?: s
   const params = new URLSearchParams({ company: companyId, section });
   if (section === "payments" && paymentId) params.set("payment", paymentId);
   if (section === "billing" && invoiceId) params.set("invoice", invoiceId);
-  return `/?${params}`;
+  return `/app?${params}`;
 }

@@ -19,7 +19,7 @@ export function JoinCompany({token}:{token:string}) {
     if(pending||!preview?.canAccept)return;setPending(true);setError(null);
     try {
       await identityRequest<{organizationId:string}>("/invitations/accept",{token});
-      setJoined(true);await refresh();router.replace("/");
+      setJoined(true);await refresh();router.replace("/app");
     } catch(error){setError(walletErrorMessage(error));} finally{setPending(false);}
   }
   const target=preview?.target.email || (preview?.target.wallet?`${preview.target.wallet.address} (${preview.target.wallet.family}, ${preview.target.wallet.network})`:null);

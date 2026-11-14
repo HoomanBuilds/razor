@@ -46,6 +46,7 @@ test("workspace navigation matches readable permissions and encodes company and 
   assert(!hasPermissions(undefined, ["company:read"]));
   assert(!canOpenSection("unknown" as "overview", viewer));
   const url = new URL(workspacePath("company one", "payments", "payment&two"), "http://localhost");
+  assert.equal(url.pathname, "/app");
   assert.equal(url.searchParams.get("company"), "company one");
   assert.equal(url.searchParams.get("payment"), "payment&two");
   assert(!workspacePath("company", "settings", "hidden").includes("payment="));

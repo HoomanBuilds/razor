@@ -643,7 +643,7 @@ export function PublicDemo({ initial }: { initial: Snapshot }) {
       <Panel title="Continue in the actual product">
         <div className="flex flex-wrap gap-4">
           <a
-            href="/"
+            href="/app"
             className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
             Open company workspace

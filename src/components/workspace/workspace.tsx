@@ -297,7 +297,7 @@ function Workspace() {
     <div className="workspace-surface min-h-screen">
       <aside id="company-navigation" aria-label="Company navigation" className={`${sidebar ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
         <div className={`flex h-14 shrink-0 items-center ${sidebar ? "justify-between px-2" : "justify-center"}`}>
-          <a href="/" aria-label="Razor home" className="flex items-center gap-3 font-semibold tracking-tight">
+          <a href="/app" aria-label="Razor workspace" className="flex items-center gap-3 font-semibold tracking-tight">
             <span className="grid size-10 place-items-center rounded-xl bg-primary text-xl font-semibold text-white">R</span>
             <span className={`${sidebar ? "" : "lg:hidden"} text-2xl`}>Razor</span>
           </a>
