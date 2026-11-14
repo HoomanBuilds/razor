@@ -27,6 +27,13 @@
     instructions.dataset.recordingFundingInstructions = 'true';
     summary.dataset.recordingFundingSummary = 'true';
   }
+  function frameReceiverEvidence() {
+    if (!recording || location.pathname !== '/receive') return;
+    const evidence = 'Recorded from final NEAR settlement evidence. External delivery attestations retain the treasury owner or reporter trust boundary.';
+    for (const paragraph of document.querySelectorAll('details p.text-muted-foreground')) {
+      if (paragraph.textContent.trim() === evidence) paragraph.hidden = true;
+    }
+  }
   function refresh() {
     document.querySelector('button[aria-label="Refresh workspace"]')?.click();
   }
@@ -65,6 +72,7 @@
     else body.prepend(button);
   }
   const update = () => {
+    frameReceiverEvidence();
     addButton(document.getElementById('payroll-execution'), 'razor-demo-settle', recording ? 'Confirm payments' : 'Simulate payroll delivery', 'settle-payroll');
     const fundingReview = document.querySelector('#treasury-deposit-flow[open]');
     frameFundingReview(fundingReview);
