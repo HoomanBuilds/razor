@@ -21,6 +21,7 @@ import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
 import { PayrollImport, type ImportSelection } from "./payroll-import";
 import { PurchaseMatchFields, PurchaseMatchReview, purchaseMatchInput, VendorCommitments } from "./vendor-commitments";
+import { PayrollExecution } from "./payroll-execution";
 
 function dollars(value: FormDataEntryValue | null, allowZero = false): string {
   try {
@@ -283,6 +284,7 @@ export function Payroll() {
   const [importedRows, setImportedRows] = useState<Record<string, PayrollCsvItem>>({});
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
   const [reviewRunId, setReviewRunId] = useState("");
+  const [executionRunId, setExecutionRunId] = useState("");
   if (!canRead) return null;
   return (
     <div className="grid gap-6">
@@ -454,6 +456,7 @@ export function Payroll() {
       {reviewRunId && (
         <PaymentManagementPanel mode="payroll" initialRunId={reviewRunId} />
       )}
+      {executionRunId && <PayrollExecution key={executionRunId} runId={executionRunId} onReview={() => setReviewRunId(executionRunId)} />}
       <Panel
         title="Pay runs"
         description="A batch remains incomplete until every recipient has a reconciled delivery."
@@ -493,9 +496,9 @@ export function Payroll() {
                   </button>
                   <button
                     className="text-sm text-primary"
-                    onClick={() => navigate("payments")}
+                    onClick={() => setExecutionRunId(payrun.id)}
                   >
-                    Manage payments
+                    Execute run
                   </button>
                 </div>
                 <div className="mt-4 grid gap-2 border-t pt-3">

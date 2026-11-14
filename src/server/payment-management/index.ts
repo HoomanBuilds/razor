@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
 import * as service from "./service";
+import { payrollExecutionRoutes } from "../payroll-execution";
 
 export * from "./service";
 export const paymentManagementRoutes = new Hono<AppEnv>();
+paymentManagementRoutes.route("/payroll/:id/execution", payrollExecutionRoutes);
 const micro = z.string().regex(/^(0|[1-9]\d*)$/).max(31);
 const signed = z.string().regex(/^-?(0|[1-9]\d*)$/).max(32);
 const token = z.string().regex(/^[a-f0-9]{64}$/);
