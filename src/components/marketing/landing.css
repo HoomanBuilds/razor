@@ -411,6 +411,7 @@ html:has(.razor-marketing){scroll-behavior:smooth;scroll-padding-top:88px}
 .rm-header[data-scrolled=true]{max-width:918px;padding:7px 22px;background:#ffffffd9}
 .rm-hero-copy{padding-top:96px}
 .rm-dashboard-figure{max-width:1232px;margin-top:10px!important}
+@media(min-width:1101px){.rm-dashboard-frame{height:760px;mask-image:linear-gradient(#000 0%,#000 82%,transparent 100%)}}
 .rm-capability-grid article,.rm-operations-grid>article{transition:transform 180ms ease,box-shadow 180ms ease}
 .rm-capability-grid article:hover,.rm-operations-grid>article:hover{transform:translateY(-3px);box-shadow:0 12px 30px #132d5810}
 @media(max-width:800px){.rm-hero-copy{padding-top:58px}.rm-header[data-scrolled=true]{padding:10px 16px}}
