@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
 import { ApiError, type AccessContext, type AppEnv } from "../src/server/context";
 import { getDb, row } from "../src/server/db";
@@ -8,7 +13,7 @@ import { decrypt, encrypt, hashToken } from "../src/server/identity/crypto";
 import { getAccess, PERMISSIONS } from "../src/server/identity/session";
 import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { deleteDocument, getDocument, reviewDocument, saveDocumentText, uploadDocument } from "../src/server/document-intake/service";
-import { assertOrdinaryExpenseDocumentReview } from "../src/server/expenses/guard";
+import { assertOrdinaryExpenseDocumentReview, assertOrdinaryExpenseSourceReview } from "../src/server/expenses/guard";
 import { personalExpenseRoutes } from "../src/server/expenses";
 import { cancelExpense, companyExpense, companyExpenseOriginal, correctExpense, expenseInput, getExpensePolicy, listCompanyExpenses, ownExpense, ownExpenseOriginal, personalExpenseOverview, reviewExpense, saveExpensePolicy, submitExpense } from "../src/server/expenses/service";
 
@@ -150,9 +155,104 @@ test("the ordinary document guard protects the source-hash extraction window bef
   assert.equal(pending.document_id, null);
   const source = row<{ id: string }>("SELECT id FROM invoice_documents WHERE organization_id=? AND source_hash=?", f.organizationId, pending.source_hash)!;
   assert.throws(() => assertOrdinaryExpenseDocumentReview(f.access, source.id), hasCode("EXPENSE_REVIEW_REQUIRED"));
+  assert.throws(() => assertOrdinaryExpenseSourceReview(f.access, pending.source_hash), hasCode("EXPENSE_REVIEW_REQUIRED"));
   const result = await promise;
   assert.throws(() => assertOrdinaryExpenseDocumentReview(f.access, source.id), hasCode("EXPENSE_REVIEW_REQUIRED"));
   review({ ...f, fields: input(), source: file(), expense: result.expense }, "accept");
+  assert.throws(() => assertOrdinaryExpenseSourceReview(f.access, pending.source_hash), hasCode("EXPENSE_REVIEW_REQUIRED"));
+});
+
+test("linked replacement is the only active correction and preserves the original policy month while uploading a real new receipt", async () => {
+  const f = await submitted(), rejected = review(f, "reject", "Original source needs replacement"), stamp = "2020-01-15T00:00:00.000Z";
+  getDb().prepare("UPDATE expense_requests SET submitted_at=?,policy_month='2020-01' WHERE id=?").run(stamp, f.expense.id);
+  const replacementFields = { ...f.fields, replacesExpenseId: f.expense.id }, replacementFile = file(), key = randomUUID();
+  const replacement = await submitExpense(f.staff, f.recipientId, key, replacementFields, replacementFile);
+  assert.notEqual(replacement.expense.id, f.expense.id); assert.equal(replacement.expense.policyMonth, "2020-01"); assert.equal(replacement.expense.submittedAt.slice(0, 4), new Date().toISOString().slice(0, 4));
+  const parent = ownExpense(f.staff, f.expense.id); assert.equal(parent.supersededBy, replacement.expense.id); assert.equal(parent.canReplace, false); assert.ok(parent.events.some(value => value.decision === "superseded"));
+  assert.throws(() => correctExpense(f.staff, f.expense.id, { ...f.fields, expectedVersion: parent.version }), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  assert.throws(() => review(f, "accept"), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  await assert.rejects(() => submitExpense(f.staff, f.recipientId, randomUUID(), { ...replacementFields, receiptReference: randomUUID() }, file()), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  getDb().prepare("UPDATE expense_requests SET status='preparing' WHERE id=?").run(replacement.expense.id);
+  assert.doesNotThrow(() => assertOrdinaryExpenseSourceReview(f.access, replacement.expense.receipt!.sourceHash));
+  assert.throws(() => assertOrdinaryExpenseSourceReview(f.access, f.expense.receipt!.sourceHash), hasCode("EXPENSE_REVIEW_REQUIRED"));
+  getDb().prepare("UPDATE expense_requests SET status='submitted' WHERE id=?").run(replacement.expense.id);
+  const child = { ...f, fields: replacementFields, source: replacementFile, expense: replacement.expense }, accepted = review(child, "accept");
+  const paymentId = row<{ payment_id: string }>("SELECT payment_id FROM bills WHERE id=?", accepted.billId!)!.payment_id;
+  getDb().prepare("UPDATE payments SET status='partially_paid',delivered_amount='1000000' WHERE id=?").run(paymentId);
+  assert.throws(() => correctExpense(f.staff, f.expense.id, { ...f.fields, expectedVersion: parent.version }), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  assert.throws(() => reviewExpense(f.access, f.expense.id, { reviewToken: companyExpense(f.access, f.expense.id).reviewToken, decision: "accept", note: "Try a second full claim", confirmed: true }), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  assert.equal((await submitExpense(f.staff, f.recipientId, key, replacementFields, replacementFile)).expense.billId, accepted.billId);
+  assert.equal(row<{ count: number }>("SELECT COUNT(*) count FROM bills WHERE organization_id=?", f.organizationId)!.count, 1);
+  assert.equal(rejected.status, "rejected");
+});
+
+test("an expired original can be explicitly reuploaded with the same hash and reference without restoring another person's data", async () => {
+  const f = await submitted(); review(f, "reject", "Expired receipt needs a fresh retained upload");
+  const originalId = row<{ document_id: string }>("SELECT document_id FROM expense_requests WHERE id=?", f.expense.id)!.document_id;
+  getDb().prepare("UPDATE invoice_documents SET expires_at='2020-01-01T00:00:00.000Z' WHERE id=?").run(originalId);
+  const replacement = await submitExpense(f.staff, f.recipientId, randomUUID(), { ...f.fields, replacesExpenseId: f.expense.id }, f.source);
+  assert.ok(replacement.expense.receipt); assert.equal(replacement.expense.receipt.sourceHash, f.expense.receipt!.sourceHash);
+  assert.notEqual(row<{ document_id: string }>("SELECT document_id FROM expense_requests WHERE id=?", replacement.expense.id)!.document_id, originalId);
+  assert.equal(ownExpense(f.staff, f.expense.id).receipt, null); assert.deepEqual(ownExpenseOriginal(f.staff, replacement.expense.id).bytes, f.source.bytes);
+  assert.throws(() => assertOrdinaryExpenseSourceReview(f.access, f.expense.receipt!.sourceHash), hasCode("EXPENSE_REVIEW_REQUIRED"));
+});
+
+test("replacement caps use the family's original month and accepted ancestors cannot be hidden behind a rejected child", async () => {
+  const f = await submitted({ ...fixture() }, { amountUSDC: "8" }); review(f, "reject", "Correct the original receipt");
+  getDb().prepare("UPDATE expense_requests SET policy_month='2020-01' WHERE id=?").run(f.expense.id);
+  const other = await submitExpense(f.staff, f.recipientId, randomUUID(), input({ amountUSDC: "8" }), file());
+  getDb().prepare("UPDATE expense_requests SET policy_month='2020-01' WHERE id=?").run(other.expense.id);
+  saveExpensePolicy(f.access, { expectedVersion: 0, enabled: true, perExpenseLimitUSDC: "10", monthlyPersonLimitUSDC: "10", requireCostCenter: false, costCenters: [] });
+  await assert.rejects(() => submitExpense(f.staff, f.recipientId, randomUUID(), { ...f.fields, replacesExpenseId: f.expense.id }, file()), hasCode("EXPENSE_POLICY_HOLD"));
+  cancelExpense(f.staff, other.expense.id, other.expense.version);
+  const child = await submitExpense(f.staff, f.recipientId, randomUUID(), { ...f.fields, replacesExpenseId: f.expense.id }, file());
+  review({ ...f, expense: child.expense }, "reject", "Child source rejected");
+  const ordinary = await uploadDocument(f.access, file());
+  const unrelated = reviewDocument(f.access, ordinary.document.id, { revision: ordinary.document.revision, sourceHash: ordinary.document.sourceHash, recipientId: f.recipientId, reference: "INDEPENDENT-ANCESTOR-FIXTURE", title: "Existing reimbursement", agreedUSDC: "8", maxFee: "1", reviewConfirmed: true });
+  getDb().prepare("UPDATE expense_requests SET bill_id=? WHERE id=?").run(unrelated.billId, f.expense.id);
+  assert.throws(() => correctExpense(f.staff, child.expense.id, { ...f.fields, replacesExpenseId: f.expense.id, expectedVersion: ownExpense(f.staff, child.expense.id).version }), hasCode("EXPENSE_LINEAGE_LOCKED"));
+  await assert.rejects(() => submitExpense(f.staff, f.recipientId, randomUUID(), { ...f.fields, replacesExpenseId: child.expense.id }, file()), hasCode("EXPENSE_LINEAGE_LOCKED"));
+});
+
+test("actual concurrent database writers cannot branch the same rejected receipt into two reimbursement requests", async () => {
+  const f = await submitted(); review(f, "reject", "Original receipt needs replacement");
+  const directory = mkdtempSync(join(tmpdir(), "razor-expense-race-")), filename = join(directory, "race.sqlite");
+  getDb().exec(`VACUUM INTO '${filename.replaceAll("'", "''")}'`);
+  const modulePath = new URL("../src/server/expenses/service.ts", import.meta.url).href;
+  function child() {
+    const fields = { ...f.fields, replacesExpenseId: f.expense.id }, source = file();
+    const code = `import {submitExpense} from ${JSON.stringify(modulePath)};try{await submitExpense(${JSON.stringify(f.staff)},${JSON.stringify(f.recipientId)},${JSON.stringify(randomUUID())},${JSON.stringify(fields)},{filename:'receipt.png',mediaType:'image/png',bytes:Buffer.from(${JSON.stringify(source.bytes.toString("base64"))},'base64')});console.log('submitted')}catch(error){console.log(error.code??error.message)}`;
+    return new Promise<string>((resolve, reject) => {
+      const process = spawn(globalThis.process.execPath, ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "-e", code], { cwd: globalThis.process.cwd(), env: { ...globalThis.process.env, DATABASE_PATH: filename }, stdio: ["ignore", "pipe", "pipe"] });
+      let output = "", error = ""; process.stdout.on("data", value => { output += value; }); process.stderr.on("data", value => { error += value; }); process.on("error", reject); process.on("exit", code => code === 0 ? resolve(output.trim()) : reject(new Error(error)));
+    });
+  }
+  try {
+    assert.deepEqual((await Promise.all([child(), child()])).sort(), ["EXPENSE_LINEAGE_LOCKED", "submitted"]);
+    const db = new DatabaseSync(filename); try {
+      assert.equal((db.prepare("SELECT COUNT(*) count FROM expense_requests WHERE replaces_expense_id=?").get(f.expense.id) as { count: number }).count, 1);
+      assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    } finally { db.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("lineage migration preserves legacy expense rows, version history, decisions and foreign-key targets inside the real migration transaction", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys=ON; CREATE TABLE organizations(id TEXT PRIMARY KEY); CREATE TABLE users(id TEXT PRIMARY KEY); CREATE TABLE recipients(id TEXT PRIMARY KEY); CREATE TABLE bills(id TEXT PRIMARY KEY); INSERT INTO organizations VALUES('o'); INSERT INTO users VALUES('u'); INSERT INTO recipients VALUES('r');");
+    db.exec(readFileSync("db/migrations/047-expenses.sql", "utf8"));
+    const insert = db.prepare("INSERT INTO expense_requests(id,organization_id,submitted_by,recipient_id,recipient_version,recipient_snapshot_ciphertext,submitter_name_ciphertext,request_key,request_hash,source_hash,identity_hash,amount,payload_ciphertext,status,replaces_expense_id,submitted_at,updated_at) VALUES(?,'o','u','r',1,'snapshot','name',?,'request',?,?,'1','fields','rejected',?,?,?)");
+    insert.run("parent", "parent-key", "parent-source", "parent-identity", null, "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z");
+    insert.run("child", "child-key", "child-source", "child-identity", "parent", "2020-02-01T00:00:00.000Z", "2020-02-01T00:00:00.000Z");
+    db.prepare("INSERT INTO expense_versions VALUES('parent',1,'fields','snapshot','1','u','2020-01-01T00:00:00.000Z')").run();
+    db.prepare("INSERT INTO expense_events VALUES('event','parent','u','rejected','note','2020-01-01T00:00:00.000Z')").run();
+    db.exec("BEGIN IMMEDIATE"); db.exec(readFileSync("db/migrations/049-expense-correction-lineage.sql", "utf8")); db.exec("COMMIT");
+    assert.equal((db.prepare("SELECT superseded_by FROM expense_requests WHERE id='parent'").get() as { superseded_by: string }).superseded_by, "child");
+    assert.equal((db.prepare("SELECT policy_month FROM expense_requests WHERE id='child'").get() as { policy_month: string }).policy_month, "2020-01");
+    assert.equal((db.prepare("SELECT payload_ciphertext FROM expense_versions WHERE expense_id='parent'").get() as { payload_ciphertext: string }).payload_ciphertext, "fields");
+    assert.equal((db.prepare("SELECT note_ciphertext FROM expense_events WHERE expense_id='parent'").get() as { note_ciphertext: string }).note_ciphertext, "note");
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally { db.close(); }
 });
 
 test("current company permissions are rechecked and another company cannot inspect expense records", async () => {

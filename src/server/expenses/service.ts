@@ -27,8 +27,8 @@ interface Expense {
   id: string; organization_id: string; submitted_by: string; recipient_id: string; recipient_version: number;
   recipient_snapshot_ciphertext: string; submitter_name_ciphertext: string; request_key: string; request_hash: string;
   source_hash: string; identity_hash: string; document_id: string | null; amount: string; payload_ciphertext: string;
-  status: string; version: number; bill_id: string | null; review_ciphertext: string | null; replaces_expense_id: string | null;
-  submitted_at: string; updated_at: string;
+  status: string; version: number; bill_id: string | null; review_ciphertext: string | null; replaces_expense_id: string | null; superseded_by: string | null;
+  policy_month: string; submitted_at: string; updated_at: string;
 }
 interface Policy { version: number; enabled: number; per_expense_limit: string | null; monthly_person_limit: string | null; require_cost_center: number; cost_centers_ciphertext: string }
 const payload = (expense: Expense): Payload => JSON.parse(decrypt(expense.payload_ciphertext));
@@ -55,6 +55,25 @@ function own(userId: string, id: string) {
   if (!expense) throw new ApiError(404, "Expense not found", "EXPENSE_NOT_FOUND");
   return expense;
 }
+function ancestors(expense: Expense) {
+  const values = [expense], seen = new Set([expense.id]);
+  while (values.at(-1)!.replaces_expense_id) {
+    const previous = stored(expense.organization_id, values.at(-1)!.replaces_expense_id!);
+    if (previous.submitted_by !== expense.submitted_by || previous.recipient_id !== expense.recipient_id || seen.has(previous.id) || seen.size >= 100) throw new ApiError(409, "This correction history needs company review", "EXPENSE_LINEAGE_LOCKED");
+    seen.add(previous.id); values.push(previous);
+  }
+  return values;
+}
+function currentTip(expense: Expense, allowOwnBill = false) {
+  if (expense.superseded_by) throw new ApiError(409, "This request was superseded by its linked correction. Continue only the latest request", "EXPENSE_LINEAGE_LOCKED");
+  const history = ancestors(expense);
+  if (history.slice(allowOwnBill ? 1 : 0).some(value => value.bill_id || ["preparing", "accepted"].includes(value.status))) throw new ApiError(409, "This correction history already has an accepted reimbursement. Review its original bill instead of creating another claim", "EXPENSE_LINEAGE_LOCKED");
+  return history;
+}
+function replacementEligible(expense: Expense) {
+  if (!["rejected", "receipt_failed"].includes(expense.status) || expense.bill_id) return false;
+  try { currentTip(expense); return true; } catch (error) { if (error instanceof ApiError) return false; throw error; }
+}
 function readPolicy(organizationId: string) {
   const value = row<Policy>("SELECT * FROM expense_policies WHERE organization_id=?", organizationId);
   return { version: value?.version ?? 0, enabled: value ? !!value.enabled : true, perExpenseLimit: value?.per_expense_limit ?? null, monthlyPersonLimit: value?.monthly_person_limit ?? null, requireCostCenter: !!value?.require_cost_center,
@@ -73,7 +92,7 @@ export function saveExpensePolicy(access: AccessContext, input: unknown) {
   });
 }
 function monthlyUse(organizationId: string, userId: string, month: string, excludeId = "") {
-  return rows<{ amount: string }>("SELECT amount FROM expense_requests WHERE organization_id=? AND submitted_by=? AND substr(submitted_at,1,7)=? AND id<>? AND status NOT IN ('rejected','cancelled')", organizationId, userId, month, excludeId).reduce((sum, value) => sum + BigInt(value.amount), 0n);
+  return rows<{ amount: string }>("SELECT amount FROM expense_requests WHERE organization_id=? AND submitted_by=? AND policy_month=? AND id<>? AND superseded_by IS NULL AND status NOT IN ('rejected','cancelled')", organizationId, userId, month, excludeId).reduce((sum, value) => sum + BigInt(value.amount), 0n);
 }
 function assertPolicy(organizationId: string, userId: string, input: Payload, month: string, excludeId = "") {
   const policy = readPolicy(organizationId), amount = BigInt(parseUnits(input.amountUSDC));
@@ -115,8 +134,8 @@ function reimbursement(expense: Expense) {
 function projection(expense: Expense, sourceText = false) {
   return { id: expense.id, organizationId: expense.organization_id, companyName: row<{ name: string }>("SELECT name FROM organizations WHERE id=?", expense.organization_id)!.name,
     submitterName: decrypt(expense.submitter_name_ciphertext), recipientId: expense.recipient_id, recipientVersion: expense.recipient_version, version: expense.version, amount: expense.amount,
-    fields: payload(expense), status: expense.status, billId: expense.bill_id, replacesExpenseId: expense.replaces_expense_id, review: expense.review_ciphertext ? JSON.parse(decrypt(expense.review_ciphertext)) as { note: string; decision: string; at: string; maxFee?: string } : null,
-    submittedAt: expense.submitted_at, updatedAt: expense.updated_at, receipt: receipt(expense, sourceText), reimbursement: reimbursement(expense),
+    fields: payload(expense), status: expense.status, billId: expense.bill_id, replacesExpenseId: expense.replaces_expense_id, supersededBy: expense.superseded_by, canReplace: replacementEligible(expense), review: expense.review_ciphertext ? JSON.parse(decrypt(expense.review_ciphertext)) as { note: string; decision: string; at: string; maxFee?: string } : null,
+    policyMonth: expense.policy_month, submittedAt: expense.submitted_at, updatedAt: expense.updated_at, receipt: receipt(expense, sourceText), reimbursement: reimbursement(expense),
     events: rows<{ decision: string; note_ciphertext: string; created_at: string }>("SELECT decision,note_ciphertext,created_at FROM expense_events WHERE expense_id=? ORDER BY created_at,id", expense.id).map(value => ({ decision: value.decision, note: decrypt(value.note_ciphertext), at: value.created_at })) };
 }
 function verifyCurrentRecipient(expense: Expense) {
@@ -140,7 +159,7 @@ export function listCompanyExpenses(access: AccessContext, page = 1) {
 }
 export function companyExpense(access: AccessContext, id: string) {
   companyAccess(access); const expense = stored(access.organizationId, id), policy = readPolicy(access.organizationId), details = projection(expense, true);
-  const used = monthlyUse(access.organizationId, expense.submitted_by, expense.submitted_at.slice(0, 7));
+  const used = monthlyUse(access.organizationId, expense.submitted_by, expense.policy_month);
   return { ...details, reviewToken: hash({ id, version: expense.version, status: expense.status, source: expense.source_hash, sourceRevision: details.receipt?.revision ?? null, amount: expense.amount, recipientVersion: expense.recipient_version, policyVersion: policy.version, monthlyUsed: used.toString() }),
     history: rows<{ version: number; payload_ciphertext: string; amount: string; created_at: string }>("SELECT version,payload_ciphertext,amount,created_at FROM expense_versions WHERE expense_id=? ORDER BY version DESC", id).map(value => ({ version: value.version, fields: JSON.parse(decrypt(value.payload_ciphertext)) as Payload, amount: value.amount, createdAt: value.created_at })) };
 }
@@ -158,16 +177,27 @@ export async function submitExpense(userId: string, recipientId: string, request
       return { expense: existing, upload: existing.status === "receipt_failed", duplicate: true };
     }
     if (row<{ count: number }>("SELECT COUNT(*) count FROM expense_requests WHERE submitted_by=? AND substr(submitted_at,1,10)=?", userId, stamp.slice(0, 10))!.count >= 100) throw new ApiError(429, "The daily receipt submission limit is reached. Retry an existing request or return tomorrow", "EXPENSE_SUBMISSION_LIMIT");
-    assertPolicy(recipient.organization_id, userId, parsed, stamp.slice(0, 7));
+    let previous: Expense | null = null, history: Expense[] = [];
     if (parsed.replacesExpenseId) {
       const old = own(userId, parsed.replacesExpenseId);
-      if (old.organization_id !== recipient.organization_id || old.status !== "rejected" || old.bill_id) throw new ApiError(409, "A replacement can reference only your rejected, unpaid request in the same company", "EXPENSE_REPLACEMENT_INVALID");
+      if (old.organization_id !== recipient.organization_id || old.recipient_id !== recipientId || !["rejected", "receipt_failed"].includes(old.status) || old.bill_id) throw new ApiError(409, "A replacement can reference only your rejected or failed-upload unpaid request for the same company receiving profile", "EXPENSE_REPLACEMENT_INVALID");
+      history = currentTip(old); previous = old;
     }
-    if (row("SELECT id FROM expense_requests WHERE organization_id=? AND (source_hash=? OR identity_hash=?)", recipient.organization_id, sourceHash, identity(parsed)) || row("SELECT id FROM invoice_documents WHERE organization_id=? AND source_hash=?", recipient.organization_id, sourceHash) || row("SELECT id FROM bills WHERE organization_id=? AND document_hash=?", recipient.organization_id, sourceHash)) throw new ApiError(409, "This receipt or merchant reference is already recorded. Ask finance to inspect the existing request or invoice", "EXPENSE_DUPLICATE");
+    const policyMonth = previous?.policy_month ?? stamp.slice(0, 7);
+    assertPolicy(recipient.organization_id, userId, parsed, policyMonth);
+    const permitted = new Set(history.map(value => value.id));
+    const collisions = rows<{ id: string }>("SELECT id FROM expense_requests WHERE organization_id=? AND (source_hash=? OR identity_hash=?)", recipient.organization_id, sourceHash, identity(parsed));
+    const retained = row<{ id: string; created_by: string; bill_id: string | null }>("SELECT id,created_by,bill_id FROM invoice_documents WHERE organization_id=? AND source_hash=?", recipient.organization_id, sourceHash);
+    if (collisions.some(value => !permitted.has(value.id)) || retained && (retained.bill_id || retained.created_by !== userId || !history.some(value => value.document_id === retained.id)) || row("SELECT id FROM bills WHERE organization_id=? AND document_hash=?", recipient.organization_id, sourceHash)) throw new ApiError(409, "This receipt or merchant reference is already recorded. Ask finance to inspect the existing request or invoice", "EXPENSE_DUPLICATE");
     const id = randomUUID(), name = row<{ name: string | null }>("SELECT name FROM users WHERE id=?", userId)?.name || recipient.name;
-    db.prepare("INSERT INTO expense_requests(id,organization_id,submitted_by,recipient_id,recipient_version,recipient_snapshot_ciphertext,submitter_name_ciphertext,request_key,request_hash,source_hash,identity_hash,amount,payload_ciphertext,status,replaces_expense_id,submitted_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'uploading',?,?,?)")
-      .run(id, recipient.organization_id, userId, recipientId, recipient.version, encrypt(JSON.stringify(recipient)), encrypt(name), requestKey, fingerprint, sourceHash, identity(parsed), parseUnits(parsed.amountUSDC), encrypt(JSON.stringify(parsed)), parsed.replacesExpenseId ?? null, stamp, stamp);
+    if (previous) {
+      const changed = db.prepare("UPDATE expense_requests SET superseded_by=?,version=version+1,updated_at=? WHERE id=? AND status IN ('rejected','receipt_failed') AND bill_id IS NULL AND superseded_by IS NULL").run(id, stamp, previous.id);
+      if (!changed.changes) throw new ApiError(409, "Another correction already superseded this request", "EXPENSE_LINEAGE_LOCKED");
+    }
+    db.prepare("INSERT INTO expense_requests(id,organization_id,submitted_by,recipient_id,recipient_version,recipient_snapshot_ciphertext,submitter_name_ciphertext,request_key,request_hash,source_hash,identity_hash,amount,payload_ciphertext,status,replaces_expense_id,policy_month,submitted_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'uploading',?,?,?,?)")
+      .run(id, recipient.organization_id, userId, recipientId, recipient.version, encrypt(JSON.stringify(recipient)), encrypt(name), requestKey, fingerprint, sourceHash, identity(parsed), parseUnits(parsed.amountUSDC), encrypt(JSON.stringify(parsed)), parsed.replacesExpenseId ?? null, policyMonth, stamp, stamp);
     const expense = stored(recipient.organization_id, id); snapshotVersion(expense, userId);
+    if (previous) event(previous, userId, "superseded", "This rejected request was superseded by one linked corrected receipt. It can no longer be resubmitted or accepted.");
     return { expense, upload: true, duplicate: false };
   });
   if (initial.upload) {
@@ -189,11 +219,12 @@ export function correctExpense(userId: string, id: string, input: unknown) {
   return transaction(db => {
     const expense = own(userId, id), recipient = eligibleRecipient(userId, expense.recipient_id);
     if (!["returned", "rejected", "cancelled", "receipt_failed"].includes(expense.status) || expense.bill_id || expense.version !== parsed.expectedVersion) throw new ApiError(409, "Only a current unaccepted request can be revised. Accepted reimbursements keep their original liability", "EXPENSE_CORRECTION_LOCKED");
+    const history = currentTip(expense);
     if (!receipt(expense)) throw new ApiError(409, "The original receipt is unavailable. Ask finance to reject this request and submit a new receipt linked as its correction", "EXPENSE_RECEIPT_UNAVAILABLE");
     const { expectedVersion: _version, ...fields } = parsed;
     if ((fields.replacesExpenseId ?? null) !== expense.replaces_expense_id) throw new ApiError(409, "Keep the original correction relationship", "EXPENSE_CORRECTION_LOCKED");
-    assertPolicy(expense.organization_id, userId, fields, expense.submitted_at.slice(0, 7), expense.id);
-    if (row("SELECT id FROM expense_requests WHERE organization_id=? AND identity_hash=? AND id<>?", expense.organization_id, identity(fields), id)) throw new ApiError(409, "This merchant reference already belongs to another request", "EXPENSE_DUPLICATE");
+    assertPolicy(expense.organization_id, userId, fields, expense.policy_month, expense.id);
+    if (rows<{ id: string }>("SELECT id FROM expense_requests WHERE organization_id=? AND identity_hash=? AND id<>?", expense.organization_id, identity(fields), id).some(value => !history.some(ancestor => ancestor.id === value.id))) throw new ApiError(409, "This merchant reference already belongs to another request", "EXPENSE_DUPLICATE");
     db.prepare("UPDATE expense_requests SET payload_ciphertext=?,identity_hash=?,amount=?,recipient_version=?,recipient_snapshot_ciphertext=?,version=version+1,status='submitted',review_ciphertext=NULL,updated_at=? WHERE id=?")
       .run(encrypt(JSON.stringify(fields)), identity(fields), parseUnits(fields.amountUSDC), recipient.version, encrypt(JSON.stringify(recipient)), now(), id);
     snapshotVersion(stored(expense.organization_id, id), userId); event(expense, userId, "corrected", "Staff revised and resubmitted the original request. Prior receipt, terms and review history remain linked."); audit(userId, expense.organization_id, "expense.corrected", id);
@@ -204,6 +235,7 @@ export function cancelExpense(userId: string, id: string, expectedVersion: numbe
   return transaction(db => {
     const expense = own(userId, id);
     if (expense.bill_id || !["submitted", "returned", "receipt_failed"].includes(expense.status) || expense.version !== expectedVersion) throw new ApiError(409, "Only an unaccepted current request can be cancelled", "EXPENSE_CANCELLATION_LOCKED");
+    currentTip(expense);
     db.prepare("UPDATE expense_requests SET status='cancelled',version=version+1,updated_at=? WHERE id=?").run(now(), id);
     event(expense, userId, "cancelled", "Staff cancelled the unaccepted request. No reimbursement bill was created.");
     audit(userId, expense.organization_id, "expense.cancelled", id); return projection(stored(expense.organization_id, id));
@@ -214,6 +246,7 @@ export function reviewExpense(access: AccessContext, id: string, input: unknown)
   const current = companyAccess(access, true), parsed = reviewExpenseInput.parse(input);
   return transaction(db => {
     const expense = stored(current.organizationId, id);
+    currentTip(expense, true);
     if (expense.status === "accepted" && parsed.decision === "accept") {
       const previous = JSON.parse(decrypt(expense.review_ciphertext!)) as { maxFee: string };
       if (previous.maxFee !== parseUnits(parsed.maxFeeUSDC)) throw new ApiError(409, "This accepted expense already has its reimbursement draft. Review that bill's exact fees separately", "EXPENSE_ALREADY_ACCEPTED");
@@ -221,7 +254,7 @@ export function reviewExpense(access: AccessContext, id: string, input: unknown)
     }
     if (!["submitted", "returned"].includes(expense.status) || companyExpense(current, id).reviewToken !== parsed.reviewToken) throw new ApiError(409, "The expense, receipt or policy changed. Refresh before review", "EXPENSE_REVIEW_CHANGED");
     if (parsed.decision === "accept") {
-      verifyCurrentRecipient(expense); assertPolicy(current.organizationId, expense.submitted_by, payload(expense), expense.submitted_at.slice(0, 7), expense.id);
+      verifyCurrentRecipient(expense); assertPolicy(current.organizationId, expense.submitted_by, payload(expense), expense.policy_month, expense.id);
       const source = receipt(expense);
       if (!source) throw new ApiError(409, "The receipt was deleted or expired. Request a corrected submission before acceptance", "EXPENSE_RECEIPT_UNAVAILABLE");
       const document = getDocument(capability(expense), expense.document_id!);
