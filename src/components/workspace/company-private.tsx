@@ -24,7 +24,7 @@ export function CompanyPrivateProcessing() {
     } catch { setFileError("Choose a valid company-operated review JSON file up to 256 KB. The file has not been uploaded."); }
     finally { setReading(false); }
   }
-  return <Panel title="Process privately on your company computer" description="An optional company-operated mode keeps original invoices, the full extraction and your NEAR AI key outside Razor's hosted application.">
+  return <Panel title="Process privately on your company computer" description="Run verified inference on your company computer. Original invoices and your NEAR AI key stay outside Razor's hosted server.">
     <div className="grid min-w-0 grid-cols-1 gap-5">
       <p className="text-sm text-muted-foreground">Your computer verifies the required NEAR AI gateway and model identity, encrypts input and verifies signed output using the same private client as hosted analysis. Your own NEAR AI account pays for inference. Original files and local review artifacts remain on your computer until you delete them; the review file contains plaintext extracted fields. Revoke your key through your NEAR AI account. No key is entered in this page.</p>
       <details className="min-w-0 rounded-lg border p-4 text-sm"><summary className="cursor-pointer font-medium">Run the company-operated tool</summary><div className="mt-3 grid min-w-0 grid-cols-1 gap-3">
@@ -35,7 +35,8 @@ export function CompanyPrivateProcessing() {
         <p className="text-xs text-muted-foreground">The evidence verifier reports individual claim limits. A signed encrypted response does not independently authenticate separately supplied decrypted fields or prove that an invoice is correct.</p>
       </div></details>
       {!allowed ? <p className="text-sm text-muted-foreground">A finance preparer with document access can import explicitly reviewed fields.</p> : <>
-        <Field label="Open a local company review file" hint="JSON only, up to 256 KB. Reading this file sends nothing to Razor."><input type="file" accept="application/json,.json" disabled={reading || !!busy} onChange={event => void choose(event.target.files?.[0])} /></Field>
+        <Field label="Open a local company review file" hint="JSON only, up to 256 KB. This page reads the full review locally; only the fields you approve below are sent to Razor's server."><input type="file" accept="application/json,.json" disabled={reading || !!busy} onChange={event => void choose(event.target.files?.[0])} /></Field>
+        <p className="text-xs leading-5 text-muted-foreground">The review file contains plaintext and is accessible to the code served by this website. Use the company tool without opening its output here if you want all plaintext to stay outside the web application.</p>
         {reading && <p role="status" className="text-sm">Reading the local review file...</p>}
         {fileError && <p role="alert" className="text-sm text-destructive">{fileError}</p>}
         {review && <div className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">
