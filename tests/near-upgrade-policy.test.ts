@@ -7,7 +7,7 @@ const account = "treasury.near";
 const key = `ed25519:${base58.encode(new Uint8Array(32).fill(7))}`;
 const other = `ed25519:${base58.encode(new Uint8Array(32).fill(8))}`;
 const entry = (publicKey: string) => ({ public_key: publicKey, access_key: { permission: "FullAccess" } });
-const env = (keys = [key]): NodeJS.ProcessEnv => ({ NEAR_CONTRACT_UPGRADE_POLICY: "owner_controlled", NEAR_CONTRACT_UPGRADE_KEYS: JSON.stringify({ [account]: keys }) });
+const env = (keys = [key]): Partial<NodeJS.ProcessEnv> => ({ NEAR_CONTRACT_UPGRADE_POLICY: "owner_controlled", NEAR_CONTRACT_UPGRADE_KEYS: JSON.stringify({ [account]: keys }) });
 
 test("immutable deployment policy remains keyless and never accepts a populated account", () => {
   assert.equal(describeContractUpgradePolicy(account, {}).upgradable, false);

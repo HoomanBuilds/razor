@@ -213,7 +213,7 @@ function treasury(value: RequestRow, scope: Scope) {
     );
   return config;
 }
-async function immutableTreasury(value: RequestRow, scope: Scope) {
+async function reviewedTreasury(value: RequestRow, scope: Scope) {
   const expected =
     value.terms_hash && scope.treasury_code_hash
       ? scope.treasury_code_hash
@@ -222,7 +222,7 @@ async function immutableTreasury(value: RequestRow, scope: Scope) {
 }
 async function borrowerTarget(value: RequestRow, scope: Scope) {
   const config = treasury(value, scope),
-    anchor = await immutableTreasury(value, scope);
+    anchor = await reviewedTreasury(value, scope);
   const live = await finalizedContractView<{
     company_id: string;
     owner_id: string;
@@ -1103,7 +1103,7 @@ export async function prepareFinancingAction(
   }
   if (["principal", "collateral"].includes(input.action))
     await borrowerTarget(value, scope);
-  if (input.action === "recover_advance") await immutableTreasury(value, scope);
+  if (input.action === "recover_advance") await reviewedTreasury(value, scope);
   const actions: WalletTransaction[] = [],
     args = { loan_id: frozen.terms.id, terms_hash: frozen.hash };
   const unresolved = row<{
@@ -1476,7 +1476,7 @@ export async function financingAdvanceEvidence(
     `loan:${value.loan_id}`,
   );
   await configured(scope, true);
-  await immutableTreasury(value, scope);
+  await reviewedTreasury(value, scope);
   const receiptIdentity = tokenReceiptIdentity(proof),
     evidence = {
       loanId: value.loan_id,

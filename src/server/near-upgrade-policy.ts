@@ -2,7 +2,7 @@ import { base58 } from "@scure/base";
 import { ApiError } from "./context";
 import { validNearAccount } from "./payments/near";
 
-export function describeContractUpgradePolicy(accountId: string, env: NodeJS.ProcessEnv = process.env) {
+export function describeContractUpgradePolicy(accountId: string, env: Partial<NodeJS.ProcessEnv> = process.env) {
   const mode = env.NEAR_CONTRACT_UPGRADE_POLICY || "immutable";
   if (mode === "immutable") {
     return {
@@ -40,7 +40,7 @@ export function describeContractUpgradePolicy(accountId: string, env: NodeJS.Pro
   };
 }
 
-export function assertContractUpgradeKeys(accountId: string, keys: unknown, env: NodeJS.ProcessEnv = process.env): void {
+export function assertContractUpgradeKeys(accountId: string, keys: unknown, env: Partial<NodeJS.ProcessEnv> = process.env): void {
   const policy = describeContractUpgradePolicy(accountId, env);
   if (!Array.isArray(keys)) throw new ApiError(409, "Contract access keys could not be verified", "UPGRADE_KEYS_UNVERIFIED");
   if (keys.length !== policy.publicKeys.length) throw new ApiError(409, "Contract access keys differ from the approved upgrade policy", "UPGRADE_KEYS_MISMATCH");

@@ -336,7 +336,7 @@ export function prepareDeployment(input: DeploymentInput) {
               },
             },
             scopePublicationRequired: true,
-            note: "Deployment does not publish a financing offer, create a lender or make credit available. An authorized operator must publish actual eligibility and responsibilities in the database after verifying this immutable deployment and token storage. Each loan remains explicitly accepted, storage-funded and backed by real principal.",
+            note: "Deployment does not publish a financing offer, create a lender or make credit available. An authorized operator must publish actual eligibility and responsibilities in the database after verifying this reviewed deployment, its selected upgrade policy and token storage. Each loan remains explicitly accepted, storage-funded and backed by real principal.",
           }
         : null,
     optionalCashClearingSetup:
