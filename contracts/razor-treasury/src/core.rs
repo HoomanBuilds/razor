@@ -89,8 +89,9 @@ impl CompanyTreasury {
             per_payment_limit.0 > 0 && daily_limit.0 >= per_payment_limit.0,
             "INVALID_LIMITS"
         );
+        let company_prefix = env::sha256(company_id.as_bytes());
         let prefix = |tag: u8| {
-            let mut bytes = env::sha256(company_id.as_bytes());
+            let mut bytes = company_prefix.clone();
             bytes.push(tag);
             bytes
         };
@@ -1415,8 +1416,15 @@ impl CompanyTreasury {
         )
     }
     fn attempt_terms_hash(&self, payment: &Payment, attempt: &Attempt) -> String {
+        self.attempt_terms_hash_with_payment_hash(&self.payment_terms_hash(payment), attempt)
+    }
+    fn attempt_terms_hash_with_payment_hash(
+        &self,
+        payment_terms_hash: &str,
+        attempt: &Attempt,
+    ) -> String {
         hash_terms(
-            json!({"domain":"razor_route_approval_v1","payment_terms_hash":self.payment_terms_hash(payment),"attempt_id":attempt.id,
+            json!({"domain":"razor_route_approval_v1","payment_terms_hash":payment_terms_hash,"attempt_id":attempt.id,
             "destination":attempt.destination,"route":attempt.route,"use_backup":attempt.use_backup,"policy_version":U64(self.policy_version)}),
         )
     }
@@ -1461,16 +1469,19 @@ impl CompanyTreasury {
                         || self.backup_assets.get(&attempt.destination.network)
                             == Some(&attempt.destination.asset_id))
             });
+        let payment_terms_hash = self.payment_terms_hash(payment);
+        let attempt_terms_hash = attempt
+            .map(|attempt| self.attempt_terms_hash_with_payment_hash(&payment_terms_hash, attempt));
         ApprovalStatus {
             policy_version: U64(self.policy_version),
             approval_amount: U128(add(payment.amount.0, payment.max_fee.0)),
             required_approvals: required,
-            payment_terms_hash: self.payment_terms_hash(payment),
+            payment_terms_hash,
             payment_collected: payment_approvals.len() as u8,
             payment_approvals,
             payment_ready,
             attempt_id: attempt.map(|attempt| attempt.id.clone()),
-            attempt_terms_hash: attempt.map(|attempt| self.attempt_terms_hash(payment, attempt)),
+            attempt_terms_hash,
             attempt_collected: attempt_approvals.len() as u8,
             attempt_approvals,
             attempt_ready,

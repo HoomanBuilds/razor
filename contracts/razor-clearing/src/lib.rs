@@ -167,8 +167,7 @@ impl Clearing {
         let cash = serde_json::from_str::<Manifest>(&manifest_json)
             .ok()
             .is_some_and(|manifest| manifest.cash.is_some());
-        let overhead = if cash { 32768 } else { 8192 };
-        U128((manifest_json.len() as u128 * 4 + overhead) * env::storage_byte_cost().as_yoctonear())
+        registration_storage_cost(manifest_json.len(), cash)
     }
     #[payable]
     pub fn set_paused(&mut self, paused: bool) {
@@ -199,7 +198,7 @@ impl Clearing {
         );
         require!(
             env::attached_deposit().as_yoctonear()
-                >= self.registration_cost(manifest_json.clone()).0,
+                >= registration_storage_cost(manifest_json.len(), manifest.cash.is_some()).0,
             "STORAGE_DEPOSIT_REQUIRED"
         );
         let mut calls: Option<Promise> = None;
@@ -508,6 +507,10 @@ impl Clearing {
             );
         }
     }
+}
+fn registration_storage_cost(manifest_bytes: usize, cash: bool) -> U128 {
+    let overhead = if cash { 32768 } else { 8192 };
+    U128((manifest_bytes as u128 * 4 + overhead) * env::storage_byte_cost().as_yoctonear())
 }
 fn treasury_call(account: &AccountId, company_id: &str) -> Promise {
     Promise::new(account.clone()).function_call(

@@ -1530,3 +1530,103 @@ fn standing_limits_reject_overflow_cross_chain_and_executor_self_grants() {
     let mut cross_chain = setup(false);
     assert!(catch_unwind(AssertUnwindSafe(|| standing_grant(&mut cross_chain))).is_err());
 }
+
+#[test]
+fn company_collection_prefixes_preserve_the_original_borsh_bytes() {
+    call("owner.testnet", 0);
+    let company_id = "company-prefix-compatibility".to_string();
+    let treasury = CompanyTreasury::new(
+        company_id.clone(),
+        account("owner.testnet"),
+        account("usdc.testnet"),
+        U128(500),
+        U128(1_000),
+    );
+    macro_rules! check_prefix {
+        ($field:ident, $tag:expr, $key:ty, $value:ty) => {{
+            let mut expected_prefix = env::sha256(company_id.as_bytes());
+            expected_prefix.push($tag);
+            let expected = IterableMap::<$key, $value>::new(expected_prefix);
+            assert_eq!(
+                near_sdk::borsh::to_vec(&treasury.$field).unwrap(),
+                near_sdk::borsh::to_vec(&expected).unwrap(),
+                stringify!($field),
+            );
+        }};
+    }
+    let mut expected_prefix = env::sha256(company_id.as_bytes());
+    expected_prefix.push(b'b');
+    let mut backup_assets = IterableMap::<String, String>::new(expected_prefix);
+    backup_assets.insert("near".into(), "nep141:usdc.testnet".into());
+    assert_eq!(
+        near_sdk::borsh::to_vec(&treasury.backup_assets).unwrap(),
+        near_sdk::borsh::to_vec(&backup_assets).unwrap(),
+    );
+    check_prefix!(withdrawals, b'w', u64, (U128, bool));
+    check_prefix!(retained_assets, b'h', AccountId, RetainedAsset);
+    check_prefix!(recipients, b'r', String, Recipient);
+    check_prefix!(payments, b'p', String, Payment);
+    check_prefix!(obligations, b'o', String, String);
+    check_prefix!(spent_by_day, b'd', u64, u128);
+    check_prefix!(standing_mandates, b'm', String, StandingMandate);
+    check_prefix!(standing_payments, b'n', String, String);
+    check_prefix!(recipient_activation, b'c', String, U64);
+    check_prefix!(distributions, b'e', String, Distribution);
+    check_prefix!(void_distributions, b'g', String, bool);
+    check_prefix!(partial_receipts, b't', String, String);
+}
+
+#[test]
+fn approval_status_hash_reuse_preserves_legacy_payment_and_route_bytes() {
+    let mut treasury = setup(false);
+    prepare(&mut treasury, "hash-compatible-attempt", false, 102);
+    let payment = treasury.get_payment("payment".into()).unwrap();
+    let attempt = payment.attempts.last().unwrap();
+    let legacy_payment = hash_terms(
+        json!({"domain":"razor_payment_approval_v1","treasury":env::current_account_id(),"company_id":treasury.company_id,"payment_id":payment.id,
+        "recipient_id":payment.recipient_id,"recipient_version":payment.recipient_version,"amount":payment.amount,"max_fee":payment.max_fee,
+        "expires_at_ms":payment.expires_at_ms,"not_before_ms":payment.not_before_ms,"reference":payment.reference,"policy_version":U64(treasury.policy_version),"required_approvals":treasury.required_approvals(&payment)}),
+    );
+    let legacy_attempt = hash_terms(
+        json!({"domain":"razor_route_approval_v1","payment_terms_hash":legacy_payment,"attempt_id":attempt.id,
+        "destination":attempt.destination,"route":attempt.route,"use_backup":attempt.use_backup,"policy_version":U64(treasury.policy_version)}),
+    );
+    let status = treasury.get_approval_status("payment".into(), Some(attempt.id.clone()));
+    assert_eq!(status.payment_terms_hash, legacy_payment);
+    assert_eq!(
+        status.attempt_terms_hash.as_deref(),
+        Some(legacy_attempt.as_str())
+    );
+    assert_eq!(
+        treasury.attempt_terms_hash(&payment, attempt),
+        legacy_attempt
+    );
+    assert_eq!(
+        treasury
+            .get_approval_status("payment".into(), None)
+            .attempt_terms_hash,
+        Some(legacy_attempt.clone())
+    );
+    let mut changed_payment = payment.clone();
+    changed_payment.amount = U128(payment.amount.0 + 1);
+    assert_ne!(
+        treasury.payment_terms_hash(&changed_payment),
+        legacy_payment
+    );
+    assert_ne!(
+        treasury.attempt_terms_hash(&changed_payment, attempt),
+        legacy_attempt
+    );
+    let mut changed_attempt = attempt.clone();
+    changed_attempt.route.quote_hash = "b".repeat(64);
+    assert_ne!(
+        treasury.attempt_terms_hash(&payment, &changed_attempt),
+        legacy_attempt
+    );
+    treasury.policy_version += 1;
+    assert_ne!(treasury.payment_terms_hash(&payment), legacy_payment);
+    assert_ne!(
+        treasury.attempt_terms_hash(&payment, attempt),
+        legacy_attempt
+    );
+}

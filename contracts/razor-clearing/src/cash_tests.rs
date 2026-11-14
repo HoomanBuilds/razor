@@ -650,3 +650,62 @@ fn legacy_manifest_json_excludes_cash_and_keeps_old_storage_pricing() {
     let decoded: Manifest = serde_json::from_str(&wire).unwrap();
     assert!(decoded.cash.is_none());
 }
+
+#[test]
+fn storage_quotes_keep_legacy_cash_and_invalid_json_behavior() {
+    let contract = configured();
+    for wire in [
+        String::new(),
+        "invalid-json".to_string(),
+        "{}".to_string(),
+        "{\"cash\":{}}".to_string(),
+        serde_json::to_string(&manifest("quote-legacy")).unwrap(),
+        serde_json::to_string(&cash_manifest("quote-cash")).unwrap(),
+    ] {
+        let cash = serde_json::from_str::<Manifest>(&wire)
+            .ok()
+            .is_some_and(|value| value.cash.is_some());
+        let overhead = if cash { 32768 } else { 8192 };
+        let expected =
+            U128((wire.len() as u128 * 4 + overhead) * env::storage_byte_cost().as_yoctonear());
+        assert_eq!(contract.registration_cost(wire.clone()), expected);
+        assert_eq!(registration_storage_cost(wire.len(), cash), expected);
+    }
+}
+
+#[test]
+fn registration_keeps_exact_legacy_and_cash_storage_deposit_boundaries() {
+    for cash in [false, true] {
+        let mut contract = configured();
+        let terms = if cash {
+            cash_manifest("cash-quote-boundary")
+        } else {
+            manifest("legacy-quote-boundary")
+        };
+        let wire = serde_json::to_string(&terms).unwrap();
+        let hash = digest(&wire);
+        let quoted = contract.registration_cost(wire.clone());
+        testing_env!(
+            context("alice.testnet")
+                .attached_deposit(NearToken::from_yoctonear(quoted.0 - 1))
+                .build()
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || contract.register_round(wire.clone(), hash.clone())
+            ))
+            .is_err()
+        );
+        assert!(contract.get_round(terms.id.clone()).is_none());
+        testing_env!(
+            context("alice.testnet")
+                .attached_deposit(NearToken::from_yoctonear(quoted.0))
+                .build()
+        );
+        contract.register_round(wire.clone(), hash.clone()).detach();
+        let stored = contract.get_round(terms.id).unwrap();
+        assert_eq!(stored.manifest_json, wire);
+        assert_eq!(stored.hash, hash);
+        assert_eq!(stored.status, "verifying");
+    }
+}
