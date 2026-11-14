@@ -27,6 +27,7 @@ try {
 if (!/^[a-f0-9]{40,64}$/i.test(sourceRevision)) sourceRevision = "";
 
 const config: NextConfig = {
+  agentRules: false,
   env: {
     NEXT_PUBLIC_RAZOR_SOURCE_REVISION: sourceRevision,
     NEXT_PUBLIC_RAZOR_SOURCE_STATE: sourceState,
