@@ -7,6 +7,7 @@ import { AssetGuidance } from "@/components/assets/asset-guidance";
 import { useRef, useState } from "react";
 import { api, RequestError } from "@/lib/api";
 import { dateLabel, usd } from "@/lib/format";
+import { destinationGuidance } from "@/lib/destination-guidance";
 import { formatUnits } from "@/lib/money";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
 import { paymentLabel } from "@/lib/payment-label";
@@ -73,7 +74,7 @@ export function PaymentFundingTask({ paymentId, close }: { paymentId: string; cl
       <AssetGuidance kind="funding" className="sm:col-span-2" tokens={assets?.tokens ?? []} selectedAssetId={source} onSelect={asset => { setSource(asset.assetId); setWalletId(""); }} disabled={!!busy} />
       <Field as="div" label="Source asset and network"><AssetPicker label="Source asset and network" tokens={tokens} value={source} onValueChange={value=>{setSource(value);setWalletId("");}} disabled={!!busy} required/></Field>
       <Field label="Connected source wallet" hint="This wallet receives any source refund. Razor verifies its account and network again before the transfer."><select required className={control} value={walletId} onChange={event => setWalletId(event.target.value)}><option value="">Choose your verified wallet</option><option value="manual">Other wallet or exchange</option>{wallets.map(value => <option key={value.id} value={value.id}>{value.label || value.family}: {value.address}</option>)}</select></Field>
-      {walletId === "manual" && <Field label="Source-chain recovery address" hint="Use a personal address you control on the selected source network. Follow the exact deposit amount and memo in your wallet."><input required className={control} value={refundAddress} onChange={event => setRefundAddress(event.target.value.trim())} /></Field>}
+      {walletId === "manual" && <Field label="Source-chain recovery address" hint={`Use a personal address you control on the selected source network. Follow the exact deposit amount and memo in your wallet. ${destinationGuidance(selected?.blockchain || "")}`}><input required className={control} value={refundAddress} onChange={event => setRefundAddress(event.target.value.trim())} /></Field>}
       <div className="self-end"><Action disabled={!!busy || (!wallet && !(walletId === "manual" && refundAddress)) || !selected} busy={busy === "quote"}>Quote exactly {usd(task.shortfall)} of USDC funding</Action><p className="mt-2 text-xs text-muted-foreground">Source-chain gas is separate. The quote uses current Intents liquidity; a listed asset may have no executable route.</p></div>
       {!wallets.length && selected && <p className="text-xs text-muted-foreground">Connect a compatible mainnet wallet in your account settings, or choose another wallet and follow the signed deposit instructions.</p>}
     </form>}

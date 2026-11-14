@@ -1,11 +1,12 @@
 import { base32nopad, base58, base58check, base58xrp, bech32, bech32m } from "@scure/base";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { getAddress, isAddress } from "viem";
 
 // XRP serialization is adapted from ripple-address-codec; see recipient-destination.NOTICE.
 
 const EVM = new Set(["eth", "base", "arb", "pol", "op", "avax", "bsc", "gnosis", "aurora", "bera", "plasma", "monad", "xlayer", "scroll", "adi", "hood", "hlevm", "hypercore", "linea", "mantle", "blast", "celo", "zksync", "abs"]);
-const ALIASES: Record<string, string> = { ethereum: "eth", arbitrum: "arb", polygon: "pol", solana: "sol", optimism: "op", avalanche: "avax", berachain: "bera", bitcoin: "btc", litecoin: "ltc", dogecoin: "doge", bitcoincash: "bch", xlm: "stellar", trx: "tron", bnb: "bsc" };
+const ALIASES: Record<string, string> = { ethereum: "eth", arbitrum: "arb", polygon: "pol", solana: "sol", optimism: "op", avalanche: "avax", berachain: "bera", bitcoin: "btc", litecoin: "ltc", dogecoin: "doge", bitcoincash: "bch", xlm: "stellar", trx: "tron", bnb: "bsc", quantus: "qtc", pearl: "prl" };
 const checked58 = base58check(sha256);
 export const usesEvmAddress = (network: string) => EVM.has(canonicalNetwork(network));
 export const canonicalNetwork = (network: string) => ALIASES[network.toLowerCase()] ?? network.toLowerCase();
@@ -59,6 +60,39 @@ function witness(address: string, prefix: string) {
   assert(decoded.prefix === prefix && bytes.length >= 2 && bytes.length <= 40 && (decoded.words[0] !== 0 || bytes.length === 20 || bytes.length === 32));
 }
 
+function quantus(address: string) {
+  const bytes = base58.decode(address);
+  assert(bytes.length === 36 && bytes[0] === 0x6f && bytes[1] === 0x40);
+  const payload = bytes.slice(0, 34);
+  const checksum = blake2b(new Uint8Array([...new TextEncoder().encode("SS58PRE"), ...payload]), { dkLen: 64 });
+  assert(bytes[34] === checksum[0] && bytes[35] === checksum[1]);
+}
+
+function pearl(address: string) {
+  const decoded = bech32m.decode(address as `${string}1${string}`);
+  assert(decoded.prefix === "prl" && decoded.words[0] === 1 && bech32m.fromWords(decoded.words.slice(1)).length === 32);
+}
+
+function miden(address: string) {
+  assert(address === address.toLowerCase() || address === address.toUpperCase());
+  const [identifier, routing, ...extra] = address.toLowerCase().split("_");
+  assert(extra.length === 0);
+  const decoded = bech32m.decodeToBytes(identifier, 200);
+  assert(decoded.prefix === "mm");
+  if (decoded.bytes[0] !== 232 || decoded.bytes.length !== 16) throw new DestinationError("Copy a current mainnet Miden basic-wallet address beginning mm1a from your wallet. Legacy address formats are not supported.", "DESTINATION_ADDRESS_FORMAT_UNSUPPORTED");
+  const id = decoded.bytes.slice(1), prefix = id.slice(0, 8).reduce((value, byte) => value * 256n + BigInt(byte), 0n);
+  assert(prefix < 0xffffffff00000001n && id[8] < 128);
+  if ((id[7] & 15) !== 1) throw new DestinationError("Copy an updated mainnet Miden basic-wallet address from a current wallet. This account address uses an unsupported legacy version.", "DESTINATION_ADDRESS_FORMAT_UNSUPPORTED");
+  if (routing !== undefined) {
+    assert(routing.length > 0);
+    const parameters = bech32m.decodeToBytes(`mrp1${routing}`, 200).bytes;
+    if (parameters.length !== 3 || parameters[0] !== 0) throw new DestinationError("Use a mainnet Miden basic-wallet address without encryption-key or unknown routing parameters. Razor never removes routing instructions from your address.", "DESTINATION_METADATA_UNSUPPORTED");
+    const profile = parameters[1] * 256 + parameters[2], tagLength = profile >> 10;
+    if ((profile & 1023) !== 0) throw new DestinationError("Use a current mainnet Miden address for the BasicWallet interface.", "DESTINATION_ADDRESS_FORMAT_UNSUPPORTED");
+    assert(tagLength <= 32 || tagLength === 63);
+  }
+}
+
 function cashAddress(address: string) {
   const value = address.includes(":") ? address : `bitcoincash:${address}`;
   assert(value === value.toLowerCase() || value === value.toUpperCase());
@@ -86,6 +120,9 @@ export function normalizeDestination(networkInput: string, addressInput: string,
     if (network === "xrp") return xrp(address, memo);
     if (EVM.has(network)) { assert(isAddress(address)); return { address: getAddress(address).toLowerCase(), memo: null }; }
     if (network === "near") assert(address.length >= 2 && address.length <= 64 && /^(([a-z0-9]+[-_])*[a-z0-9]+\.)*([a-z0-9]+[-_])*[a-z0-9]+$/.test(address));
+    else if (network === "qtc") quantus(address);
+    else if (network === "prl") pearl(address);
+    else if (network === "miden") miden(address);
     else if (network === "sol" || network === "fogo") assert(base58.decode(address).length === 32);
     else if (["sui", "aptos", "movement"].includes(network)) assert(/^0x[0-9a-fA-F]{64}$/.test(address));
     else if (network === "starknet") assert(/^0x[0-9a-fA-F]{1,64}$/.test(address) && BigInt(address) > 0n && BigInt(address) < 2n ** 251n);

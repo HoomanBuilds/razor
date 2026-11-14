@@ -1,5 +1,6 @@
 interface NetworkIdentity {key:string;name:string}
 const NETWORKS:Record<string,NetworkIdentity>={
+  miden:{key:"miden",name:"Miden"},prl:{key:"pearl",name:"Pearl"},pearl:{key:"pearl",name:"Pearl"},qtc:{key:"quantus",name:"Quantus"},quantus:{key:"quantus",name:"Quantus"},
   plasma:{key:"plasma",name:"Plasma"},monad:{key:"monad",name:"Monad"},xlayer:{key:"xlayer",name:"X Layer"},scroll:{key:"scroll",name:"Scroll"},adi:{key:"adi",name:"ADI Chain"},hood:{key:"robinhood",name:"Robinhood"},hlevm:{key:"hyperliquid",name:"Hyperliquid EVM"},hypercore:{key:"hypercore",name:"Hyperliquid HyperCore"},
   near:{key:"near",name:"NEAR"},"near-protocol":{key:"near",name:"NEAR"},
   eth:{key:"ethereum",name:"Ethereum"},ethereum:{key:"ethereum",name:"Ethereum"},
