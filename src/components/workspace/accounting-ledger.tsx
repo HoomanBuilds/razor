@@ -102,18 +102,18 @@ export function AccountingLedgerTools({
   };
   return (
     <section
-      className="grid min-w-0 gap-4 rounded-lg border p-4"
+      className="grid min-w-0 gap-5"
       aria-label="Verified crypto bookkeeping sources"
     >
       <h3 className="text-sm font-semibold">
-        Crypto ledger sources and provider activity
+        Verified bookkeeping sources
       </h3>
-      <p className="text-xs leading-5 text-muted-foreground">
+      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">What these records include</summary>      <p className="mt-3 text-xs leading-6 text-muted-foreground">
         Actual NEAR token burn, accepted supplier credit and explicitly approved
         crypto-clearing valuation differences stay distinct. Payment caps, quote
         spreads and solver estimates are never actual fees. Bookkeeping does not
         move cash or reimburse a wallet. Latest 100 source records are shown.
-      </p>
+      </p></details>
       {canApprove && (
         <details>
           <summary className="cursor-pointer text-sm">

@@ -74,7 +74,6 @@ import { CompanyInsightsPanel } from "./company-insights";
 import { WorkflowFeedback, WorkflowFeedbackSummary } from "./workflow-feedback";
 import { CompanyPrivateAgreements } from "../private-agreements/panels";
 import { WorkingCapitalPanel } from "./financing";
-import { NetSuitePanel } from "./netsuite";
 import { EvidenceSharesPanel } from "@/components/evidence-sharing/management";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
@@ -472,7 +471,7 @@ function CompanyWorkspace({
       ) : section === "distributions" ? (
         <DistributionsPanel />
       ) : section === "accounting" ? (
-        <WorkspaceTabs key={section} tabs={[{ label: "Accounting", content: <AccountingPanel /> }, { label: "NetSuite", content: <NetSuitePanel /> }]} />
+        <AccountingPanel key={section}/>
       ) : section === "support" ? (
         <SupportPanel />
       ) : section === "procurement" ? (

@@ -3,12 +3,18 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
 
-export function WorkspaceTabs({ tabs }: { tabs: { label: string; content: ReactNode }[] }) {
-  const [active, setActive] = useState(0);
+export function WorkspaceTabs({ tabs, activeIndex, onActiveChange }: { tabs: { label: string; content: ReactNode }[]; activeIndex?: number; onActiveChange?: (index: number) => void }) {
+  const [internalActive, setInternalActive] = useState(0);
+  const active = Math.max(0,Math.min(tabs.length-1,activeIndex ?? internalActive));
   const [statuses, setStatuses] = useState<string[]>([]);
   const id = useId();
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   const panels = useRef<(HTMLDivElement | null)[]>([]);
+  const previousControlled = useRef(activeIndex);
+  useEffect(() => {
+    if (activeIndex !== undefined && previousControlled.current !== activeIndex) { buttons.current[active]?.scrollIntoView({block:"nearest",inline:"nearest"}); buttons.current[active]?.focus({preventScroll:true}); }
+    previousControlled.current = activeIndex;
+  }, [activeIndex,active]);
   useEffect(() => {
     const read = () => {
       const next = panels.current.map(panel => panel?.querySelector('[aria-busy="true"]') ? "busy" : Array.from(panel?.querySelectorAll('[role="alert"]') ?? []).some(alert => alert.textContent?.trim()) ? "error" : "");
@@ -20,7 +26,8 @@ export function WorkspaceTabs({ tabs }: { tabs: { label: string; content: ReactN
     return () => observer.disconnect();
   }, [tabs.length]);
   const select = (index: number) => {
-    setActive(index);
+    setInternalActive(index);
+    onActiveChange?.(index);
     buttons.current[index]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   return <div className="grid min-w-0 gap-6">

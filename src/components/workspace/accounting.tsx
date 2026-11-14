@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { WorkspaceTabs } from "./workspace-tabs";
+import { AccountingRegister } from "./accounting-register";
+import { NetSuitePanel } from "./netsuite";
 import { api } from "@/lib/api";
 import { formatUnits } from "@/lib/money";
 import type { PostingKind } from "@/server/accounting/model";
@@ -36,6 +39,7 @@ export function AccountingPanel() {
     (permission) => organization.permissions?.includes(permission),
   );
   const canApprove = !!organization.permissions?.includes("payments:approve");
+  const [view,setView] = useState(0);
   const [page, setPage] = useState(1),
     [selected, setSelected] = useState(""),
     [catalogPage, setCatalogPage] = useState(1),
@@ -87,19 +91,19 @@ export function AccountingPanel() {
   const sourceBill =
     kind === "bill" ? data?.bills.find((item) => item.id === sourceId) : null;
   if (!allowed) return null;
-  return (
-    <Panel
-      title="Accounting connections"
-      tone="white" description="Connect QuickBooks or Xero. Bookkeeping entries only; no funds move." help="Connect your own QuickBooks or Xero company, review mappings and approve exact bookkeeping requests. These APIs record accounting entries and do not move bank or crypto funds."
-    >
-      <div className="grid min-w-0 grid-cols-1 gap-6">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {data?.scope ??
-            "The operator configures a confidential accounting app before consent is available. Missing credentials never appear as a completed connection."}{" "}
-          Exported bill titles and chosen payee contacts are disclosed to your
-          accounting provider only after posting review.
-        </p>
-        <div className="grid gap-4 sm:grid-cols-2">
+  return (<div className="grid min-w-0 gap-5">
+{notice && (
+          <p role="status" className="text-sm">
+            {notice}
+          </p>
+        )}{(resource.error || catalog.error || error) && (
+          <p role="alert" className="text-sm text-destructive">
+            {resource.error || catalog.error || error}
+          </p>
+        )}
+<WorkspaceTabs activeIndex={view} onActiveChange={setView} tabs={[
+{label:"Ledger",content:resource.loading&&!data?<Panel title="Company ledger"><Empty>Loading company records...</Empty></Panel>:data?<AccountingRegister data={data} onConnect={()=>setView(1)}/>:<Panel title="Company ledger"><Empty>Company records could not be loaded. Refresh the workspace to try again.</Empty></Panel>},
+{label:"Connections",content:<Panel title="Accounting apps" tone="white" description="Connect an app, choose its company, then review mappings." help="Bookkeeping entries only. These connections do not move bank or crypto funds."><div className="grid min-w-0 gap-5"><div className="grid gap-4 sm:grid-cols-2">
           {data?.providers.map((provider) => (
             <div
               key={provider.provider}
@@ -134,8 +138,7 @@ export function AccountingPanel() {
               </Action>
             </div>
           ))}
-        </div>
-        {resource.loading ? (
+        </div>{resource.loading ? (
           <Empty>Loading accounting connections...</Empty>
         ) : !data?.connections.length ? (
           <Empty>No company accounting connection has been authorized.</Empty>
@@ -159,9 +162,8 @@ export function AccountingPanel() {
               ))}
             </select>
           </Field>
-        )}
-        {connection && (
-          <div className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-border bg-white p-5">
+        )}{connection?.last_error && <p role="alert" className="rounded-xl border border-destructive/20 bg-white p-3 text-sm text-destructive">{connection.last_error}. Review provider access before posting.</p>}{connection && (
+          <details className="grid min-w-0 rounded-2xl border border-border bg-white p-5" open={connection.status === "select_entity"}><summary className="cursor-pointer text-sm font-medium">Configure {connection.entity_name ?? connection.provider}</summary><div className="mt-5 grid gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm font-medium">
                 {connection.entity_name ?? "Company selection"}{" "}
@@ -550,7 +552,45 @@ export function AccountingPanel() {
                     authorized finance approver reviews mappings.
                   </Empty>
                 )}
-                {mapping && (
+
+              </>
+            )}
+          </div></details>
+        )}<details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Connection scope and data sharing</summary><div className="mt-3 leading-6"><p className="text-xs leading-5 text-muted-foreground">
+          {data?.scope ??
+            "The operator configures a confidential accounting app before consent is available. Missing credentials never appear as a completed connection."}{" "}
+          Exported bill titles and chosen payee contacts are disclosed to your
+          accounting provider only after posting review.
+        </p></div></details></div></Panel>},
+{label:"Posting requests",content:<Panel title="Posting requests" tone="white" description="Review exact bookkeeping requests and follow their provider status."><div className="grid min-w-0 gap-5">{resource.loading ? (
+          <Empty>Loading accounting connections...</Empty>
+        ) : !data?.connections.length ? (
+          <Empty>No company accounting connection has been authorized.</Empty>
+        ) : (
+          <Field label="Accounting connection">
+            <select
+              className={control}
+              value={selected}
+              onChange={(event) => {
+                setSelected(event.target.value);
+                setCatalogPage(1);
+                setNotice("");
+              }}
+            >
+              <option value="">Choose a connection</option>
+              {data.connections.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.provider} · {item.entity_name ?? "Select legal entity"}{" "}
+                  · {item.status}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}{connection?.status==="active"&&mapping?<details className="rounded-2xl border border-border bg-white p-5"><summary className="cursor-pointer text-sm font-medium">Prepare a new posting</summary><div className="mt-5 grid gap-4"><p className="text-sm">
+                  Functional currency: <strong>{connection.currency}</strong>.
+                  USDC conversion needs an accountant-reviewed rate. No peg or
+                  current FX rate is assumed.
+                </p>{mapping && (
                   <form
                     className="grid min-w-0 grid-cols-1 gap-3 rounded-xl border border-border bg-white p-4 sm:grid-cols-2"
                     onSubmit={(event) => {
@@ -659,22 +699,7 @@ export function AccountingPanel() {
                       </Action>
                     </div>
                   </form>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {data && (
-          <AccountingLedgerTools
-            endpoint={endpoint}
-            data={data}
-            connectionId={selected}
-            canApprove={canApprove}
-            disabled={!!busy || resource.refreshing || !!resource.error}
-            onChange={refresh}
-          />
-        )}
-        <div className="grid min-w-0 grid-cols-1 gap-3">
+                )}</div></details>:<div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted p-4 text-xs"><p>Connect an accounting app and review its mapping before preparing a posting.</p><button type="button" className="font-medium text-primary" onClick={()=>setView(1)}>Manage connections</button></div>}<div className="grid min-w-0 grid-cols-1 gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-medium">
               Posting requests and recovery
@@ -834,8 +859,18 @@ export function AccountingPanel() {
               Next requests
             </Action>
           </div>
-        </div>
-        {data?.observations.length ? (
+        </div></div></Panel>},
+{label:"Fees & valuations",content:<Panel title="Fees and valuations" tone="white" description="Exact network fees and reviewed accounting adjustments.">{data && (
+          <AccountingLedgerTools
+            endpoint={endpoint}
+            data={data}
+            connectionId={selected}
+            canApprove={canApprove}
+            disabled={!!busy || resource.refreshing || !!resource.error}
+            onChange={refresh}
+          />
+        )}</Panel>},
+{label:"Provider activity",content:<Panel title="Provider activity" tone="white" description="Latest imported bookkeeping records. Importing does not change company funds.">{data?.observations.length ? (
           <DataTable
             columns={["Provider record", "Observed revision", "Reconciliation"]}
           >
@@ -857,18 +892,9 @@ export function AccountingPanel() {
               </tr>
             ))}
           </DataTable>
-        ) : null}
-        {notice && (
-          <p role="status" className="text-sm">
-            {notice}
-          </p>
-        )}
-        {(resource.error || catalog.error || error) && (
-          <p role="alert" className="text-sm text-destructive">
-            {resource.error || catalog.error || error}
-          </p>
-        )}
-      </div>
-    </Panel>
+        ) : null}{!data?.observations.length&&<Empty>No provider activity imported yet.</Empty>}<div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted p-4 text-xs"><span>Use the connected app's read-only import tools.</span><button type="button" className="font-medium text-primary" onClick={()=>setView(3)}>Open import tools</button></div></Panel>},
+{label:"NetSuite",content:<NetSuitePanel/>},
+]}/>
+</div>
   );
 }
