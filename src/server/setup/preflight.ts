@@ -78,12 +78,15 @@ export async function setupPreflight(options: Options = {}) {
     add(`${id}-account`, env[key] && validNearAccount(env[key]) ? "pass" : "blocked", `Configure a deployed, initialized ${key} on the selected network.`);
   }
   if (env.NEAR_TREASURY_ID && env.NEAR_TREASURY_ID === env.NEAR_CLEARING_ID) add("contract-accounts", "blocked", "Shared treasury and clearing require distinct deployment accounts.");
-  try {
+  const privateAiConfigured = ["NEAR_AI_API_KEY", "NEAR_AI_MODEL", "NEAR_AI_MODEL_COMPOSE_SHA256", "NEAR_AI_GATEWAY_COMPOSE_SHA256"].some(key => Boolean(env[key]));
+  if (!privateAiConfigured) add("private-ai", "disabled", "Optional private AI is not configured. Manual invoices, payroll, payments and recovery remain available without AI credits.");
+  else try {
     const ai = privateAiConfig(env, nodeVersion);
     add("private-ai", ai.missing.length ? "blocked" : "pass", ai.missing.length ? `Configure valid private inference settings: ${ai.missing.join(", ")}.` : "Private inference configuration is present. Required model/gateway verification must still succeed on a real request.");
   } catch { add("private-ai", "blocked", "Private inference retention must be 0-30 days and attestation age 10000-300000 ms, using integer settings."); }
 
   const executorFields = ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY", "RAZOR_EXECUTOR_COMPANY_ID"];
+  const executorConfigured = executorFields.some(key => Boolean(env[key]));
   let workerReady = executorFields.every(key => Boolean(env[key]));
   if (workerReady) {
     try {
@@ -91,7 +94,7 @@ export async function setupPreflight(options: Options = {}) {
       workerReady = validNearAccount(env.RAZOR_EXECUTOR_ACCOUNT_ID!) && validNearAccount(env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!) && env.RAZOR_EXECUTOR_ACCOUNT_ID !== env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID && env.RAZOR_EXECUTOR_NETWORK === network && env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID === env.NEAR_TREASURY_ID && /^[a-zA-Z0-9_-]{8,100}:[a-f0-9]{16}$/.test(env.RAZOR_EXECUTOR_COMPANY_ID!) && key.startsWith("ed25519:") && base58.decode(key.slice(8)).length === 64;
     } catch { workerReady = false; }
   }
-  add("executor", workerReady ? "pass" : "blocked", "Automatic execution requires a dedicated executor account, the shared treasury account, exact company ID, matching network and an ed25519 key. Only an execute_payment function-call key is accepted remotely.");
+  add("executor", !executorConfigured ? "disabled" : workerReady ? "pass" : "blocked", !executorConfigured ? "Optional automatic execution is disabled until a real company has a dedicated restricted executor and owner-approved grant. Manual wallet-authorized payments remain available." : "Automatic execution requires a dedicated executor account, the shared treasury account, exact company ID, matching network and an ed25519 key. Only an execute_payment function-call key is accepted remotely.");
   if (!env.RESEND_API_KEY && !env.NOTIFICATION_FROM_EMAIL) add("email", "disabled", "Optional email transport is disabled; in-app notifications remain available.");
   else add("email", env.RESEND_API_KEY && env.NOTIFICATION_FROM_EMAIL ? "pass" : "blocked", "Optional email requires both RESEND_API_KEY and NOTIFICATION_FROM_EMAIL. Domain verification and actual delivery remain separate.");
 
@@ -201,7 +204,7 @@ export async function setupPreflight(options: Options = {}) {
           if (!permission || permission.receiver_id !== treasury || permission.method_names.length !== 1 || permission.method_names[0] !== "execute_payment") throw new Error();
           add("remote-executor", "pass", "The reviewed treasury grants a dedicated executor role and the configured key is restricted to its execute_payment method. Company mandate and actual route approvals are still required.", "remote");
         } catch { add("remote-executor", "blocked", "The executor role, reviewed treasury, token or restricted access key could not be verified. No transaction was signed or broadcast.", "remote"); }
-      } else add("remote-executor", "not_checked", "Complete worker configuration and a reviewed treasury hash are required before key-permission verification.", "remote");
+      } else add("remote-executor", executorConfigured ? "not_checked" : "disabled", "Complete worker configuration and a reviewed treasury hash are required before key-permission verification.", "remote");
     }
   } else add("remote-verification", "not_checked", "Run with --remote to read public NEAR network, deployed contracts and restricted executor permissions. No live workflows are performed.", "remote");
   for (const [id, message] of [

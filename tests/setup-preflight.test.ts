@@ -121,6 +121,19 @@ test("incomplete or invalid capability groups remain blocked instead of claiming
   assert.equal(report.configurationReady, false); assert(!JSON.stringify(report).includes("private-mail-secret"));
 });
 
+test("unconfigured optional AI and automatic execution do not block manual company operations", async () => {
+  const configured = { ...env };
+  for (const key of ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_COMPANY_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY", "NEAR_AI_API_KEY", "NEAR_AI_MODEL", "NEAR_AI_MODEL_COMPOSE_SHA256", "NEAR_AI_GATEWAY_COMPOSE_SHA256"]) delete configured[key];
+  const report = await setupPreflight({ env: configured, artifactDirectory: absentArtifacts, nodeVersion: "24.22.1" });
+  assert.equal(status(report, "executor"), "disabled");
+  assert.equal(status(report, "private-ai"), "disabled");
+  assert.equal(report.configurationReady, true);
+  const partial = await setupPreflight({ env: { ...configured, RAZOR_EXECUTOR_ACCOUNT_ID: "executor.near", NEAR_AI_API_KEY: "private-inference-secret" }, artifactDirectory: absentArtifacts, nodeVersion: "24.22.1" });
+  assert.equal(status(partial, "executor"), "blocked");
+  assert.equal(status(partial, "private-ai"), "blocked");
+  assert.equal(partial.configurationReady, false);
+});
+
 test("private inference configuration uses the same supplied environment validation as runtime", () => {
   assert.deepEqual(privateAiConfig(env, "24.22.1").missing, []);
   assert(privateAiConfig({ ...env, NEAR_AI_GATEWAY_COMPOSE_SHA256: "invalid" }, "24.22.1").missing.includes("NEAR_AI_GATEWAY_COMPOSE_SHA256"));
