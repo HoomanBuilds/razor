@@ -33,7 +33,7 @@ publicFundingRoutes.use("*", async (c, next) => {
   await next();
 });
 publicFundingRoutes.get("/request", (c) => c.json({ request: service.getPublicFundingRequest(token.parse(c.req.query("token"))) }));
-publicFundingRoutes.get("/assets", async (c) => c.json({ tokens: await service.getPublicAssets(token.parse(c.req.query("token"))) }));
+publicFundingRoutes.get("/assets", async (c) => c.json(await service.getPublicAssetCatalog(token.parse(c.req.query("token")))));
 publicFundingRoutes.post("/quote", async (c) => {
   const input = z.object({ token, originAsset: z.string().min(1).max(256), refundAddress: z.string().min(1).max(256), idempotencyKey: key }).strict().parse(await c.req.json());
   return c.json(await service.preparePublicQuote(input.token, input));

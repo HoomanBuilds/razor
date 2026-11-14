@@ -21,6 +21,7 @@ import { buildPaymentSummary } from "./summary";
 import { assertSameRecipientOwner, recordedRecipientName } from "./recipient-names";
 import { activeClearingRound, assertNoActiveClearing } from "../clearing/locks";
 import { recoveryAuthority } from "../reconciliation/authority";
+import { assertDirectFundingTarget, createDirectFunding, DIRECT_USDC_TOKEN, fundingInstructions, isDirectFunding, supportsDirectFunding } from "./direct-funding";
 
 import { completeDelivery, deliveryOutput, liabilityPayments, outputAmount, spentSource } from "../partial-settlement/model";
 import { partialProof, recordPartial, type PartialReview } from "../partial-settlement/proof";
@@ -729,6 +730,7 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   if (!input.reference.trim() || input.reference.length > 200) throw new ApiError(422, "A stable funding reference is required", "INVALID_REFERENCE");
   const existing = row<FundingLeg>("SELECT * FROM funding_legs WHERE organization_id=? AND reference=?", access.organizationId, input.reference);
   if (existing) {
+    assertDirectFundingTarget(existing, config);
     const request = (JSON.parse(existing.quote) as QuoteResponse).quoteRequest;
     if (existing.origin_asset !== input.originAsset || existing.payment_id !== (input.paymentId ?? null) || request.amount !== input.amount || request.refundTo !== input.refundAddress || request.swapType !== (input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT")) throw new ApiError(409, "Funding reference already has different terms", "IDEMPOTENCY_CONFLICT");
     if (["refunded_verified", "refunded_attested", "closed_unsent", "cancelled"].includes(existing.status)) throw new ApiError(409, "This funding reference is closed. Its history cannot be reused for another deposit", "FUNDING_CLOSED");
@@ -736,7 +738,8 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
     assertCanStartDeposit(JSON.parse(existing.quote));
     return existing;
   }
-  const tokens = await getSupportedTokens();
+  const direct = supportsDirectFunding(config, input.originAsset);
+  const tokens = direct ? [DIRECT_USDC_TOKEN] : await getSupportedTokens();
   const sourceToken = tokens.find((token) => token.assetId === input.originAsset);
   if (!sourceToken) throw new ApiError(422, "The funding asset is not currently supported", "ASSET_UNSUPPORTED");
   try { normalizeDestination(sourceToken.blockchain, input.refundAddress); }
@@ -744,7 +747,8 @@ export async function prepareFunding(access: AccessContext, input: { originAsset
   const destination = nativeUsdc(tokens, "near");
   if (destination.contractAddress !== config.token_contract) throw new ApiError(409, "The funding settlement asset differs from the verified treasury token", "FUNDING_TARGET_CHANGED");
   const fundingId = id();
-  const quote = await requestQuote({ dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" : "EXACT_INPUT", slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) });
+  const request = { dry: !!input.dry, swapType: input.exactOutput ? "EXACT_OUTPUT" as const : "EXACT_INPUT" as const, slippageTolerance: 50, originAsset: input.originAsset, depositType: "ORIGIN_CHAIN" as const, destinationAsset: destination.assetId, amount: atomic(input.amount).toString(), recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN" as const, refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN" as const, deadline: new Date(Date.now() + 2 * 60 * 60_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) };
+  const quote = direct ? createDirectFunding(config, fundingId, request) : await requestQuote(request);
   if (input.dry) return { dry: true, quote };
   const currentConfig = await verifyCompanyFundingTarget(access);
   if (currentConfig.near_account_id !== config.near_account_id || currentConfig.token_contract !== config.token_contract || currentConfig.network !== config.network) throw new ApiError(409, "The company funding destination changed while requesting this quote", "FUNDING_TARGET_CHANGED");
@@ -777,6 +781,29 @@ export async function reconcileFunding(access: AccessContext, fundingId: string,
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
   if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
   if (["confirmed", "refunded_verified", "refunded_attested"].includes(funding.status)) return { funding, treasury: await syncTreasury(access) };
+  const instructions = fundingInstructions(funding);
+  if (isDirectFunding(instructions)) {
+    if (sourceTxHash && funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
+    if (sourceTxHash) {
+      const saved = getDb().prepare("UPDATE funding_legs SET source_tx_hash=COALESCE(source_tx_hash,?),status='processing',updated_at=? WHERE id=? AND (source_tx_hash IS NULL OR source_tx_hash=?)").run(sourceTxHash, now(), fundingId, sourceTxHash);
+      if (!saved.changes) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
+    }
+    const hash = sourceTxHash ?? funding.source_tx_hash;
+    if (!hash) return { funding, treasury: await (dependencies.sync ?? syncTreasury)(access) };
+    const { verifyFundingCredit } = await import("../reconciliation/funding");
+    try { return await verifyFundingCredit(access, fundingId, { transactionHash: hash }); }
+    catch (error) {
+      if (!(error instanceof ApiError) || !["RECEIPT_CONTAINS_OUTFLOW", "SHARED_DEPOSIT_UNVERIFIED", "RECEIPT_FAILED"].includes(error.code)) throw error;
+      const { verifyDirectFundingReturn } = await import("./direct-return");
+      const config = configFor(access);
+      try { await verifyDirectFundingReturn(config, { ...funding, source_tx_hash: hash }, hash); }
+      catch (returnError) {
+        getDb().prepare("UPDATE funding_legs SET status='recovery_pending',updated_at=? WHERE id=? AND status NOT IN ('confirmed','refunded_verified','refunded_attested')").run(now(), fundingId);
+        throw returnError;
+      }
+      return { funding: row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", fundingId)!, treasury: await (dependencies.sync ?? syncTreasury)(access) };
+    }
+  }
   if (sourceTxHash) {
     if (funding.source_tx_hash && funding.source_tx_hash !== sourceTxHash) throw new ApiError(409, "This funding leg already has another source transaction", "FUNDING_SOURCE_CONFLICT");
     const saved = getDb().prepare("UPDATE funding_legs SET source_tx_hash=COALESCE(source_tx_hash,?),updated_at=? WHERE id=? AND (source_tx_hash IS NULL OR source_tx_hash=?)").run(sourceTxHash, now(), fundingId, sourceTxHash);

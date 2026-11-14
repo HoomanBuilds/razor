@@ -12,6 +12,7 @@ import { fundingPositions, verifiedLinkedCredit, type FundingTask } from "./acco
 import { verifyCompanyFundingTarget } from "../funding-requests/service";
 import { recordDepositClaim, requireUnstartedDeposit } from "../funding-requests/deposit";
 import { paymentBudget } from "../../lib/payment-budget";
+import { assertDirectFundingTarget, createDirectFunding, DIRECT_USDC_TOKEN, fundingInstructions, isDirectFunding, supportsDirectFunding } from "../payments/direct-funding";
 
 interface Claim { id: string; payment_id: string; organization_id: string; request_key: string; input_hash: string; terms_hash: string; origin_token_json: string | null; state: string; funding_id: string | null; lease_owner: string | null; lease_until: string | null }
 const now = () => new Date().toISOString();
@@ -105,7 +106,8 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
   if (snapshot.reviewToken !== input.reviewToken) throw new ApiError(409, "Cash, receiving preferences or approved terms changed. Refresh this task before quoting", "FUNDING_REVIEW_STALE");
   if (!snapshot.canQuote) throw new ApiError(409, snapshot.message, "FUNDING_STEP_BLOCKED");
   await syncTreasury(access);
-  const tokens = await getSupportedTokens(), token = tokens.find(value => value.assetId === input.originAsset), config = await verifyCompanyFundingTarget(access);
+  const config = await verifyCompanyFundingTarget(access), direct = supportsDirectFunding(config, input.originAsset);
+  const tokens = direct ? [DIRECT_USDC_TOKEN] : await getSupportedTokens(), token = tokens.find(value => value.assetId === input.originAsset);
   if (!config || config.network !== "mainnet") throw new ApiError(409, "Configure the company's NEAR mainnet treasury before funding through Intents", "MAINNET_TREASURY_REQUIRED");
   if (!token) throw new ApiError(422, "Choose a currently supported source asset", "ASSET_UNSUPPORTED");
   const destination = nativeUsdc(tokens, "near");
@@ -129,7 +131,8 @@ export async function quotePaymentFunding(access: AccessContext, paymentId: stri
   });
   try {
     const fundingId = randomUUID();
-    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: token.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: refundAddress, refundType: "ORIGIN_CHAIN", deadline: new Date(Date.now() + 2 * 3600_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) });
+    const terms = { dry: false, swapType: "EXACT_OUTPUT" as const, slippageTolerance: 50, originAsset: token.assetId, depositType: "ORIGIN_CHAIN" as const, destinationAsset: destination.assetId, amount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN" as const, refundTo: refundAddress, refundType: "ORIGIN_CHAIN" as const, deadline: new Date(Date.now() + 2 * 3600_000).toISOString(), customRecipientMsg: sharedFundingMessage(config, fundingId) };
+    const quote = direct ? createDirectFunding(config, fundingId, terms) : await requestQuote(terms);
     await verifyCompanyFundingTarget(access);
     const funding = transaction(db => {
       running(access); approved(access, paymentId);
@@ -191,12 +194,14 @@ export async function closeUnsentFunding(access: AccessContext, paymentId: strin
   if (!noTransferConfirmed) throw new ApiError(422, "Confirm that you never submitted this source transfer", "UNSENT_CONFIRMATION_REQUIRED");
   const leg = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND payment_id=? AND organization_id=?", fundingId, paymentId, access.organizationId);
   if (!leg || leg.source_tx_hash || leg.status !== "pending_deposit") throw new ApiError(409, "A known or uncertain source transfer must be reconciled instead of replaced", "FUNDING_TRANSFER_UNRESOLVED");
-  const quote = JSON.parse(leg.quote) as QuoteResponse;
+  const quote = fundingInstructions(leg);
   if (quoteDepositWindow(quote).startBefore > Date.now()) throw new ApiError(409, "The original quote can still accept a deposit. Resume it rather than create another", "FUNDING_QUOTE_ACTIVE");
-  const status = await checkStatus(leg.deposit_address, leg.deposit_memo);
-  assertSameQuote(quote, status.quoteResponse);
-  if (quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider still accepts this quote. Continue tracking it before preparing another", "FUNDING_QUOTE_ACTIVE");
-  if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has observed source activity. Keep reconciling the original transfer", "FUNDING_TRANSFER_UNRESOLVED");
+  if (!isDirectFunding(quote)) {
+    const status = await checkStatus(leg.deposit_address, leg.deposit_memo);
+    assertSameQuote(quote, status.quoteResponse);
+    if (quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider still accepts this quote. Continue tracking it before preparing another", "FUNDING_QUOTE_ACTIVE");
+    if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has observed source activity. Keep reconciling the original transfer", "FUNDING_TRANSFER_UNRESOLVED");
+  }
   transaction(db => {
     const current = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", leg.id, access.organizationId)!;
     if (current.source_tx_hash || current.status !== "pending_deposit") throw new ApiError(409, "Source tracking changed while reviewing this quote", "FUNDING_TRANSFER_UNRESOLVED");
@@ -209,10 +214,10 @@ export async function closeUnsentFunding(access: AccessContext, paymentId: strin
 export async function claimTaskDeposit(access: AccessContext, paymentId: string, fundingId: string, observe = checkStatus) {
   requirePermission(access, "payments:prepare");
   running(access); approved(access, paymentId); ensureTask(access, paymentId);
-  await verifyCompanyFundingTarget(access);
+  const config = await verifyCompanyFundingTarget(access);
   const initial = paymentFundingTask(access, paymentId), leg = initial.funding.find(value => value.id === fundingId);
   if (!initial.depositAllowed || !leg || leg.source_tx_hash || leg.status !== "pending_deposit") throw new ApiError(409, "This source deposit is already claimed or its obligation changed. Reconcile the saved transfer before sending again", "FUNDING_TRANSFER_UNRESOLVED");
-  requireUnstartedDeposit(leg, await observe(leg.deposit_address, leg.deposit_memo));
+  requireUnstartedDeposit(leg, isDirectFunding(assertDirectFundingTarget(leg, config)) ? undefined : await observe(leg.deposit_address, leg.deposit_memo));
   return transaction(() => {
     running(access); approved(access, paymentId);
     if (!paymentFundingTask(access, paymentId).depositAllowed) throw new ApiError(409, "The funding need changed while opening your wallet. Review the saved obligation", "FUNDING_REVIEW_STALE");

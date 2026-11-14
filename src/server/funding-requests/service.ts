@@ -11,6 +11,7 @@ import { contractCodeHash, view } from "../payments/near";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { requireUnstartedDeposit, recordDepositClaim } from "./deposit";
 import { fundingStateAfterProvider } from "../payment-funding/lifecycle";
+import { assertDirectFundingTarget, createDirectFunding, DIRECT_USDC_TOKEN, fundingAssetCatalog, fundingInstructions, fundingTokens, isDirectFunding, supportsDirectFunding } from "../payments/direct-funding";
 import { normalizeDestination } from "../../lib/recipient-destination";
 import type { FundingLeg, TreasuryConfig } from "../payments/types";
 import type { FundingRequestRecord, PublicFundingLeg, PublicFundingRequest, PublicQuoteResult, RequestQuote } from "./types";
@@ -128,8 +129,9 @@ export async function claimCompanyFunding(access: AccessContext, fundingId: stri
   if (!funding) throw new ApiError(404, "Source funding leg not found", "FUNDING_NOT_FOUND");
   if (funding.payment_id || row("SELECT id FROM funding_request_quotes WHERE funding_id=?", fundingId)) throw new ApiError(409, "Resume this source transfer through its obligation task or original funding link", "FUNDING_SOURCE_CONTEXT_REQUIRED");
   const quote = JSON.parse(funding.quote) as QuoteResponse;
+  assertDirectFundingTarget(funding, config);
   if (funding.recipient_address !== config.near_account_id || quote.quoteRequest.recipient !== config.near_account_id || quote.quoteRequest.destinationAsset !== `nep141:${config.token_contract}`) throw new ApiError(409, "The original funding destination differs from this company treasury", "FUNDING_TARGET_CHANGED");
-  const status = await checkStatus(funding.deposit_address, funding.deposit_memo);
+  const status = isDirectFunding(fundingInstructions(funding)) ? undefined : await checkStatus(funding.deposit_address, funding.deposit_memo);
   requireUnstartedDeposit(funding, status);
   return transaction(() => {
     const current = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", access.organizationId);
@@ -193,7 +195,8 @@ export function rotateFundingLink(access: AccessContext, requestId: string) {
   });
 }
 export function getPublicFundingRequest(token: string) { return publicView(requestForToken(token)); }
-export async function getPublicAssets(token: string) { assertOpen(requestForToken(token)); return getSupportedTokens(); }
+export async function getPublicAssets(token: string) { assertOpen(requestForToken(token)); return fundingTokens(); }
+export async function getPublicAssetCatalog(token: string) { assertOpen(requestForToken(token)); return fundingAssetCatalog(); }
 
 function validateKey(key: string) { if (!/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new ApiError(422, "Use a stable funding quote identifier", "FUNDING_KEY_INVALID"); }
 function quoteResult(request: FundingRequestRecord, quote: RequestQuote): PublicQuoteResult {
@@ -211,7 +214,7 @@ export async function resumePublicQuote(token: string, idempotencyKey: string): 
   const requestOpen = !["expired", "revoked", "fulfilled", "paused", "payment_closed"].includes(result.request.status);
   const depositAllowed = requestOpen && result.request.activeFunding?.id === result.funding.id && result.funding.status === "pending_deposit" && !result.funding.source_tx_hash;
   if (!result.funding.source_tx_hash && requestOpen) {
-    try { await frozenTarget(request); }
+    try { const config = await frozenTarget(request); assertDirectFundingTarget(legForQuote(quote), config); }
     catch (error) { return { ...result, depositAllowed: false, depositBlockedReason: error instanceof ApiError ? error.message : "The company treasury could not be reverified. Check the existing leg before sending funds." }; }
   }
   if (depositAllowed) { try { assertCanStartDeposit(JSON.parse(result.funding.quote)); } catch (error) { return { ...result, depositAllowed: false, depositBlockedReason: error instanceof Error ? error.message : "The source quote no longer accepts deposits" }; } }
@@ -236,13 +239,14 @@ export async function preparePublicQuote(token: string, input: { originAsset: st
   });
   if (claim.existing) return resumePublicQuote(token, input.idempotencyKey);
   try {
-    const config = await frozenTarget(request), tokens = await getSupportedTokens(), origin = tokens.find((item) => item.assetId === input.originAsset), destination = nativeUsdc(tokens, "near");
+    const config = await frozenTarget(request), direct = supportsDirectFunding(config, input.originAsset), tokens = direct ? [DIRECT_USDC_TOKEN] : await getSupportedTokens(), origin = tokens.find((item) => item.assetId === input.originAsset), destination = nativeUsdc(tokens, "near");
     if (!origin) throw new ApiError(422, "Choose a live supported source asset", "ASSET_UNSUPPORTED");
     try { normalizeDestination(origin.blockchain, input.refundAddress); } catch { throw new ApiError(422, "Use a complete valid recovery address for the selected source network", "REFUND_ADDRESS_INVALID"); }
     if (destination.contractAddress !== request.token_contract) throw new ApiError(409, "The live catalog's settlement token changed", "FUNDING_TARGET_CHANGED");
     const deadline = new Date(Math.min(Date.now() + 2 * 60 * 60_000, Date.parse(request.expires_at))).toISOString();
     const fundingId = randomUUID();
-    const quote = await requestQuote({ dry: false, swapType: "EXACT_OUTPUT", slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN", refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN", deadline, customRecipientMsg: sharedFundingMessage(config, fundingId) });
+    const terms = { dry: false, swapType: "EXACT_OUTPUT" as const, slippageTolerance: 50, originAsset: origin.assetId, depositType: "ORIGIN_CHAIN" as const, destinationAsset: destination.assetId, amount: initial.remainingAmount, recipient: config.near_account_id, recipientType: "DESTINATION_CHAIN" as const, refundTo: input.refundAddress, refundType: "ORIGIN_CHAIN" as const, deadline, customRecipientMsg: sharedFundingMessage(config, fundingId) };
+    const quote = direct ? createDirectFunding(config, fundingId, terms) : await requestQuote(terms);
     if (quote.quote.amountOut !== initial.remainingAmount || Date.parse(quote.quote.deadline ?? deadline) > Date.parse(request.expires_at)) throw new ApiError(502, "The signed quote changed the fixed amount or request expiry", "FUNDING_QUOTE_MISMATCH");
     await frozenTarget(request);
     return transaction(() => {
@@ -273,9 +277,21 @@ export async function reconcilePublicFunding(token: string, input: { fundingId: 
     if (funding.source_tx_hash && funding.source_tx_hash !== input.sourceTxHash) throw new ApiError(409, "Another source transaction is already recorded for this quote", "FUNDING_SOURCE_CONFLICT");
     const saved = getDb().prepare("UPDATE funding_legs SET source_tx_hash=COALESCE(source_tx_hash,?),updated_at=? WHERE id=? AND (source_tx_hash IS NULL OR source_tx_hash=?)").run(input.sourceTxHash, now(), funding.id, input.sourceTxHash);
     if (!saved.changes) throw new ApiError(409, "Another source transaction is already recorded for this quote", "FUNDING_SOURCE_CONFLICT");
-    try { await notifyDeposit(funding.deposit_address, input.sourceTxHash, funding.deposit_memo); } catch {}
+    if (!isDirectFunding(fundingInstructions(funding))) { try { await notifyDeposit(funding.deposit_address, input.sourceTxHash, funding.deposit_memo); } catch {} }
   }
   if (verifiedAmount(request, funding.id) === 0n) {
+    if (isDirectFunding(fundingInstructions(funding))) {
+      getDb().prepare("UPDATE funding_legs SET status=CASE WHEN source_tx_hash IS NOT NULL THEN 'processing' ELSE status END,updated_at=? WHERE id=? AND status!='confirmed'").run(now(), funding.id);
+      const latest = legForQuote(quote), config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", request.organization_id);
+      if (latest.source_tx_hash && config && config.near_account_id === request.treasury_account_id) {
+        try {
+          const { verifyDirectFundingReturn } = await import("../payments/direct-return");
+          await verifyDirectFundingReturn(config, latest, latest.source_tx_hash);
+          return { request: publicView(request), funding: { id: funding.id, status: "refunded_verified" }, confirmationRequired: false };
+        } catch (error) { if (error instanceof ApiError && error.code === "TREASURY_CODE_MISMATCH") throw error; }
+      }
+      return { request: publicView(request), funding: { id: funding.id, status: publicLegStatus(request, legForQuote(quote)) }, confirmationRequired: true };
+    }
     const status = await observe(funding.deposit_address, funding.deposit_memo);
     assertSameQuote(JSON.parse(funding.quote) as QuoteResponse, status.quoteResponse);
     transaction(db => {
@@ -292,8 +308,8 @@ export async function claimPublicFunding(token: string, input: { fundingId: stri
   const quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND funding_id=? AND key_hash=? AND state='active'", request.id, input.fundingId, hashToken(input.idempotencyKey));
   if (!quote) throw new ApiError(403, "Resume this browser's funding quote before starting its source transfer", "FUNDING_QUOTE_PROOF_REQUIRED");
   if (activeQuote(request.id)?.funding_id !== input.fundingId) throw new ApiError(409, "An earlier funding transfer still needs reconciliation before this deposit", "FUNDING_LEG_ACTIVE");
-  await frozenTarget(request);
-  const funding = legForQuote(quote), status = await observe(funding.deposit_address, funding.deposit_memo);
+  const config = await frozenTarget(request);
+  const funding = legForQuote(quote), status = isDirectFunding(assertDirectFundingTarget(funding, config)) ? undefined : await observe(funding.deposit_address, funding.deposit_memo);
   requireUnstartedDeposit(funding, status);
   return transaction(() => { assertOpen(requestForToken(token)); if (activeQuote(request.id)?.funding_id !== funding.id) throw new ApiError(409, "An earlier funding transfer needs reconciliation", "FUNDING_LEG_ACTIVE"); return recordDepositClaim(funding); });
 }
@@ -303,13 +319,15 @@ export async function closePublicUnsentFunding(token: string, input: { fundingId
   if (!input.noTransferConfirmed) throw new ApiError(422, "Confirm that you never submitted this source transfer", "UNSENT_CONFIRMATION_REQUIRED");
   const quote = row<RequestQuote>("SELECT * FROM funding_request_quotes WHERE request_id=? AND funding_id=? AND key_hash=?", request.id, input.fundingId, hashToken(input.idempotencyKey));
   if (!quote) throw new ApiError(403, "Resume this browser's original quote before closing it", "FUNDING_QUOTE_PROOF_REQUIRED");
-  const funding = legForQuote(quote), signed = JSON.parse(funding.quote) as QuoteResponse;
+  const funding = legForQuote(quote), signed = fundingInstructions(funding);
   if (funding.status !== "pending_deposit" || funding.source_tx_hash) throw new ApiError(409, "A submitted or uncertain source transfer must be reconciled", "FUNDING_TRANSFER_UNRESOLVED");
   if (quoteDepositWindow(signed).startBefore > Date.now()) throw new ApiError(409, "The original quote can still accept a deposit. Resume it before preparing another", "FUNDING_QUOTE_ACTIVE");
-  const status = await observe(funding.deposit_address, funding.deposit_memo);
-  assertSameQuote(signed, status.quoteResponse);
-  if (quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider still accepts this quote. Continue tracking it before preparing another", "FUNDING_QUOTE_ACTIVE");
-  if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has observed source activity. Track the original transfer", "FUNDING_TRANSFER_UNRESOLVED");
+  if (!isDirectFunding(signed)) {
+    const status = await observe(funding.deposit_address, funding.deposit_memo);
+    assertSameQuote(signed, status.quoteResponse);
+    if (quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider still accepts this quote. Continue tracking it before preparing another", "FUNDING_QUOTE_ACTIVE");
+    if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has observed source activity. Track the original transfer", "FUNDING_TRANSFER_UNRESOLVED");
+  }
   transaction(db => {
     const current = legForQuote(quote);
     if (current.status !== "pending_deposit" || current.source_tx_hash) throw new ApiError(409, "Source tracking changed during this review", "FUNDING_TRANSFER_UNRESOLVED");
@@ -326,11 +344,13 @@ export async function closeCompanyUnsentFunding(access: AccessContext, fundingId
   if (!funding) throw new ApiError(404, "Source funding leg not found", "FUNDING_NOT_FOUND");
   if (funding.payment_id || row("SELECT id FROM funding_request_quotes WHERE funding_id=?", fundingId)) throw new ApiError(409, "Close this source quote from its obligation task or original funding link", "FUNDING_SOURCE_CONTEXT_REQUIRED");
   if (funding.status !== "pending_deposit" || funding.source_tx_hash) throw new ApiError(409, "A submitted or uncertain source transfer must remain in reconciliation", "FUNDING_TRANSFER_UNRESOLVED");
-  const stored = JSON.parse(funding.quote) as QuoteResponse;
+  const stored = fundingInstructions(funding);
   if (quoteDepositWindow(stored).startBefore > Date.now()) throw new ApiError(409, "This quote can still accept a deposit. Resume it before preparing another", "FUNDING_QUOTE_ACTIVE");
-  const status = await observe(funding.deposit_address, funding.deposit_memo);
-  assertSameQuote(stored, status.quoteResponse);
-  if (status.status !== "PENDING_DEPOSIT" || quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider has observed source activity or still accepts this quote. Keep tracking it", "FUNDING_TRANSFER_UNRESOLVED");
+  if (!isDirectFunding(stored)) {
+    const status = await observe(funding.deposit_address, funding.deposit_memo);
+    assertSameQuote(stored, status.quoteResponse);
+    if (status.status !== "PENDING_DEPOSIT" || quoteDepositWindow(status.quoteResponse).startBefore > Date.now()) throw new ApiError(409, "The provider has observed source activity or still accepts this quote. Keep tracking it", "FUNDING_TRANSFER_UNRESOLVED");
+  }
   return transaction(db => {
     const latest = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId)!;
     if (latest.status !== "pending_deposit" || latest.source_tx_hash) throw new ApiError(409, "Source tracking changed during this review", "FUNDING_TRANSFER_UNRESOLVED");

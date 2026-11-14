@@ -7,6 +7,7 @@ import * as service from "./service";
 import { paymentRecoveryOverview } from "./recovery";
 import { paymentReviewToken } from "./approval";
 import { transaction } from "../db";
+import { fundingAssetCatalog } from "./direct-funding";
 
 export * from "./service";
 export type { Payment, PayoutAttempt, FundingLeg } from "./types";
@@ -37,6 +38,7 @@ paymentsRoutes.get("/assets", async (c) => {
   const tokens = await getSupportedTokens();
   return c.json({ tokens, chains: [...new Set(tokens.map((token) => token.blockchain))].sort() });
 });
+paymentsRoutes.get("/funding-assets", async c => c.json(await fundingAssetCatalog()));
 paymentsRoutes.get("/treasury", (c) => c.json(service.getTreasury(c.get("access"))));
 paymentsRoutes.post("/treasury/configure", async (c) => c.json(await service.configureTreasury(c.get("access"), await body(c.req.raw, z.object({ nearAccountId: text, tokenContract: text, network: z.enum(["mainnet", "testnet"]) })))));
 paymentsRoutes.post("/treasury/sync", async (c) => c.json(await service.syncTreasury(c.get("access"))));

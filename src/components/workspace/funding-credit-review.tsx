@@ -1,6 +1,7 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { isDirectFunding } from "@/lib/direct-funding";
 import { usd } from "@/lib/format";
 import type { FundingLeg } from "@/server/payments/types";
 import { useWorkspace } from "./context";
@@ -15,13 +16,15 @@ export function FundingCreditReview({ fundingId, status, sourceContext, onUpdate
   const { data, error: loadError } = useResource<ReceiptView>(canRead ? `${base}/reconciliation/funding/${fundingId}` : null, revision);
   const { busy, error, run } = useAction();
   const verified = data?.provenance === "final_near_token_receipt";
-  const canVerify = canRead && canPrepare && !verified && ["reported_delivered", "confirmed"].includes(status);
+  const direct = data?.funding ? isDirectFunding(JSON.parse(data.funding.quote)) : false;
+  const canVerify = canRead && canPrepare && !verified && (["reported_delivered", "confirmed"].includes(status) || direct && !!data?.funding.source_tx_hash && !["refunded_verified", "refunded_attested"].includes(status));
   const canClose = canPrepare && status === "pending_deposit" && !data?.funding.source_tx_hash && (!sourceContext || sourceContext === "company");
   return <section className="grid gap-4 border-t pt-4">
     {verified && <div role="status" className="rounded-lg bg-muted p-4 text-sm"><p>Final native-USDC treasury receipt verified: {usd(data.funding.credited_amount)}.</p><p className="mt-2 text-xs text-muted-foreground">If spendable cash has not updated, the treasury owner can register or refresh the token balance above. A source hash alone never creates company credit.</p><details className="mt-3 text-xs"><summary className="cursor-pointer">Verified receipt details</summary>{data.receipts.map(receipt => <p key={receipt.id} className="mt-2 break-all">{usd(receipt.amount)} USDC · {receipt.transaction_hash} · receipt {receipt.receipt_id}</p>)}</details></div>}
+    {data?.provenance === "final_near_unused_token_return" && <p role="status" className="text-sm">The original native-USDC transfer was fully returned to its source account. No company cash was credited; the source wallet still pays network gas. Its final return evidence is retained.</p>}
     {canVerify && <form className="grid gap-4 rounded-lg border p-4 sm:grid-cols-2" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); void run("verify-credit", async () => { const result = await api<ReceiptView>(`${base}/reconciliation/funding/${fundingId}/verify`, { ...(values.get("hash") ? { transactionHash: values.get("hash") } : {}), ...(values.get("sender") ? { senderAccountId: values.get("sender") } : {}), ...(values.get("receipt") ? { receiptId: values.get("receipt") } : {}) }); onUpdated(result.funding); refresh(); notify("Final NEAR receipt verified. Refresh the treasury token balance if its recorded cash still needs updating."); }); }}>
-      <p className="sm:col-span-2 text-sm">The routing service reports arrival. Verify the final native-USDC receipt before treating this funding leg as confirmed.</p>
-      <Field label="NEAR destination transaction (optional)" hint="Leave blank for automatic lookup when the provider returns one destination transaction."><input name="hash" className={control} minLength={32} maxLength={64} defaultValue={data?.funding.destination_tx_hash ?? ""}/></Field>
+      <p className="sm:col-span-2 text-sm">{direct ? "Verify the original tagged native-USDC transaction and company credit before treating this direct deposit as confirmed." : "The routing service reports arrival. Verify the final native-USDC receipt before treating this funding leg as confirmed."}</p>
+      <Field label="NEAR destination transaction (optional)" hint="Leave blank for automatic lookup when the provider returns one destination transaction."><input name="hash" className={control} minLength={32} maxLength={64} defaultValue={data?.funding.destination_tx_hash ?? data?.funding.source_tx_hash ?? ""}/></Field>
       <Field label="NEAR transaction signer (optional)" hint="Use the signer in the NEAR explorer if automatic lookup is unavailable."><input name="sender" className={control} minLength={2} maxLength={64}/></Field>
       <details className="sm:col-span-2"><summary className="cursor-pointer text-sm">Advanced receipt selection</summary><div className="mt-3"><Field label="Exact NEAR receipt ID (optional)"><input name="receipt" className={control} minLength={32} maxLength={64}/></Field></div></details>
       <div className="sm:col-span-2"><Action busy={busy === "verify-credit"} disabled={!!busy}>Verify final treasury credit</Action></div>

@@ -25,7 +25,7 @@ interface Route { attempt: Attempt; network: string; stage: string; walletAction
 export function PaymentFundingTask({ paymentId, close }: { paymentId: string; close: () => void }) {
   const { base, revision, refresh, session, organization, navigate } = useWorkspace();
   const { data: task, loading, error: loadError } = useResource<Task>(`${base}/payment-funding/${paymentId}`, revision);
-  const { data: assets } = useResource<{ tokens: Token[] }>("/assets", revision);
+  const { data: assets } = useResource<{ tokens: Token[]; routingCatalogAvailable?: boolean }>(`${base}/funding-assets`, revision);
   const { busy, error, run } = useAction();
   const [source, setSource] = useState(""), [walletId, setWalletId] = useState(""), [refundAddress, setRefundAddress] = useState("");
   const [route, setRoute] = useState<Route | null>(null);
@@ -86,7 +86,7 @@ export function PaymentFundingTask({ paymentId, close }: { paymentId: string; cl
       {canPrepare && leg.status === "reported_delivered" && <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); void run(`verify:${leg.id}`, async () => { await api(`${taskUrl}/reconcile`, { fundingId: leg.id, senderAccountId: values.get("sender") || undefined, transactionHash: values.get("hash") || undefined }); refresh(); }); }}><details className="sm:col-span-2"><summary className="cursor-pointer text-sm">Advanced receipt lookup</summary><Field label="NEAR transaction signer (optional)" hint="Only needed if automatic lookup fails. Use the signer shown by the NEAR explorer."><input name="sender" className={control} placeholder="signer.near" /></Field></details><Field label="Destination transaction hash"><input name="hash" className={control} defaultValue={leg.destination_tx_hash ?? ""} /></Field><div><Action busy={busy === `verify:${leg.id}`} disabled={!!busy}>Verify final NEAR token receipt</Action></div></form>}
       {/refund|unknown|failed/.test(leg.status) && <p className="mt-3 text-xs text-muted-foreground">This transfer remains linked to the approved obligation. Provider refund reports do not create treasury cash. Review source refunds in Treasury, or reconcile its actual receipt before replacement.</p>}
     </div>; })}
-    <h3 className="mb-3 mt-5 text-sm font-semibold">Payout attempts for this obligation</h3>
+    {assets?.routingCatalogAvailable===false&&<p role="status" className="mb-4 text-sm">Other funding assets are temporarily unavailable. Direct native USDC on NEAR remains available.</p>}<h3 className="mb-3 mt-5 text-sm font-semibold">Payout attempts for this obligation</h3>
     {!task.attempts.length ? <Empty>No payout attempt yet. Funding alone does not pay the recipient.</Empty> : task.attempts.map(attempt => <div key={attempt.id} className="mb-3 rounded-lg border p-4 text-sm"><Status value={attempt.state} /><p className="mt-2">{attempt.route} on {attempt.destination_network}. Source budget: {usd(attempt.amount_in)} USDC.</p><p className="mt-1 break-all text-xs text-muted-foreground">Attempt {attempt.id}</p>{attempt.source_tx_hash && <p className="mt-2 break-all text-xs">Source: {attempt.source_tx_hash}</p>}{attempt.destination_tx_hash && <p className="mt-2 break-all text-xs">Destination: {attempt.destination_tx_hash}</p>}</div>)}
   </Panel>;
 }

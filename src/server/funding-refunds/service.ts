@@ -9,6 +9,7 @@ import type { FundingLeg } from "../payments/types";
 import { digest, REFUND_FINAL_STATES, refundTerms } from "./policy";
 import { sourceWalletFamily, verifySourceRefund } from "./receipts";
 import type { RefundInput, RefundProof, RefundReview, RefundTerms } from "./types";
+import { isDirectFunding } from "../payments/direct-funding";
 
 interface ReviewRow { id: string; funding_id: string; created_by: string; terms_hash: string; terms_ciphertext: string; proof_ciphertext: string; expires_at: string; confirmed_at: string | null }
 interface Closure { funding_id: string; review_id: string; source_asset: string; source_network: string; refund_address: string; refunded_amount: string; reported_deposited_amount: string | null; transaction_hash: string; provenance: RefundProof["provenance"]; confirmed_at: string; confirmed_by: string }
@@ -66,6 +67,7 @@ export function createFundingRefundService(dependencies: Dependencies = { status
     const funding = fundingFor(access, fundingId);
     assertUncredited(access, funding);
     const quote = parseQuote(funding);
+    if (isDirectFunding(quote)) throw new ApiError(409, "This direct NEAR deposit has no routing-provider refund. Reconcile its original token transaction and company credit", "DIRECT_FUNDING_RECONCILIATION_REQUIRED");
     const source = frozenToken(funding) ?? expectedSource ?? (await dependencies.tokens(true)).find(token => token.assetId === funding.origin_asset);
     if (!source) throw new ApiError(409, "The original source token identity is unavailable. Keep the refund held until it can be verified", "FUNDING_REFUND_ASSET_UNAVAILABLE");
     const status = await dependencies.status(funding.deposit_address, funding.deposit_memo), terms = refundTerms(funding, quote, status, source, input), authority = authorize(access, terms);
