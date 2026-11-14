@@ -19,6 +19,7 @@ import type { Bill, Payment, PayrollRun, Recipient } from "./types";
 import type { PayrollCsvItem } from "@/lib/csv";
 import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
+import { PayrollImport, type ImportSelection } from "./payroll-import";
 
 function dollars(value: FormDataEntryValue | null, allowZero = false): string {
   try {
@@ -275,10 +276,12 @@ export function Payroll() {
   const { busy, error, run, setError } = useAction();
   const [items, setItems] = useState<Record<string, string>>({});
   const [importedRows, setImportedRows] = useState<Record<string, PayrollCsvItem>>({});
+  const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
   const [reviewRunId, setReviewRunId] = useState("");
   if (!canRead) return null;
   return (
     <div className="grid gap-6">
+      {canPrepare && <PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={setReviewRunId} />}
       {canPrepare && <Panel
         title="Prepare a pay run"
         description="Amounts are net USDC entitlements. Recipients receive their preferred supported asset, with an approved USDC backup where consented."
@@ -299,7 +302,7 @@ export function Payroll() {
                   400,
                   "EMPTY_RUN",
                 );
-              await api(`${base}/payroll`, {
+              const terms = {
                 reference: values.get("reference"),
                 periodStart: values.get("start"),
                 periodEnd: values.get("end"),
@@ -309,6 +312,9 @@ export function Payroll() {
                       organization.timezone,
                     )
                   : undefined,
+              };
+              const payload = {
+                ...terms,
                 items: selected.map(([recipientId, value]) => {
                   const imported = importedRows[recipientId], adjustment = imported?.adjustmentAmount;
                   return {
@@ -319,9 +325,14 @@ export function Payroll() {
                     ...(imported?.baseAmount !== undefined ? { baseAmount: dollars(imported.baseAmount, true), bonusAmount: dollars(imported.bonusAmount ?? "0", true), adjustmentAmount: adjustment?.startsWith("-") ? `-${dollars(adjustment.slice(1), true)}` : dollars(adjustment ?? "0", true) } : {}),
                   };
                 }),
-              });
+              };
+              const result = importSelection
+                ? await api<{ run: PayrollRun }>(`${base}/payroll-import/drafts/${importSelection.id}/commit`, { ...terms, expectedVersion: importSelection.version, reviewToken: importSelection.reviewToken, confirmed: true })
+                : await api<{ run: PayrollRun }>(`${base}/payroll`, payload);
               setItems({});
               setImportedRows({});
+              setImportSelection(null);
+              setReviewRunId(result.run.id);
               form.reset();
               refresh();
             });
@@ -372,6 +383,7 @@ export function Payroll() {
                       readOnly={importedRows[recipient.id]?.baseAmount !== undefined}
                       title={importedRows[recipient.id]?.baseAmount !== undefined ? "Imported components stay together. Save the draft, then adjust its base, bonus or correction in the review." : undefined}
                       onChange={(event) => {
+                        setImportSelection(null);
                         setItems(previous => ({ ...previous, [recipient.id]: event.target.value }));
                         setImportedRows(previous => previous[recipient.id] ? { ...previous, [recipient.id]: { ...previous[recipient.id], amount: event.target.value } } : previous);
                       }}
@@ -384,7 +396,7 @@ export function Payroll() {
           )}
           <div className="flex flex-wrap items-end gap-4">
             <div className="w-56">
-              <Field label="Max cost per payment (USDC)">
+              <Field label="Manual default cost cap (USDC)" hint={importSelection ? "Reviewed import row caps apply to this run." : undefined}>
                 <input
                   name="fee"
                   className={control}
@@ -414,6 +426,7 @@ export function Payroll() {
                     );
                     setItems(Object.fromEntries(Object.entries(parsed).map(([recipientId, item]) => [recipientId, item.amount])));
                     setImportedRows(parsed);
+                    setImportSelection(null);
                     setError("");
                   } catch (cause) {
                     setError((cause as Error).message);
