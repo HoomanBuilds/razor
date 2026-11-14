@@ -31,7 +31,7 @@ The subscription integration at `d6c630e` passed all 223 application checks, 18 
 | `NET-01` through `NET-06` | Accepted business-only obligations, conserved cycle reductions, exact owner consents, finality/code verification, atomic setoff, ordinary residual payments and noncash debt-discharge reports |
 | `OPS-01` through `OPS-05` | Current catalog checks, curated network controls, durable leases/journals, transaction monitoring, personal/company notices, optional email outbox and account/executor recovery |
 
-This table records integrated source, not 90 successful live demonstrations. Retained original assets currently mean approved NEAR NEP-141 holdings; they never increase spendable USDC. Fiat bank payouts, tax engines, receivable financing and full ERP synchronization remain outside the catalog.
+This table records integrated source, not 90 successful live demonstrations. Retained original assets currently mean approved NEAR NEP-141 holdings; they never increase spendable USDC. Fiat bank payouts, tax services, receivable financing and full ERP synchronization remain outside this integrated baseline. These and the other requested competitive improvements are now tracked in the [competitive feature checklist](competitive-gap-checklist.md); planning them does not establish implemented or live support.
 
 Recurring templates create reviewable draft obligations. The restricted executor can execute an exact route only after its required NEAR authorizations, within its mandate and before the route expires. It cannot create a new approved quote or approve a changed salary or destination by itself. Held occurrences require explicit recovery; pausing and resuming a template cannot bypass them.
 

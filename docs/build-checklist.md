@@ -2,6 +2,8 @@
 
 Use this document to compare the actual build with the intended product throughout development.
 
+Track the separately authorized competitive improvements in the [competitive feature checklist](specs/competitive-gap-checklist.md). Its 22 workstreams preserve every identified gap with granular acceptance IDs and their own evidence log. Review it alongside this checklist throughout implementation; no existing verified box changes merely because scope expands.
+
 Product: a NEAR-based company payments and payroll platform with easy onboarding, connected source wallets, supported-asset funding, recipient preferences, USDC backup, private financial analysis and optional business netting.
 
 Current treasury implementation: `shared_v1`, with one deployed NEAR treasury and company-scoped balances, permissions and payment records. Activation prepays company state rather than deploying another contract. Existing isolated configurations require deliberate migration. See the [shared treasury specification](specs/shared-treasury.md).
@@ -222,7 +224,7 @@ These checks support claims described in [NEAR track alignment](specs/near-track
 
 ## Later extensions
 
-Receivable financing, fiat bank payouts, tax and statutory payroll engines, full ERP synchronization and general agent procurement are outside the current core completion count. Add approved scope and verification criteria before treating them as product requirements or advertising them as available.
+Receivable financing, fiat bank payouts, tax and statutory payroll services, full ERP synchronization and general agent procurement remain outside the current core completion count. These and the other competitive extensions now have approved tracking scope and acceptance criteria in the [competitive feature checklist](specs/competitive-gap-checklist.md). Leave every unverified extension open until its stated behavior and required provider/contract evidence are demonstrated; planning alone cannot establish availability.
 
 ## Review log and evidence
 

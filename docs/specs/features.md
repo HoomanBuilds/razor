@@ -1,10 +1,12 @@
 # Razor feature catalog
 
-Status: intended product behavior, not a shipped-feature list. Updated 13 November 2026.
+Status: intended product behavior, not a shipped-feature list. Updated 14 November 2026.
 
 Core features form the company payments product. Optional features can be enabled when a company needs them. Later extensions are outside the initial product definition, independent of the hackathon deadline.
 
 Use the [build checklist](../build-checklist.md) for recurring verification. Every feature ID below has a matching check there; an unchecked item is unverified rather than a claim that implementation is absent.
+
+The separately authorized [competitive feature checklist](competitive-gap-checklist.md) extends this baseline with 22 workstreams and granular acceptance IDs. It covers missing intake and execution workflows, new opt-in authority/privacy/settlement modes, and partner-backed business services. These planned requirements do not change the 97 baseline feature count or establish implementation evidence.
 
 ## 0. Self-serve onboarding and wallets
 
@@ -204,6 +206,6 @@ Acceptance: the dedicated NEAR billing contract accepts each signed invoice once
 
 ## Later extensions
 
-Receivable financing and lender auctions, fiat bank payouts, tax engines, statutory payroll, full ERP synchronization and general agent procurement are separate extensions. Each requires its own acceptance criteria and integration evidence before appearing as supported functionality.
+Receivable financing and lender auctions, fiat bank payouts, tax engines, statutory payroll, full ERP synchronization and general agent procurement remain separate from the initial core completion count. Their requested expansion is now explicitly tracked, together with company services and private tenders, in [competitive extension requirements](competitive-gap-checklist.md). They require their stated contracts, partner/service scope and integration evidence before appearing as supported functionality; inclusion in the checklist alone does not enable them.
 
 See [NEAR track alignment](near-track-alignment.md) for the evidence these product features must provide in a hackathon demonstration.
