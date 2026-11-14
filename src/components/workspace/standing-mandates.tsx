@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
+import { focusWorkspaceForm } from "./page-metrics";
 import { api } from "@/lib/api";
 import { dateLabel, microUsd, usd } from "@/lib/format";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
@@ -30,19 +32,18 @@ export function StandingMandatesPanel() {
     finally { refresh(); }
   }
   if (!canRead) return null;
-  return <Panel title="Optional native vendor autopay" description="Opt in to bounded native NEAR USDC authority. Cross-chain standing payments are unavailable. Ordinary exact-route wallet review remains available.">
+  return <Panel title="Optional native vendor autopay" description="Bounded native-USDC supplier payments. Cross-chain standing payments are unavailable." action={owner ? <Action type="button" onClick={()=>openTaskDrawer("standing-grant-create-flow")}>Configure grant</Action> : undefined}>
     <div className="grid gap-5">
-      <p className="text-sm text-muted-foreground">The owner and the highest company wallet quorum review each grant. Every new grant starts a 24-hour supplier activation delay on NEAR. There is no emergency bypass. A new grant rebinds the supplier and invalidates prior recipient-bound grants and unsigned route approvals. Accepted, approved and funded vendor bills can then execute without another route signature.</p>
-      {resource.data && <><p className="text-xs text-muted-foreground">{resource.data.usageRule}</p><p className="text-xs text-muted-foreground">{resource.data.invoiceRule}</p></>}
-      <button type="button" className="w-fit text-sm text-primary" onClick={() => navigate("payments")}>Open payments for exact-route review</button>
-      {owner && <form className="grid gap-4 rounded-lg border p-4 sm:grid-cols-2" onSubmit={event => {
+      <p className="text-xs leading-5 text-muted-foreground">Grants need owner approval and a 24-hour supplier activation delay. Ordinary exact-route review remains available without autopay.</p><details className="text-xs text-muted-foreground"><summary className="cursor-pointer font-medium">Authority, activation and invoice rules</summary><div className="mt-3 space-y-3 leading-5"><p>The owner and the highest company wallet quorum review each grant. Every new grant starts a 24-hour supplier activation delay on NEAR. There is no emergency bypass. A new grant rebinds the supplier and invalidates prior recipient-bound grants and unsigned route approvals. Accepted, approved and funded vendor bills can then execute without another route signature.</p>{resource.data && <><p>{resource.data.usageRule}</p><p>{resource.data.invoiceRule}</p></>}</div></details>
+      <button type="button" className="w-fit text-sm text-primary" onClick={() => {navigate("payments");focusWorkspaceForm("payment-queue");}}>Open payments for exact-route review</button>
+      {owner && <TaskDrawer id="standing-grant-create-flow" title="Configure native vendor autopay" description="Define one supplier, a restricted executor and exact spending limits."><div aria-busy={!!busy}><form className="grid gap-4 rounded-lg border p-4 sm:grid-cols-2" onSubmit={event => {
         event.preventDefault(); const data = new FormData(event.currentTarget);
-        void run("prepare-native-grant", async () => setPreview(await api<Preview>(`${base}/standing-mandates/prepare`, {
+        void run("prepare-native-grant", async () => {const prepared=await api<Preview>(`${base}/standing-mandates/prepare`, {
           recipientId: data.get("supplier"), actorAccountId: data.get("actor"), actorPublicKey: data.get("key"),
           perPaymentMaxInput: microUsd(String(data.get("payment"))), periodMaxInput: microUsd(String(data.get("period"))),
           lifetimeMaxInput: microUsd(String(data.get("lifetime"))), periodDays: Number(data.get("days")),
           validFrom: new Date(String(data.get("start"))).toISOString(), expiresAt: new Date(String(data.get("expiry"))).toISOString(),
-        })));
+        });setPreview(prepared);closeTaskDrawer("standing-grant-create-flow",true);requestAnimationFrame(()=>document.getElementById("standing-mandate-review")?.scrollIntoView({block:"start"}));});
       }}>
         <Field label="Confirmed native supplier"><select name="supplier" className={control} required><option value="">Choose supplier</option>{resource.data?.suppliers.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}</select></Field>
         <Field label="Dedicated native executor account"><input name="actor" className={control} required placeholder="vendor-executor.near" /></Field>
@@ -54,8 +55,8 @@ export function StandingMandatesPanel() {
         <Field label="Valid from (your local time)"><input name="start" className={control} type="datetime-local" required /></Field>
         <Field label="Expires at (your local time)"><input name="expiry" className={control} type="datetime-local" required /></Field>
         <div className="sm:col-span-2"><Action disabled={!!busy} busy={busy === "prepare-native-grant"}>Review native authority grant</Action></div>
-      </form>}
-      {preview && <div className="rounded-lg border border-primary/30 p-4"><h3 className="font-semibold">Review the exact native authority</h3><p className="mt-2 text-sm">Signer: {preview.ownerAccount} on NEAR {preview.network}. {preview.requiredApprovals ? `${preview.requiredApprovals} distinct approvals required, including the owner.` : ""}</p><pre className="my-3 max-h-72 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(preview.terms ?? preview.walletActions.map(value => value.actions.map(action => ({ method: action.params.methodName, args: action.params.args }))), null, 2)}</pre><div className="flex gap-3"><Action disabled={!!busy} busy={busy === "sign-native"} onClick={() => void run("sign-native", async () => {
+      </form>{error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</div></TaskDrawer>}
+      {preview && <div id="standing-mandate-review" className="scroll-mt-8 rounded-lg border border-primary/30 p-4"><h3 className="font-semibold">Review the exact native authority</h3><p className="mt-3 text-xs leading-5 text-muted-foreground">The owner and the highest company wallet quorum review each grant. Every new grant starts a 24-hour supplier activation delay on NEAR. There is no emergency bypass. A new grant rebinds the supplier and invalidates prior recipient-bound grants and unsigned route approvals. Accepted, approved and funded vendor bills can then execute without another route signature.</p><p className="mt-2 text-sm">Signer: {preview.ownerAccount} on NEAR {preview.network}. {preview.requiredApprovals ? `${preview.requiredApprovals} distinct approvals required, including the owner.` : ""}</p><pre className="my-3 max-h-72 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(preview.terms ?? preview.walletActions.map(value => value.actions.map(action => ({ method: action.params.methodName, args: action.params.args }))), null, 2)}</pre><div className="flex gap-3"><Action disabled={!!busy} busy={busy === "sign-native"} onClick={() => void run("sign-native", async () => {
         await signNearActions(preview.walletActions, preview.network, [preview.ownerAccount]);
         setPreview(null); refresh(); notify("Wallet actions submitted. Inspect the final grant, wait for activation and enable it after its quorum is complete.");
       })}>Confirm with required wallet</Action><button type="button" className="text-sm text-primary" disabled={!!busy} onClick={() => setPreview(null)}>Close review</button></div></div>}
