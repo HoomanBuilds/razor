@@ -391,7 +391,7 @@ export function PacketVerifier() {
           independently-reviewed-destination.json --destination-rpc-url
           https://your-selected-rpc
         </pre>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">
+        <p className="mt-3 min-w-0 break-words text-xs leading-5 text-muted-foreground">
           Destination evidence format:{" "}
           {`{"schema":"razor.destination-evidence","version":1,"transfer":{"kind":"evm","chainId":1,"transactionHash":"0x...","tokenContract":"0x...","sender":"0x...","recipient":"0x...","amount":"1000000","logIndex":0,"finality":"rpc_finalized"}}`}
           . Replace placeholders with real independently checked identities.
