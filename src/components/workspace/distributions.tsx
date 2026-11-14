@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
 import { api } from "@/lib/api";
 import { microUsd, usd } from "@/lib/format";
 import { formatUnits } from "@/lib/money";
@@ -38,17 +39,17 @@ export function DistributionsPanel() {
     } finally { setPreview(null); setConfirmed(false); refresh(); }
   });
   if (!canRead) return null;
-  return <Panel title="Optional claimable distributions" tone="white" description="Native USDC pools for grants and distributions. Payroll stays separate." help="Create a separate native-USDC grant or distribution pool. Ordinary push payroll stays separate and does not require recipient claim gas.">
+  return <Panel title="Optional claimable distributions" tone="white" description="Native USDC pools for grants and distributions. Payroll stays separate." action={canPrepare ? <Action type="button" onClick={()=>openTaskDrawer("distribution-create-flow")}>New distribution</Action> : undefined} help="Create a separate native-USDC grant or distribution pool. Ordinary push payroll stays separate and does not require recipient claim gas.">
     <div className="grid min-w-0 grid-cols-1 gap-5">
       <p className="text-xs leading-5 text-muted-foreground">{resource.data?.privacy ?? "Allocation accounts and amounts are public in NEAR transactions. Claiming always pays the exact approved destination. Cross-chain claims are unavailable."} This does not convert or settle an existing payroll obligation.</p>
       <button type="button" className="w-fit text-sm text-primary" onClick={() => navigate("treasury")}>Open Treasury for funding, authority or company storage top-up</button>
       {resource.data && !resource.data.configured && <p className="text-sm text-muted-foreground">You can prepare a draft now. Native setup, owner authorization, confirmed USDC backing and sufficient company storage are required before claims become available.</p>}
-      {canPrepare && <details className="min-w-0 rounded-2xl border border-border bg-white p-5"><summary className="cursor-pointer text-sm font-medium">Create an independent claimable pool</summary><form className="mt-4 grid min-w-0 grid-cols-1 gap-4" onChange={() => { requestKey.current = ""; }} onSubmit={event => {
+      {canPrepare && <TaskDrawer id="distribution-create-flow" title="Create a claimable distribution" description="Specify fixed native-USDC recipients and the claim deadline."><div aria-busy={!!busy}><form className="mt-4 grid min-w-0 grid-cols-1 gap-4" onChange={() => { requestKey.current = ""; }} onSubmit={event => {
         event.preventDefault(); const form = event.currentTarget, values = new FormData(form);
         void run("create-distribution", async () => {
           requestKey.current ||= crypto.randomUUID();
           const response = await api<{ distribution: { id: string } }>(`${base}/distributions`, { reference: values.get("reference"), deadline: new Date(String(values.get("deadline"))).toISOString(), requestKey: requestKey.current, items: items.map(item => ({ recipientId: item.recipientId, amount: microUsd(item.amount) })) });
-          setSelected(response.distribution.id); setNotice("Independent distribution draft saved. It has no funded claim authority yet."); requestKey.current = ""; refresh();
+          setSelected(response.distribution.id);closeTaskDrawer("distribution-create-flow",true); setNotice("Independent distribution draft saved. It has no funded claim authority yet."); requestKey.current = ""; refresh();
         });
       }}>
         <fieldset disabled={!!busy} className="grid min-w-0 grid-cols-1 gap-4 border-0 p-0 sm:grid-cols-2">
@@ -62,7 +63,7 @@ export function DistributionsPanel() {
           </div>)}
           <div className="flex flex-wrap gap-3 sm:col-span-2"><Action type="button" disabled={items.length >= 64} onClick={() => setItems(previous => [...previous, { key: crypto.randomUUID(), recipientId: "", amount: "" }])}>Add allocation</Action><Action busy={busy === "create-distribution"} disabled={!resource.data?.recipients.length}>Save unfunded distribution draft</Action></div>
         </fieldset>
-      </form></details>}
+      </form>{error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</div></TaskDrawer>}
       {resource.loading ? <Empty>Loading distribution history...</Empty> : !resource.data?.distributions.length ? <Empty>No independent claim pools on this page. Use ordinary payroll for push payments.</Empty> : <DataTable columns={["Pool", "Entitlement", "State", "Inspect"]}>{resource.data.distributions.map(value => <tr key={value.id}><td><strong>{value.reference}</strong><p className="text-xs">{value.payload.items.length} allocations</p></td><td>{usd(value.total_amount)} USDC<p className="text-xs">Deadline {new Date(value.payload.deadline).toLocaleString()}</p></td><td><Status value={value.chain_status ?? value.stage} /><p className="text-xs">Locally fenced {usd(value.local_reserved)}</p></td><td><button type="button" className="text-primary" onClick={() => { setSelected(value.id); setPreview(null); }}>Inspect fixed pool</button></td></tr>)}</DataTable>}
       {resource.data && resource.data.total > 0 && <div className="flex flex-wrap items-center justify-between gap-3 text-xs"><Action type="button" disabled={page <= 1} onClick={() => setPage(value => value - 1)}>Previous pools</Action><span>Page {page}</span><Action type="button" disabled={!resource.data.hasMore} onClick={() => setPage(value => value + 1)}>Next pools</Action></div>}
       {detail.loading && <Empty>Checking the selected pool...</Empty>}

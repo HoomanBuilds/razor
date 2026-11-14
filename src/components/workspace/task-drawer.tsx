@@ -17,7 +17,7 @@ export async function withTaskDrawerWallet<T>(operation:()=>Promise<T>):Promise<
   const drawer=Array.from(document.querySelectorAll<HTMLDialogElement>('dialog[data-task-drawer][open]')).at(-1);
   if(drawer){drawer.dataset.walletSuspended="true";drawer.close();}
   try{return await operation();}
-  finally{if(drawer){delete drawer.dataset.walletSuspended;if(drawer.isConnected&&!document.querySelector('dialog[data-task-drawer][open]'))drawer.showModal();}}
+  finally{if(drawer){delete drawer.dataset.walletSuspended;if(drawer.isConnected&&!drawer.open&&!document.querySelector('dialog[data-task-drawer][open]')){try{drawer.showModal();}catch{}}}}
 }
 
 export function TaskDrawer({ id, title, description, children, busySelector = '[aria-busy="true"]' }: { id: string; title: string; description?: string; children: ReactNode; busySelector?: string }) {
