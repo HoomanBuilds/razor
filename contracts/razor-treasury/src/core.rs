@@ -1415,14 +1415,7 @@ impl CompanyTreasury {
             "expires_at_ms":payment.expires_at_ms,"not_before_ms":payment.not_before_ms,"reference":payment.reference,"policy_version":U64(self.policy_version),"required_approvals":self.required_approvals(payment)}),
         )
     }
-    fn attempt_terms_hash(&self, payment: &Payment, attempt: &Attempt) -> String {
-        self.attempt_terms_hash_with_payment_hash(&self.payment_terms_hash(payment), attempt)
-    }
-    fn attempt_terms_hash_with_payment_hash(
-        &self,
-        payment_terms_hash: &str,
-        attempt: &Attempt,
-    ) -> String {
+    fn attempt_terms_hash(&self, payment_terms_hash: &str, attempt: &Attempt) -> String {
         hash_terms(
             json!({"domain":"razor_route_approval_v1","payment_terms_hash":payment_terms_hash,"attempt_id":attempt.id,
             "destination":attempt.destination,"route":attempt.route,"use_backup":attempt.use_backup,"policy_version":U64(self.policy_version)}),
@@ -1470,8 +1463,8 @@ impl CompanyTreasury {
                             == Some(&attempt.destination.asset_id))
             });
         let payment_terms_hash = self.payment_terms_hash(payment);
-        let attempt_terms_hash = attempt
-            .map(|attempt| self.attempt_terms_hash_with_payment_hash(&payment_terms_hash, attempt));
+        let attempt_terms_hash =
+            attempt.map(|attempt| self.attempt_terms_hash(&payment_terms_hash, attempt));
         ApprovalStatus {
             policy_version: U64(self.policy_version),
             approval_amount: U128(add(payment.amount.0, payment.max_fee.0)),

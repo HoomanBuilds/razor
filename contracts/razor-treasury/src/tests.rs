@@ -1598,7 +1598,10 @@ fn approval_status_hash_reuse_preserves_legacy_payment_and_route_bytes() {
         Some(legacy_attempt.as_str())
     );
     assert_eq!(
-        treasury.attempt_terms_hash(&payment, attempt),
+        treasury
+            .approval_status(&payment, Some(attempt))
+            .attempt_terms_hash
+            .unwrap(),
         legacy_attempt
     );
     assert_eq!(
@@ -1614,19 +1617,28 @@ fn approval_status_hash_reuse_preserves_legacy_payment_and_route_bytes() {
         legacy_payment
     );
     assert_ne!(
-        treasury.attempt_terms_hash(&changed_payment, attempt),
+        treasury
+            .approval_status(&changed_payment, Some(attempt))
+            .attempt_terms_hash
+            .unwrap(),
         legacy_attempt
     );
     let mut changed_attempt = attempt.clone();
     changed_attempt.route.quote_hash = "b".repeat(64);
     assert_ne!(
-        treasury.attempt_terms_hash(&payment, &changed_attempt),
+        treasury
+            .approval_status(&payment, Some(&changed_attempt))
+            .attempt_terms_hash
+            .unwrap(),
         legacy_attempt
     );
     treasury.policy_version += 1;
     assert_ne!(treasury.payment_terms_hash(&payment), legacy_payment);
     assert_ne!(
-        treasury.attempt_terms_hash(&payment, attempt),
+        treasury
+            .approval_status(&payment, Some(attempt))
+            .attempt_terms_hash
+            .unwrap(),
         legacy_attempt
     );
 }

@@ -4,8 +4,10 @@ pub use core::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
 pub use types::*;
 
 use core::CompanyTreasury;
+#[cfg(test)]
+use near_sdk::NearToken;
 use near_sdk::{
-    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, ext_contract,
+    AccountId, Gas, PanicOnDefault, Promise, PromiseOrValue, env, ext_contract,
     json_types::{U64, U128},
     near, require,
     serde_json::json,
