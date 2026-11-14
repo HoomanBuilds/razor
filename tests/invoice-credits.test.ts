@@ -141,7 +141,7 @@ test("legacy arithmetic retains zero-credit behavior, and mixed exact reductions
 });
 
 test("actual authenticated routes enforce origin, sessions, current company access and sender-owned notes",async()=>{
- const f=fixture(),bill=f.invoice(),app=new Hono<AppEnv>();app.onError((error,c)=>error instanceof ApiError?c.json({code:error.code},error.status):error instanceof ZodError?c.json({code:"INVALID_INPUT"},422):c.json({code:"INTERNAL",error:error.message},500));app.route("/supplier-invoice-credits",supplierCreditRoutes);app.route("/organizations/:orgId/invoice-credits",companyCreditRoutes);
+ const f=fixture(),bill=f.invoice(),app=new Hono<AppEnv>();app.onError((error,c)=>error instanceof ApiError?c.json({code:error.code},error.status as 400):error instanceof ZodError?c.json({code:"INVALID_INPUT"},422):c.json({code:"INTERNAL",error:error.message},500));app.route("/supplier-invoice-credits",supplierCreditRoutes);app.route("/organizations/:orgId/invoice-credits",companyCreditRoutes);
  const path="http://localhost:3000/supplier-invoice-credits",input={billId:bill.id,reference:randomUUID(),amount:bill.amount,unit:"USDC",reason:"Supplier agreed invoice correction",idempotencyKey:randomUUID()},headers={Cookie:`razor_session=${f.token}-supplier`,Origin:process.env.APP_URL!,"Content-Type":"application/json"};
  assert.equal((await app.request(path,{method:"POST",body:JSON.stringify(input),headers:{...headers,Origin:"https://wrong.invalid"}})).status,403);assert.equal((await app.request(path)).status,401);
  const response=await app.request(path,{method:"POST",headers,body:JSON.stringify(input)});assert.equal(response.status,200,await response.clone().text());const note=(await response.json()).note;
