@@ -33,7 +33,7 @@ async function configFor(access: AccessContext) {
 function linked(userId: string, config: TreasuryConfig) { return rows<{ address: string }>("SELECT address FROM linked_wallets WHERE user_id=? AND family='near' AND network=? ORDER BY address", userId, config.network).map(item => item.address); }
 function nativeProfile(profile: RecipientRecord, token?: string) {
   if (!profile.user_id || profile.archived || profile.preference_status !== "confirmed" || profile.primary_network !== "near" || profile.primary_memo
-    || !["USDC", ...(token ? [`nep141:${token}`] : [])].includes(profile.primary_asset) || !validNearAccount(profile.primary_address)) throw new ApiError(409, "Choose a confirmed native NEAR USDC payee with a bound personal account and no memo. Use ordinary push payments for other destinations", "DISTRIBUTION_NATIVE_ONLY");
+    || !["USDC", `nep141:${token ?? NATIVE_USDC.near}`].includes(profile.primary_asset) || !validNearAccount(profile.primary_address)) throw new ApiError(409, "Choose a confirmed native NEAR USDC payee with a bound personal account and no memo. Use ordinary push payments for other destinations", "DISTRIBUTION_NATIVE_ONLY");
 }
 function currentProfiles(access: AccessContext, value: Payload, token: string) {
   return value.items.map(item => {
@@ -73,11 +73,14 @@ export function listDistributions(access: AccessContext, input: unknown = {}) {
     configured: !!config, crossChainClaims: false, mode: "independent_native_claim_pool", privacy: "Allocation accounts and amounts are public in NEAR transaction data. The personal workspace exposes only your own allocations. Ordinary push payroll remains separate." };
 }
 export function discardDistribution(access: AccessContext, id: string) {
-  const live = accessFor(access, "payments:prepare"), value = local(live, id);
-  if (value.created_by !== live.userId && !row("SELECT id FROM organizations WHERE id=? AND owner_id=?", live.organizationId, live.userId)) throw new ApiError(403, "The draft creator or company owner can cancel this draft", "DISTRIBUTION_CREATOR_REQUIRED");
-  if (value.stage !== "draft" || value.plan_ciphertext || value.local_reserved !== "0") throw new ApiError(409, "Use the owner-signed NEAR cancellation for a reviewed or uncertain creation", "DISTRIBUTION_CREATION_HELD");
-  getDb().prepare("UPDATE claim_distributions SET stage='voided',updated_at=? WHERE id=? AND stage='draft'").run(now(), id);
-  audit(live.userId, live.organizationId, "distribution.draft_cancelled", id); return { cancelled: true };
+  return transaction(db => {
+    const live = accessFor(access, "payments:prepare"), value = local(live, id);
+    if (value.created_by !== live.userId && !row("SELECT id FROM organizations WHERE id=? AND owner_id=?", live.organizationId, live.userId)) throw new ApiError(403, "The draft creator or company owner can cancel this draft", "DISTRIBUTION_CREATOR_REQUIRED");
+    if (value.stage !== "draft" || value.plan_ciphertext || value.local_reserved !== "0") throw new ApiError(409, "Use the owner-signed NEAR cancellation for a reviewed or uncertain creation", "DISTRIBUTION_CREATION_HELD");
+    const changed = db.prepare("UPDATE claim_distributions SET stage='voided',updated_at=? WHERE id=? AND organization_id=? AND stage='draft' AND plan_ciphertext IS NULL AND local_reserved='0'").run(now(), id, live.organizationId);
+    if (changed.changes !== 1) throw new ApiError(409, "The draft changed before cancellation. Refresh its current review", "DISTRIBUTION_CREATION_HELD");
+    audit(live.userId, live.organizationId, "distribution.draft_cancelled", id); return { cancelled: true };
+  });
 }
 export async function releaseUnsignedDistribution(access: AccessContext, id: string) {
   const live = owner(access), value = local(live, id);
@@ -180,8 +183,13 @@ export async function prepareDistributionControl(access: AccessContext, id: stri
   return { phase: action, network: config.network, eligibleSigners: [signer], walletActions: [treasuryAction(config, method, { distribution_id: id, ...(action !== "void" ? { expected_terms_hash: state.chain!.terms_hash } : {}) }, "1", "180000000000000")], planHash: null, total: value.total_amount };
 }
 
+interface OwnAllocation {
+  id: string; distribution_id: string; organization_id: string; payload_ciphertext: string; source_unknown: number; observed_nonce: string;
+  review_generation: string | null; review_hash: string | null; review_expires_at: string | null; review_consumed: number;
+  wallet_lease_generation: string | null; wallet_lease_expires_at: string | null;
+}
 function ownAllocation(userId: string, id: string) {
-  const allocation = row<{ id: string; distribution_id: string; organization_id: string; payload_ciphertext: string; source_unknown: number }>("SELECT a.* FROM claim_distribution_allocations a JOIN claim_distributions d ON d.id=a.distribution_id WHERE a.id=? AND a.bound_user_id=? AND d.chain_status IS NOT NULL", id, userId);
+  const allocation = row<OwnAllocation>("SELECT a.* FROM claim_distribution_allocations a JOIN claim_distributions d ON d.id=a.distribution_id WHERE a.id=? AND a.bound_user_id=? AND d.chain_status IS NOT NULL", id, userId);
   if (!allocation) throw new ApiError(404, "Claim entitlement not found", "DISTRIBUTION_CLAIM_NOT_FOUND"); return allocation;
 }
 export function ownDistributionClaims(userId: string, input: unknown = {}) {
@@ -205,10 +213,13 @@ export async function inspectOwnClaim(userId: string, id: string) {
   if (Date.now() >= Date.parse(payload(distribution).deadline)) problems.push("The agreed claim deadline passed");
   if (!claim || claim.status !== "ready") problems.push(claim?.status === "pending" ? "The original native transfer is pending. Refresh its contract outcome; a timeout does not create another entitlement" : claim?.status === "paid" ? "The native token callback records this entitlement as paid" : "This entitlement is not available to claim");
   if (claim && (!profile?.active || profile.version !== claim.allocation.recipient_version || profile.primary.address !== claim.destination)) problems.push("The approved receiving profile changed. This claim cannot redirect; ask the company to review it");
+  const current = getRecipient(own.organization_id, allocation.recipientId);
+  if (current.archived || current.preference_status !== "confirmed" || current.version !== allocation.recipientVersion || current.user_id !== allocation.boundUserId || current.primary_address !== allocation.address) problems.push("Your Razor receiving profile changed. This app will not retry the old allocation. The company must review its onchain receiving record; changing an app profile alone cannot revoke a public onchain claim");
   if (claim) getDb().prepare("UPDATE claim_distribution_allocations SET observed_status=?,observed_nonce=?,source_unknown=CASE WHEN ?!='ready' OR observed_nonce!=? THEN 0 ELSE source_unknown END WHERE id=? AND bound_user_id=?").run(claim.status, claim.nonce, claim.status, claim.nonce, id, userId);
-  return { claim, amount: allocation.amount, address: allocation.address, network: config.network, deadline: payload(distribution).deadline, problems, eligibleSigners: linked(userId, config), sourceUnknown: !!own.source_unknown };
+  const latest = ownAllocation(userId, id);
+  return { claim, amount: allocation.amount, address: allocation.address, network: config.network, deadline: payload(distribution).deadline, problems, eligibleSigners: linked(userId, config), sourceUnknown: !!latest.source_unknown, walletLeaseExpiresAt: latest.wallet_lease_expires_at };
 }
-export async function prepareOwnClaim(userId: string, id: string) {
+async function claimPlanFor(userId: string, id: string) {
   const own = ownAllocation(userId, id), state = await inspectOwnClaim(userId, id);
   if (state.problems.length || !state.claim) throw new ApiError(409, state.problems.join(". "), "DISTRIBUTION_CLAIM_HELD");
   if (!state.eligibleSigners.length) throw new ApiError(403, "Link a NEAR wallet to pay claim gas, or ask the company for ordinary push payment support", "DISTRIBUTION_GAS_WALLET_REQUIRED");
@@ -227,11 +238,37 @@ export async function prepareOwnClaim(userId: string, id: string) {
   if (storage) walletActions.push(treasuryAction(config, "claim_distribution", { distribution_id: own.distribution_id, claim_id: id }, "0", "120000000000000"));
   return { ...state, phase, walletActions, registrationDeposit, planHash: hash({ phase, claimId: id, nonce: state.claim.nonce, destination: state.address, amount: state.amount, network: state.network, walletActions }) };
 }
-export async function beginOwnClaim(userId: string, id: string, input: { planHash: string; signerAccount: string }) {
-  const preview = await prepareOwnClaim(userId, id);
-  if (preview.planHash !== input.planHash || !preview.eligibleSigners.includes(input.signerAccount)) throw new ApiError(409, "The fixed claim or its gas signer changed. Review again", "DISTRIBUTION_REVIEW_CHANGED");
-  if (preview.phase === "claim") getDb().prepare("UPDATE claim_distribution_allocations SET source_unknown=1 WHERE id=? AND bound_user_id=?").run(id, userId);
+const CLAIM_REVIEW_MS = 300_000;
+const CLAIM_WALLET_LEASE_MS = 120_000;
+export async function prepareOwnClaim(userId: string, id: string) {
+  const previous = ownAllocation(userId, id);
+  if (previous.wallet_lease_expires_at && previous.wallet_lease_expires_at > now()) throw new ApiError(409, "A wallet dialog already owns this fixed claim. Finish that dialog or wait for its short review lease, then refresh the same entitlement", "DISTRIBUTION_WALLET_BUSY");
+  const preview = await claimPlanFor(userId, id), reviewGeneration = randomUUID(), reviewExpiresAt = new Date(Date.now() + CLAIM_REVIEW_MS).toISOString();
+  const planHash = hash({ reviewGeneration, actionHash: preview.planHash });
+  transaction(db => {
+    const current = ownAllocation(userId, id);
+    if (current.wallet_lease_expires_at && current.wallet_lease_expires_at > now()) throw new ApiError(409, "Another wallet dialog started during review. Refresh the original fixed claim", "DISTRIBUTION_WALLET_BUSY");
+    db.prepare("UPDATE claim_distribution_allocations SET review_generation=?,review_hash=?,review_expires_at=?,review_consumed=0,wallet_lease_generation=NULL,wallet_lease_expires_at=NULL WHERE id=? AND bound_user_id=?").run(reviewGeneration, planHash, reviewExpiresAt, id, userId);
+  });
+  return { ...preview, planHash, reviewGeneration, reviewExpiresAt, retrySameClaim: preview.phase === "claim" && !!preview.sourceUnknown };
+}
+export async function beginOwnClaim(userId: string, id: string, input: { planHash: string; signerAccount: string; reviewGeneration: string; retrySameClaim?: boolean }) {
+  const preview = await claimPlanFor(userId, id);
+  if (preview.phase === "claim" && preview.sourceUnknown && input.retrySameClaim !== true) throw new ApiError(409, "Explicitly review retrying this same fixed claim ID and its additional gas costs", "DISTRIBUTION_SAME_CLAIM_REVIEW_REQUIRED");
+  if (hash({ reviewGeneration: input.reviewGeneration, actionHash: preview.planHash }) !== input.planHash || !preview.eligibleSigners.includes(input.signerAccount)) throw new ApiError(409, "The fixed claim or its gas signer changed. Review again", "DISTRIBUTION_REVIEW_CHANGED");
+  transaction(db => {
+    ownAllocation(userId, id);
+    const timestamp = now(), leaseUntil = new Date(Date.now() + CLAIM_WALLET_LEASE_MS).toISOString();
+    const changed = db.prepare("UPDATE claim_distribution_allocations SET review_consumed=1,wallet_lease_generation=?,wallet_lease_expires_at=?,source_unknown=CASE WHEN ? THEN 1 ELSE source_unknown END WHERE id=? AND bound_user_id=? AND review_generation=? AND review_hash=? AND review_expires_at>? AND review_consumed=0 AND (wallet_lease_expires_at IS NULL OR wallet_lease_expires_at<=?)")
+      .run(input.reviewGeneration, leaseUntil, Number(preview.phase === "claim"), id, userId, input.reviewGeneration, input.planHash, timestamp, timestamp);
+    if (changed.changes !== 1) throw new ApiError(409, "This review was replaced, expired or already opened a wallet dialog. Refresh and review the same fixed claim", "DISTRIBUTION_REVIEW_CHANGED");
+  });
   return { fenced: preview.phase === "claim", phase: preview.phase };
+}
+export function finishOwnClaimWallet(userId: string, id: string, reviewGeneration: string) {
+  ownAllocation(userId, id);
+  const changed = getDb().prepare("UPDATE claim_distribution_allocations SET wallet_lease_generation=NULL,wallet_lease_expires_at=NULL WHERE id=? AND bound_user_id=? AND wallet_lease_generation=?").run(id, userId, reviewGeneration);
+  return { released: changed.changes === 1 };
 }
 function validReportedHash(value: string) { if (!/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(value)) throw new ApiError(422, "Use the NEAR wallet's transaction reference", "DISTRIBUTION_REFERENCE_INVALID"); }
 export function recordDistributionWalletReference(access: AccessContext, id: string, transactionHash: string) {
@@ -239,8 +276,9 @@ export function recordDistributionWalletReference(access: AccessContext, id: str
   getDb().prepare("UPDATE claim_distributions SET source_tx_hash=COALESCE(source_tx_hash,?),updated_at=? WHERE id=? AND organization_id=?").run(transactionHash, now(), id, live.organizationId);
   audit(live.userId, live.organizationId, "distribution.wallet_reference_reported", id, { transactionHash, verified: false }); return { recorded: true, verified: false };
 }
-export function recordOwnClaimWalletReference(userId: string, id: string, transactionHash: string) {
+export function recordOwnClaimWalletReference(userId: string, id: string, transactionHash: string, reviewGeneration: string) {
   const own = ownAllocation(userId, id); validReportedHash(transactionHash);
+  if (own.review_generation !== reviewGeneration || own.wallet_lease_generation !== reviewGeneration) throw new ApiError(409, "A newer wallet review owns this claim reference", "DISTRIBUTION_REVIEW_CHANGED");
   getDb().prepare("UPDATE claim_distribution_allocations SET source_tx_hash=? WHERE id=? AND bound_user_id=?").run(transactionHash, id, userId);
   audit(userId, own.organization_id, "distribution.claim_wallet_reference_reported", id, { transactionHash, verified: false }); return { recorded: true, verified: false };
 }

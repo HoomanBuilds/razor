@@ -6,7 +6,8 @@ import { getDb, row, rows } from "../src/server/db";
 import { decrypt, encrypt } from "../src/server/identity/crypto";
 import { deriveSharedCompanyId } from "../src/server/payments/near";
 import { getTreasury } from "../src/server/payments/service";
-import { beginDistribution, beginOwnClaim, createDistribution, discardDistribution, distributionLocalReserve, inspectDistribution, inspectOwnClaim, listDistributions, monitorDistributions, ownDistributionClaims, prepareDistribution, prepareDistributionControl, prepareOwnClaim, recordOwnClaimWalletReference, releaseUnsignedDistribution } from "../src/server/distributions/service";
+import { NATIVE_USDC } from "../src/lib/native-usdc";
+import { beginDistribution, beginOwnClaim, createDistribution, discardDistribution, distributionLocalReserve, finishOwnClaimWallet, inspectDistribution, inspectOwnClaim, listDistributions, monitorDistributions, ownDistributionClaims, prepareDistribution, prepareDistributionControl, prepareOwnClaim, recordOwnClaimWalletReference, releaseUnsignedDistribution } from "../src/server/distributions/service";
 import { assertChainTerms, distributionInput, distributionTermsHash, hash, sumEntitlements, type ChainDistribution, type DistributionRow, type FrozenPlan } from "../src/server/distributions/model";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -141,15 +142,17 @@ test("claim planning pays the fixed entitlement and exposes actual token storage
     const claimId = committed.allocations[0].claim_id, registration = await prepareOwnClaim(f.recipientUser, claimId);
     assert.equal(registration.phase, "registration"); assert.equal(registration.walletActions.length, 1); assert.equal(registration.registrationDeposit, "1250000000000000000000");
     assert.deepEqual(registration.walletActions[0].actions[0].params.args, { account_id: f.address, registration_only: true });
-    await beginOwnClaim(f.recipientUser, claimId, { planHash: registration.planHash, signerAccount: f.address });
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: registration.planHash, signerAccount: f.address, reviewGeneration: registration.reviewGeneration });
     assert.equal(ownDistributionClaims(f.recipientUser).claims[0].sourceUnknown, false);
+    finishOwnClaimWallet(f.recipientUser, claimId, registration.reviewGeneration);
     remote.registered = true; const preview = await prepareOwnClaim(f.recipientUser, claimId);
     assert.equal(preview.phase, "claim"); assert.equal(preview.walletActions.length, 1);
     const call = preview.walletActions[0].actions[0].params; assert.equal(call.methodName, "claim_distribution");
     assert.ok(call.args && typeof call.args === "object");
     assert.ok(!("receiver_id" in call.args)); assert.ok(!("amount" in call.args));
-    await beginOwnClaim(f.recipientUser, claimId, { planHash: preview.planHash, signerAccount: f.address });
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: preview.planHash, signerAccount: f.address, reviewGeneration: preview.reviewGeneration });
     assert.equal(ownDistributionClaims(f.recipientUser).claims[0].sourceUnknown, true);
+    finishOwnClaimWallet(f.recipientUser, claimId, preview.reviewGeneration);
     remote.chain.claims[0].status = "pending"; remote.chain.claims[0].nonce = "1"; remote.chain.unclaimed = "0"; remote.chain.pending = remote.chain.total;
     await assert.rejects(() => prepareOwnClaim(f.recipientUser, claimId), code("DISTRIBUTION_CLAIM_HELD"));
     remote.chain.claims[0].status = "paid"; remote.chain.pending = "0"; remote.chain.paid = remote.chain.total; remote.chain.status = "complete";
@@ -185,9 +188,11 @@ test("bounded monitoring is company scoped and reported wallet hashes cannot est
     assert.deepEqual(await monitorDistributions({ organizationId: f.access.organizationId, maxPools: 1 }), { processed: 1, held: 0 });
     assert.equal(saved(other, otherDraft.id).stage, "review"); assert.equal(saved(other, otherDraft.id).local_reserved, "20000000");
     const claimId = remote.chain.claims[0].allocation.claim_id;
-    assert.deepEqual(recordOwnClaimWalletReference(f.recipientUser, claimId, "1".repeat(32)), { recorded: true, verified: false });
+    const review = await prepareOwnClaim(f.recipientUser, claimId);
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: review.planHash, reviewGeneration: review.reviewGeneration, signerAccount: f.address });
+    assert.deepEqual(recordOwnClaimWalletReference(f.recipientUser, claimId, "1".repeat(32), review.reviewGeneration), { recorded: true, verified: false });
     assert.equal(saved(f, draft.id).paid_amount, "0"); assert.equal(saved(f, draft.id).pending_amount, "0");
-    assert.throws(() => recordOwnClaimWalletReference(other.recipientUser, claimId, "1".repeat(32)), code("DISTRIBUTION_CLAIM_NOT_FOUND"));
+    assert.throws(() => recordOwnClaimWalletReference(other.recipientUser, claimId, "1".repeat(32), review.reviewGeneration), code("DISTRIBUTION_CLAIM_NOT_FOUND"));
   });
   const original = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error("offline"); };
@@ -214,9 +219,38 @@ test("unsigned review release is free while an initiated wallet creation cannot 
 
 test("an unfunded draft can be discarded without a configured treasury or a wallet action", () => {
   const f = fixture(); getDb().prepare("DELETE FROM treasury_config WHERE organization_id=?").run(f.access.organizationId);
+  getDb().prepare("UPDATE recipients SET primary_asset=? WHERE id=?").run(`nep141:${NATIVE_USDC.near}`, f.recipientId);
   const draft = createDistribution(f.access, input(f));
   assert.equal(listDistributions(f.access).configured, false);
   assert.deepEqual(discardDistribution(f.access, draft.id), { cancelled: true });
   assert.equal(saved(f, draft.id).stage, "voided");
   assert.equal(saved(f, draft.id).local_reserved, "0");
+});
+
+
+test("rejected wallet dialogs can explicitly retry only the same ready claim and stale tabs cannot clear a newer lease", async () => {
+  const f = fixture(), draft = createDistribution(f.access, input(f)), remote: Remote = {};
+  await rpc(f, remote, async () => {
+    await prepareDistribution(f.access, draft.id); remote.chain = chainFor(frozen(f, draft.id)); await inspectDistribution(f.access, draft.id);
+    const claimId = remote.chain.claims[0].allocation.claim_id;
+    const first = await prepareOwnClaim(f.recipientUser, claimId);
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: first.planHash, reviewGeneration: first.reviewGeneration, signerAccount: f.address });
+    await assert.rejects(() => prepareOwnClaim(f.recipientUser, claimId), code("DISTRIBUTION_WALLET_BUSY"));
+    assert.equal(finishOwnClaimWallet(f.recipientUser, claimId, first.reviewGeneration).released, true);
+    assert.equal(ownDistributionClaims(f.recipientUser).claims[0].sourceUnknown, true);
+    const retry = await prepareOwnClaim(f.recipientUser, claimId);
+    assert.equal(retry.retrySameClaim, true); assert.notEqual(retry.reviewGeneration, first.reviewGeneration);
+    assert.deepEqual(retry.walletActions, first.walletActions);
+    await assert.rejects(() => beginOwnClaim(f.recipientUser, claimId, { planHash: retry.planHash, reviewGeneration: retry.reviewGeneration, signerAccount: f.address }), code("DISTRIBUTION_SAME_CLAIM_REVIEW_REQUIRED"));
+    await beginOwnClaim(f.recipientUser, claimId, { planHash: retry.planHash, reviewGeneration: retry.reviewGeneration, signerAccount: f.address, retrySameClaim: true });
+    assert.equal(finishOwnClaimWallet(f.recipientUser, claimId, first.reviewGeneration).released, false);
+    assert.equal(row<{ wallet_lease_generation: string }>("SELECT wallet_lease_generation FROM claim_distribution_allocations WHERE id=?", claimId)!.wallet_lease_generation, retry.reviewGeneration);
+    await assert.rejects(() => beginOwnClaim(f.recipientUser, claimId, { planHash: first.planHash, reviewGeneration: first.reviewGeneration, signerAccount: f.address, retrySameClaim: true }), code("DISTRIBUTION_REVIEW_CHANGED"));
+    finishOwnClaimWallet(f.recipientUser, claimId, retry.reviewGeneration);
+    remote.chain.claims[0].status = "pending"; remote.chain.claims[0].nonce = "1"; remote.chain.pending = remote.chain.total; remote.chain.unclaimed = "0";
+    await assert.rejects(() => prepareOwnClaim(f.recipientUser, claimId), code("DISTRIBUTION_CLAIM_HELD"));
+    remote.chain.claims[0].status = "paid"; remote.chain.status = "complete"; remote.chain.pending = "0"; remote.chain.paid = remote.chain.total;
+    await assert.rejects(() => prepareOwnClaim(f.recipientUser, claimId), code("DISTRIBUTION_CLAIM_HELD"));
+    assert.equal(remote.chain.claims[0].allocation.claim_id, claimId);
+  });
 });

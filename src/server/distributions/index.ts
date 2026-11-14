@@ -6,6 +6,8 @@ import * as service from "./service";
 
 const begin = z.object({ planHash: z.string().regex(/^[a-f0-9]{64}$/), signerAccount: z.string().min(2).max(64) }).strict();
 const reported = z.object({ transactionHash: z.string().min(32).max(64) }).strict();
+const claimBegin = begin.extend({ reviewGeneration: z.string().uuid(), retrySameClaim: z.boolean().optional() });
+const generation = z.object({ reviewGeneration: z.string().uuid() }).strict();
 export const distributionRoutes = new Hono<AppEnv>();
 distributionRoutes.get("/", c => c.json(service.listDistributions(c.get("access"), c.req.query())));
 distributionRoutes.post("/", async c => c.json({ distribution: service.createDistribution(c.get("access"), await c.req.json()) }, 201));
@@ -25,5 +27,9 @@ recipientDistributionRoutes.use("*", requireUser);
 recipientDistributionRoutes.get("/", c => c.json(service.ownDistributionClaims(c.get("userId"), c.req.query())));
 recipientDistributionRoutes.get("/:id", async c => c.json(await service.inspectOwnClaim(c.get("userId"), c.req.param("id"))));
 recipientDistributionRoutes.post("/:id/prepare", async c => c.json(await service.prepareOwnClaim(c.get("userId"), c.req.param("id"))));
-recipientDistributionRoutes.post("/:id/begin", async c => c.json(await service.beginOwnClaim(c.get("userId"), c.req.param("id"), begin.parse(await c.req.json()))));
-recipientDistributionRoutes.post("/:id/receipt", async c => c.json(service.recordOwnClaimWalletReference(c.get("userId"), c.req.param("id"), reported.parse(await c.req.json()).transactionHash)));
+recipientDistributionRoutes.post("/:id/begin", async c => c.json(await service.beginOwnClaim(c.get("userId"), c.req.param("id"), claimBegin.parse(await c.req.json()))));
+recipientDistributionRoutes.post("/:id/finish-wallet", async c => c.json(service.finishOwnClaimWallet(c.get("userId"), c.req.param("id"), generation.parse(await c.req.json()).reviewGeneration)));
+recipientDistributionRoutes.post("/:id/receipt", async c => {
+  const input = reported.extend({ reviewGeneration: z.string().uuid() }).parse(await c.req.json());
+  return c.json(service.recordOwnClaimWalletReference(c.get("userId"), c.req.param("id"), input.transactionHash, input.reviewGeneration));
+});
