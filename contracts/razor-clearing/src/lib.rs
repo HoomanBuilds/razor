@@ -1,10 +1,16 @@
 use near_sdk::{
-    AccountId, Gas, NearToken, PanicOnDefault, Promise, env, ext_contract,
+    AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, ext_contract,
     json_types::{U64, U128},
     near, require, serde_json,
     store::IterableMap,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+mod cash;
+pub use cash::{
+    CashAccount, CashDeposit, CashKind, CashPending, CashPosition, CashRound, CashStage, CashTerms,
+    CashTransfer,
+};
 
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug)]
@@ -40,6 +46,8 @@ pub struct Manifest {
     pub expires_at_ms: U64,
     pub participants: Vec<Participant>,
     pub obligations: Vec<Obligation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash: Option<CashTerms>,
 }
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug)]
@@ -54,6 +62,7 @@ pub struct Round {
     pub request_nonce: U64,
     pub consent_requests: BTreeMap<String, U64>,
     pub finalize_request: Option<U64>,
+    pub cash: Option<CashRound>,
 }
 #[near(serializers = [json])]
 struct Treasury {
@@ -71,6 +80,13 @@ pub struct ClearingConfig {
     pub paused: bool,
     pub max_participants: u8,
     pub max_obligations: u8,
+    pub state_version: u8,
+    pub cash_network: Option<String>,
+    pub max_cash_deposits_per_company: u8,
+    pub cash_accepted: U128,
+    pub cash_available: U128,
+    pub cash_pending: U128,
+    pub cash_paid: U128,
 }
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
@@ -84,6 +100,14 @@ trait Callbacks {
         request_id: U64,
     ) -> bool;
     fn on_finalized(&mut self, round_id: String, request_id: U64) -> bool;
+    fn on_cash_withdrawn(
+        &mut self,
+        round_id: String,
+        company_id: String,
+        kind: CashKind,
+        nonce: U64,
+        amount: U128,
+    ) -> bool;
 }
 
 #[near(contract_state)]
@@ -95,6 +119,11 @@ pub struct Clearing {
     paused: bool,
     rounds: IterableMap<String, Round>,
     locks: IterableMap<String, String>,
+    cash_network: Option<String>,
+    cash_accepted: u128,
+    cash_available: u128,
+    cash_pending: u128,
+    cash_paid: u128,
 }
 
 #[near]
@@ -108,6 +137,11 @@ impl Clearing {
             paused: false,
             rounds: IterableMap::new(b"r"),
             locks: IterableMap::new(b"l"),
+            cash_network: None,
+            cash_accepted: 0,
+            cash_available: 0,
+            cash_pending: 0,
+            cash_paid: 0,
         }
     }
     pub fn get_config(&self) -> ClearingConfig {
@@ -117,13 +151,24 @@ impl Clearing {
             paused: self.paused,
             max_participants: 8,
             max_obligations: 32,
+            state_version: 2,
+            cash_network: self.cash_network.clone(),
+            max_cash_deposits_per_company: cash::MAX_DEPOSITS_PER_COMPANY,
+            cash_accepted: U128(self.cash_accepted),
+            cash_available: U128(self.cash_available),
+            cash_pending: U128(self.cash_pending),
+            cash_paid: U128(self.cash_paid),
         }
     }
     pub fn get_round(&self, round_id: String) -> Option<Round> {
         self.rounds.get(&round_id).cloned()
     }
     pub fn registration_cost(&self, manifest_json: String) -> U128 {
-        U128((manifest_json.len() as u128 * 4 + 8192) * env::storage_byte_cost().as_yoctonear())
+        let cash = serde_json::from_str::<Manifest>(&manifest_json)
+            .ok()
+            .is_some_and(|manifest| manifest.cash.is_some());
+        let overhead = if cash { 32768 } else { 8192 };
+        U128((manifest_json.len() as u128 * 4 + overhead) * env::storage_byte_cost().as_yoctonear())
     }
     #[payable]
     pub fn set_paused(&mut self, paused: bool) {
@@ -137,6 +182,7 @@ impl Clearing {
         require!(manifest_json.len() <= 30000, "MANIFEST_TOO_LARGE");
         let manifest: Manifest = serde_json::from_str(&manifest_json).expect("INVALID_MANIFEST");
         validate(&manifest);
+        self.require_cash_configuration(&manifest);
         require!(
             manifest.expires_at_ms.0 > env::block_timestamp_ms()
                 && manifest.expires_at_ms.0 <= env::block_timestamp_ms() + 86_400_000,
@@ -169,6 +215,7 @@ impl Clearing {
             });
         }
         let round_id = manifest.id.clone();
+        let cash = manifest.cash.as_ref().map(CashRound::new);
         self.rounds.insert(
             round_id.clone(),
             Round {
@@ -182,6 +229,7 @@ impl Clearing {
                 request_nonce: U64(0),
                 consent_requests: BTreeMap::new(),
                 finalize_request: None,
+                cash,
             },
         );
         calls.unwrap().then(
@@ -326,6 +374,7 @@ impl Clearing {
             round.consents.len() == round.manifest.participants.len(),
             "CONSENTS_REQUIRED"
         );
+        cash::require_exact_funding(&round);
         require!(
             round
                 .manifest
@@ -392,6 +441,7 @@ impl Clearing {
                 "OBLIGATION_REUSED"
             );
         }
+        cash::finalize_cash(&mut round);
         round.status = "finalized".into();
         round.finalized_at_ms = Some(U64(env::block_timestamp_ms()));
         round.finalized_height = Some(U64(env::block_height()));
@@ -414,6 +464,7 @@ impl Clearing {
                 .any(|party| party.owner_id == env::predecessor_account_id()),
             "PARTICIPANT_REQUIRED"
         );
+        cash::refund_cash(&mut round);
         round.status = "revoked".into();
         self.rounds.insert(round_id, round);
     }
@@ -424,6 +475,7 @@ impl Clearing {
                 && round.manifest.expires_at_ms.0 <= env::block_timestamp_ms(),
             "NOT_EXPIRED"
         );
+        cash::refund_cash(&mut round);
         round.status = "expired".into();
         self.rounds.insert(round_id, round);
     }
@@ -577,14 +629,17 @@ fn validate(manifest: &Manifest) {
             .expect("AMOUNT_OVERFLOW");
     }
     require!(
-        reduced
+        (reduced || manifest.cash.is_some())
             && positions.len() == companies.len()
             && positions
                 .values()
                 .all(|(outgoing, incoming)| outgoing == incoming),
         "NET_POSITIONS_CHANGED"
     );
+    cash::validate_terms(manifest);
 }
 
+#[cfg(test)]
+mod cash_tests;
 #[cfg(test)]
 mod tests;
