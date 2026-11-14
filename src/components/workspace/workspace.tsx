@@ -39,6 +39,7 @@ import { InvoiceInbox } from "./invoice-inbox";
 import { useAction, useResource } from "./hooks";
 import { Action, control, Field, Panel } from "./shared";
 import { Overview } from "./overview";
+import { RazorMark } from "@/components/brand/razor-logo";
 import { focusWorkspaceForm } from "./page-metrics";
 import { FinanceInsightsPanel } from "./finance-insights";
 import { NetworkLogo } from "@/components/assets/asset-identity";
@@ -295,10 +296,10 @@ function Workspace() {
   const userName = session.user.name || session.user.email || "Your account";
   return (
     <div className="workspace-surface min-h-screen">
-      <aside id="company-navigation" aria-label="Company navigation" className={`${sidebar ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
+      <aside id="company-navigation" aria-label="Company navigation" data-expanded={sidebar} className={`dashboard-dock ${sidebar ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
         <div className={`flex h-14 shrink-0 items-center ${sidebar ? "justify-between px-2" : "justify-center"}`}>
           <a href="/app" aria-label="Razor workspace" className="flex items-center gap-3 font-semibold tracking-tight">
-            <span className="grid size-10 place-items-center rounded-xl bg-primary text-xl font-semibold text-white">R</span>
+            <RazorMark size={31} className="shrink-0 text-[#5c5e68]"/>
             <span className={`${sidebar ? "" : "lg:hidden"} text-2xl`}>Razor</span>
           </a>
           {sidebar && <button onClick={() => setSidebar(false)} aria-label="Collapse navigation" className="rounded-full p-2 text-muted-foreground hover:bg-muted"><X size={17}/></button>}
@@ -339,8 +340,8 @@ function Workspace() {
           </select>
           <div className="mt-3 flex items-center justify-between gap-2 text-xs"><span className="capitalize text-muted-foreground">{organization.role}</span><button onClick={() => setCreating(true)} className="flex items-center gap-1 text-primary"><Plus size={12}/> Create company</button></div>
         </div>
-        {!sidebar && <button type="button" className="mt-4 hidden size-11 shrink-0 self-center place-items-center rounded-xl bg-muted text-sm font-medium lg:grid" title={`${organization.name}: switch company`} aria-label={`Switch company from ${organization.name}`} onClick={() => setSidebar(true)}>{organization.name.slice(0,2).toUpperCase()}</button>}
-        <nav aria-label="Workspace sections" className="mt-5 min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]">
+        {!sidebar && <button data-dock-company type="button" className="mt-4 hidden size-11 shrink-0 self-center place-items-center rounded-xl bg-muted text-sm font-medium lg:grid" title={`${organization.name}: switch company`} aria-label={`Switch company from ${organization.name}`} onClick={() => setSidebar(true)}>{organization.name.slice(0,2).toUpperCase()}</button>}
+        <nav aria-label="Workspace sections" className="dashboard-dock-nav dashboard-nav-scroll mt-5 min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]">
           {navigationGroups.map(group => {
             const items = allowedNavigation.filter(item => group.sections.includes(item.id));
             if (!items.length) return null;
@@ -353,15 +354,15 @@ function Workspace() {
             </div>;
           })}
         </nav>
-        <div className={`shrink-0 space-y-2 border-t border-border/60 pt-3 ${sidebar ? "px-2" : "flex flex-col items-center"}`}>
+        <div className={`dashboard-account-dock shrink-0 space-y-2 border-t border-border/60 pt-3 ${sidebar ? "px-2" : "flex flex-col items-center"}`}>
           <a href="/receive" title="My personal payments" aria-label="My personal payments" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "px-2" : "size-10 justify-center"}`}><Wallet size={18}/><span className={sidebar ? "" : "lg:sr-only"}>My personal payments</span></a>
           <a href="/account" title="Account and recovery" aria-label="Account and recovery" className={`flex items-center gap-3 rounded-xl text-xs ${sidebar ? "p-2" : "justify-center"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm font-medium text-white">{userName[0].toUpperCase()}</span><span className={sidebar ? "min-w-0 truncate" : "lg:sr-only"}>{userName}</span></a>
           <button title="Sign out" aria-label="Sign out" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "w-full px-2" : "size-10 justify-center"}`} onClick={() => void signOut().catch(cause => setNotice(errorMessage(cause)))}><LogOut size={17}/><span className={sidebar ? "" : "lg:sr-only"}>Sign out</span></button>
         </div>
       </aside>
       {sidebar && <button className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] lg:hidden" aria-label="Close navigation overlay" onClick={() => setSidebar(false)}/>}
-      <div className={`min-w-0 ${sidebar ? "lg:ml-64" : "lg:ml-[84px]"}`}>
-        <header className="flex min-h-18 items-center justify-between gap-3 px-5 sm:px-8 lg:px-10">
+      <div className={`min-w-0 ${sidebar ? "lg:ml-64" : "lg:ml-[104px]"}`}>
+        <header className="dashboard-canvas flex min-h-18 items-center justify-between gap-3 px-5 sm:px-8 lg:px-10">
           <div className="flex min-w-0 items-center gap-3">
             <button className="rounded-full p-2 text-muted-foreground hover:bg-muted" aria-label={sidebar ? "Collapse navigation" : "Expand navigation"} aria-expanded={sidebar} aria-controls="company-navigation" onClick={() => setSidebar(value => !value)}><Menu size={19}/></button>
             <button type="button" onClick={() => setSidebar(true)} className="max-w-48 truncate text-sm font-medium" title="Switch company">{organization.name}</button>
@@ -374,9 +375,9 @@ function Workspace() {
             <a href="/account" aria-label="Open account settings" className="ml-1 grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{userName[0].toUpperCase()}</a>
           </div>
         </header>
-        <main className="mx-auto max-w-[1536px] px-5 pb-8 pt-5 sm:px-8 sm:pt-8 lg:px-10">
-          <div className="mb-8 flex flex-wrap items-start justify-between gap-4 lg:mb-10">
-            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div><p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p></div>
+        <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-8 sm:pt-6 lg:px-9">
+          <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
+            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div>{visibleSection !== "overview" && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
             {visibleSection === "overview" && organization.permissions.includes("payments:prepare") && organization.permissions.includes("recipients:read") && <button className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-white transition-colors hover:bg-primary/90" onClick={() => { navigate("payments"); focusWorkspaceForm("payment-compose"); }}><Plus size={17}/>New payment</button>}
           </div>
           {notice && <div role="status" className="mb-6 flex items-center justify-between gap-3 rounded-2xl border bg-muted p-4 text-sm">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss notice" className="rounded-full p-1 hover:bg-white"><X size={16}/></button></div>}
