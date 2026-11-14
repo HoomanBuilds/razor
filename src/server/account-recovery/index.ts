@@ -7,21 +7,24 @@ import { audit, currentSession, requireFreshSession, requireUser } from "../iden
 import { accountReadiness, requireAlternateVerifiedIdentity } from "./state";
 import { OWNER_WALLET_PROVIDERS } from "./providers";
 import { accountKeys, prepareRestrictedKeyRevocation } from "./near";
+import { embeddedNearRoutes } from "./embedded-near";
 
 const identityId=(provider:string,subject:string)=>createHash("sha256").update(JSON.stringify([provider,subject])).digest("hex");
 export const accountRecoveryRoutes=new Hono<AppEnv>();
 accountRecoveryRoutes.use("*",requireUser);
+accountRecoveryRoutes.route("/embedded-near",embeddedNearRoutes);
 accountRecoveryRoutes.get("/status",c=>{
   const session=currentSession(c)!;
   const age=Date.now()-Date.parse(session.created_at);
   return c.json({...accountReadiness(c.get("userId")),freshSignIn:Number.isFinite(age)&&age>=0&&age<=900000,authenticatedAt:session.created_at,authenticationMethod:session.authentication_method,identities:rows<{provider:string;subject:string;created_at:string}>("SELECT provider,subject,created_at FROM user_identities WHERE user_id=?",c.get("userId")).map(identity=>({id:identityId(identity.provider,identity.subject),provider:identity.provider,createdAt:identity.created_at})),sessions:rows<{id:string;created_at:string;expires_at:string;authentication_method:string}>("SELECT id,created_at,expires_at,authentication_method FROM sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC",c.get("userId"),new Date().toISOString()).map(value=>({...value,current:value.id===session.id}))});
 });
 accountRecoveryRoutes.put("/onboarding",async c=>{
-  const input=z.object({provider:z.enum(["near-mobile","meteor-wallet"]).optional(),ownerWalletId:z.string().uuid().optional(),backupAcknowledged:z.boolean().optional()}).parse(await c.req.json()),userId=c.get("userId");
+  const input=z.object({provider:z.enum(["near-mobile","meteor-wallet","privy-near"]).optional(),ownerWalletId:z.string().uuid().optional(),backupAcknowledged:z.boolean().optional()}).parse(await c.req.json()),userId=c.get("userId");
   if(input.backupAcknowledged!==undefined||input.ownerWalletId)requireFreshSession(c);
   const state=accountReadiness(userId),provider=input.provider || state.onboarding?.wallet_provider || state.preferredProvider;
-  if(!OWNER_WALLET_PROVIDERS.some(value=>value.id===provider&&(value.networks as readonly string[]).includes(state.network)))throw new ApiError(400,"Choose a wallet provider available on this NEAR network","WALLET_PROVIDER_UNSUPPORTED");
+  if(provider!=="privy-near"&&!OWNER_WALLET_PROVIDERS.some(value=>value.id===provider&&(value.networks as readonly string[]).includes(state.network)))throw new ApiError(400,"Choose a wallet provider available on this NEAR network","WALLET_PROVIDER_UNSUPPORTED");
   const walletId=input.ownerWalletId || state.ownerWallet?.id || null;
+  if(provider==="privy-near"&&!row("SELECT linked_wallet_id FROM embedded_near_accounts WHERE user_id=? AND network=? AND linked_wallet_id=? AND disabled_at IS NULL",userId,state.network,walletId))throw new ApiError(403,"Verify and enable your embedded NEAR signer before selecting it","EMBEDDED_OWNER_PROOF_REQUIRED");
   if(walletId&&!state.wallets.some(value=>value.id===walletId&&value.family==="near"&&value.network===state.network))throw new ApiError(403,"Verify a NEAR owner wallet on this network before selecting it","OWNER_WALLET_UNVERIFIED");
   const backup=input.backupAcknowledged===undefined?(state.onboarding?.owner_wallet_id===walletId&&state.onboarding?.wallet_provider===provider?state.onboarding?.backup_acknowledged_at || null:null):input.backupAcknowledged?new Date().toISOString():null;
   if(input.backupAcknowledged&&!walletId)throw new ApiError(400,"Link your owner wallet before acknowledging its recovery backup","OWNER_WALLET_UNVERIFIED");
@@ -44,6 +47,7 @@ accountRecoveryRoutes.delete("/identities/:id",c=>{
   transaction(db=>{
     db.prepare("DELETE FROM user_identities WHERE provider=? AND subject=? AND user_id=?").run(identity.provider,identity.subject,userId);
     if(identity.provider==="privy")db.prepare("UPDATE users SET email=NULL WHERE id=?").run(userId);
+    if(identity.provider==="privy")db.prepare("UPDATE embedded_near_accounts SET generation=generation+1,disabled_at=?,updated_at=? WHERE user_id=? AND provider_subject=?").run(new Date().toISOString(),new Date().toISOString(),userId,identity.subject);
     db.prepare("DELETE FROM sessions WHERE user_id=? AND id!=?").run(userId,currentSession(c)!.id);
     audit(userId,null,"account.identity_unlinked");
   });

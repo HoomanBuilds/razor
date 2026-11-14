@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createRemoteJWKSet, importSPKI, jwtVerify } from "jose";
 import { getAddress, isAddress, verifyMessage as verifyEvmMessage } from "viem";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { base58 } from "@scure/base";
 import { JsonRpcProvider } from "near-api-js";
 import { verifyMessage as verifyNearMessage } from "near-api-js/nep413";
 import { z } from "zod";
+import { verifyPrivy } from "./privy";
+import { embeddedNearEnabled } from "../account-recovery/embedded-near";
 import { assertWalletDetachable, requireAlternateVerifiedIdentity } from "../account-recovery/state";
 import { ownerWalletProviders } from "../account-recovery/providers";
 import { getDb, row, rows, transaction } from "../db";
@@ -61,38 +62,6 @@ export async function verifyWalletChallenge(challenge: ChallengeRecord, signatur
   await verifyNearMessage({ signerAccountId: challenge.address, signerPublicKey: publicKey, signature: new Uint8Array(Buffer.from(signature, "base64")), payload: { message: challenge.message, recipient: challenge.recipient, nonce: new Uint8Array(Buffer.from(challenge.nonce, "hex")) }, provider: rpc });
 }
 
-async function verifyPrivy(accessToken: string) {
-  const appId = process.env.PRIVY_APP_ID || process.env.NEXT_PUBLIC_PRIVY_APP_ID;
-  if (!appId) throw new ApiError(503, "Configure Privy application credentials to enable Google and email sign-in", "SOCIAL_LOGIN_SETUP_REQUIRED");
-  let key;
-  if (process.env.PRIVY_VERIFICATION_KEY) {
-    key = await importSPKI(process.env.PRIVY_VERIFICATION_KEY.replace(/\\n/g, "\n"), "ES256");
-  } else if (process.env.PRIVY_JWKS_URL) {
-    const url = new URL(process.env.PRIVY_JWKS_URL);
-    if (url.protocol !== "https:" && !(process.env.NODE_ENV === "test" && ["localhost", "127.0.0.1"].includes(url.hostname))) throw new ApiError(503, "Privy verification keys require an HTTPS endpoint", "SOCIAL_LOGIN_SETUP_REQUIRED");
-    key = createRemoteJWKSet(url);
-  } else {
-    throw new ApiError(503, "Configure PRIVY_VERIFICATION_KEY or PRIVY_JWKS_URL to verify social sign-in", "SOCIAL_LOGIN_SETUP_REQUIRED");
-  }
-  const { payload } = await jwtVerify(accessToken, key, { issuer: "privy.io", audience: appId, algorithms: ["ES256"], requiredClaims: ["sub", "exp", "iat"], clockTolerance: 5 });
-  if (!payload.sub?.startsWith("did:privy:")) throw new ApiError(401, "Invalid sign-in identity", "INVALID_IDENTITY");
-  if(typeof payload.iat!=="number"||Date.now()/1000-payload.iat>900||payload.iat>Date.now()/1000+60)throw new ApiError(401,"Sign out of Google or email in the provider and sign in again to verify a recent session.","FRESH_PROVIDER_LOGIN_REQUIRED");
-  let email: string | null = null;
-  let name = "Company owner";
-  if (process.env.PRIVY_APP_SECRET) {
-    const response = await fetch(`https://api.privy.io/v1/users/${encodeURIComponent(payload.sub)}`, {
-      headers: { Authorization: `Basic ${Buffer.from(`${appId}:${process.env.PRIVY_APP_SECRET}`).toString("base64")}`, "privy-app-id": appId },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!response.ok) throw new ApiError(502, "Could not verify the social profile. Please try again.", "IDENTITY_PROVIDER_UNAVAILABLE");
-    const profile = await response.json() as { id?: string; linked_accounts?: Array<{ type: string; address?: string; email?: string; name?: string; first_verified_at?: number }> };
-    if (profile.id !== payload.sub) throw new ApiError(401, "Profile identity did not match sign-in", "INVALID_IDENTITY");
-    const identity = profile.linked_accounts?.find((account) => account.type === "email" && account.address) || profile.linked_accounts?.find((account) => account.type === "google_oauth" && account.email);
-    email = (identity?.address || identity?.email || "").toLowerCase() || null;
-    name = identity?.name || email?.split("@")[0] || name;
-  }
-  return { subject: payload.sub, email, name };
-}
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -100,7 +69,7 @@ authRoutes.get("/config", (c) => c.json({
   socialEnabled: Boolean((process.env.PRIVY_APP_ID || process.env.NEXT_PUBLIC_PRIVY_APP_ID) && (process.env.PRIVY_VERIFICATION_KEY || process.env.PRIVY_JWKS_URL)),
   privyAppId: process.env.NEXT_PUBLIC_PRIVY_APP_ID || process.env.PRIVY_APP_ID || null,
   walletFamilies: ["near", "evm", "solana"], nearNetwork: process.env.NEAR_NETWORK || "testnet", origin: appOrigin(),
-  ownerWalletSetup:{...ownerWalletProviders(process.env.NEAR_NETWORK || "testnet"),nativeEmbeddedNear:false},
+  ownerWalletSetup:{...ownerWalletProviders(process.env.NEAR_NETWORK || "testnet"),nativeEmbeddedNear:embeddedNearEnabled()},
 }));
 
 authRoutes.post("/challenge", async (c) => {
@@ -206,6 +175,7 @@ authRoutes.delete("/wallets/:walletId", requireUser, async (c) => {
     if (count<=1) throw new ApiError(409,"Keep another verified sign-in method before removing this wallet","RECOVERY_METHOD_REQUIRED");
     requireAlternateVerifiedIdentity(userId,fresh.authentication_method,"wallet",`${wallet.family}:${wallet.network}:${wallet.address}`);
     db.prepare("DELETE FROM user_identities WHERE provider = 'wallet' AND subject = ? AND user_id = ?").run(`${wallet.family}:${wallet.network}:${wallet.address}`,userId);
+    db.prepare("UPDATE embedded_near_accounts SET generation=generation+1,disabled_at=?,updated_at=? WHERE user_id=? AND linked_wallet_id=?").run(new Date().toISOString(),new Date().toISOString(),userId,walletId);
     db.prepare("DELETE FROM linked_wallets WHERE id = ?").run(walletId);
     db.prepare("DELETE FROM sessions WHERE user_id=? AND id!=?").run(userId,fresh.id);
     audit(userId,null,"account.wallet_unlinked",walletId);

@@ -3,6 +3,7 @@ import { row, rows } from "../db";
 import { view } from "../payments/near";
 import type { TreasuryConfig } from "../payments/types";
 import { ownerWalletProviders } from "./providers";
+import { embeddedNearEnabled } from "./embedded-near";
 
 export interface RecoveryWallet {id:string;family:string;address:string;network:string;public_key:string|null;last_verified_at:string|null;label:string|null;created_at:string}
 
@@ -16,7 +17,7 @@ export function accountReadiness(userId:string) {
   const onboarding=row<{wallet_provider:string|null;owner_wallet_id:string|null;backup_acknowledged_at:string|null}>("SELECT wallet_provider,owner_wallet_id,backup_acknowledged_at FROM account_onboarding WHERE user_id=?",userId);
   const ownerWallet=wallets.find(wallet=>wallet.id===onboarding?.owner_wallet_id&&wallet.family==="near"&&wallet.network===network) || wallets.find(wallet=>wallet.family==="near"&&wallet.network===network) || null;
   const identities=rows<{provider:string;subject:string}>("SELECT provider,subject FROM user_identities WHERE user_id=?",userId);
-  return {network,...ownerWalletProviders(network),onboarding:onboarding || null,wallets,ownerWallet,ownerWalletReady:!!ownerWallet?.public_key&&!!ownerWallet.last_verified_at,recoveryMethodCount:identities.length,hasAlternateSignIn:identities.length>=2,backupAcknowledgedAt:onboarding?.owner_wallet_id===ownerWallet?.id?onboarding?.backup_acknowledged_at || null:null,backupVerified:false,nativeEmbeddedNear:{available:false,mode:"external_wallet",reason:"Razor social sign-in does not create a NEAR signing key. Create or restore an owner-controlled account in a supported wallet, then prove ownership here."},socialConfigured:!!((process.env.PRIVY_APP_ID||process.env.NEXT_PUBLIC_PRIVY_APP_ID)&&(process.env.PRIVY_VERIFICATION_KEY||process.env.PRIVY_JWKS_URL))};
+  return {network,...ownerWalletProviders(network),onboarding:onboarding || null,wallets,ownerWallet,ownerWalletReady:!!ownerWallet?.public_key&&!!ownerWallet.last_verified_at,recoveryMethodCount:identities.length,hasAlternateSignIn:identities.length>=2,backupAcknowledgedAt:onboarding?.owner_wallet_id===ownerWallet?.id?onboarding?.backup_acknowledged_at || null:null,backupVerified:false,nativeEmbeddedNear:{available:embeddedNearEnabled(),mode:"privy_ed25519_near",reason:"An explicitly created provider Ed25519 wallet can sign native NEAR messages and transactions. Funding, finalized full-access ownership proof and individual approvals are required. Provider setup and recovery must be available."},socialConfigured:!!((process.env.PRIVY_APP_ID||process.env.NEXT_PUBLIC_PRIVY_APP_ID)&&(process.env.PRIVY_VERIFICATION_KEY||process.env.PRIVY_JWKS_URL))};
 }
 
 export async function assertWalletDetachable(userId:string,wallet:Pick<RecoveryWallet,"family"|"address"|"network">) {
