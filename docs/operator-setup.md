@@ -45,6 +45,65 @@ Remote mode only reads public NEAR network, shared treasury/clearing configurati
 4. Configure the NEAR AI model, API key, approved model/gateway compose hashes, retention period and attestation age. Review approved measurements before enabling inference. Send fictional documents through the actual application and retain successful required verification evidence, a rejection example and deletion/expiry results. Configuration alone cannot prove private inference.
 5. For optional email, configure a verified Resend sender/domain and the transport key. A recipient must opt in with a verified email identity. Confirm actual arrival separately from provider acceptance; messages contain sign-in links without private payment details.
 
+## Connect QuickBooks Online or Xero
+
+Accounting is optional and records bookkeeping entries. It does not move bank or crypto funds. Missing operator credentials leave the provider pending setup. Configure a confidential web OAuth application with the provider and keep these settings in ignored operator configuration:
+
+| Setting | Purpose |
+| --- | --- |
+| `APP_URL` | Exact public HTTPS origin for the hosted application and callbacks; HTTP is for local development |
+| `QUICKBOOKS_CLIENT_ID`, `QUICKBOOKS_CLIENT_SECRET` | Matching Intuit application credentials |
+| `QUICKBOOKS_ENVIRONMENT` | `sandbox` by default; explicitly use `production` with the corresponding credentials |
+| `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` | Matching Xero confidential web application credentials |
+| `DATA_ENCRYPTION_KEY` | Existing persistent encryption key for saved grants and accounting records; preserve it with the database |
+
+Register these exact redirect URLs, replacing the origin with `APP_URL`:
+
+```text
+https://YOUR_HOST/api/accounting-oauth/quickbooks/callback
+https://YOUR_HOST/api/accounting-oauth/xero/callback
+```
+
+QuickBooks requests `com.intuit.quickbooks.accounting`. Xero requests `offline_access accounting.invoices accounting.payments accounting.contacts.read accounting.settings.read`. These are accounting APIs; they do not enable a bank payment service. Provider setup follows the [Intuit OAuth guide](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0) and [Xero web authorization flow](https://developer.xero.com/documentation/guides/oauth2/auth-flow/).
+
+Start consent from the company's Accounting panel while signed in with current `company:read`, `company:manage`, `payments:read` and `reports:read` permissions. Finish in the same browser within ten minutes. The server binds one-use state to the initiating user, company, exact live Razor session and a separate random browser nonce. The nonce uses an HttpOnly `SameSite=Lax` cookie so a top-level provider return can work without the application's `SameSite=Strict` session cookie. HTTPS uses `__Host-razor_accounting_oauth_PROVIDER` with `Secure`, `Path=/` and no `Domain`; local HTTP uses the unprefixed name. Preserve the public HTTPS origin and `Set-Cookie` headers through the proxy. Do not relax the ordinary session cookie or require it on the callback. Copied consent links, missing or mismatched browser cookies, expired state and a revoked initiating session cannot authorize a code exchange. Current session and company access are checked again before saving a grant.
+
+Successful consent leaves the connection awaiting explicit legal-entity selection. Choose the company verified by that provider grant, then check its actual name and functional currency. No first Xero tenant is selected implicitly. Load the provider's current accounts, contacts and tax codes, paging if needed. An approver with `payments:approve` must map company payees to actual provider contacts, an expense account, a functional-currency bookkeeping clearing bank account and a verified zero-tax code. Tax calculations are unsupported. Catalog selections must be fresh; preflight revalidates their identities and active status.
+
+Supported functional currencies are USD, EUR, GBP, CAD, AUD, NZD, INR and SGD. Approve an explicit positive integer numerator/denominator for functional-currency units per USDC, with its source and date. USD is not automatically treated as equivalent to USDC. Amounts use exact integer arithmetic and must fit two decimal places within the supported bound; fractional cents are held instead of rounded. Mapping changes require fresh posting review. Record any closed-through date before preparing plans.
+
+The supported writes are accepted company bills and verified full-principal installment settlements against their reconciled original bills. QuickBooks receives a Bill or BillPayment; Xero receives an ACCPAY draft invoice or accounting Payment, with its invoice authorized in Xero before payment recording. The bill's original due instant is converted to a provider calendar date using the company timezone and kept separate from the posting date. An unscheduled bill requires an explicitly reviewed provider due date. The connector never invents today's maturity or silently changes the source bill. Amounts, payees, account/tax mappings, dates and provider matches remain bound to the saved review.
+
+Preparing a plan sends no financial write. Inspect its exact disclosure, source and FX terms, then approve that exact plan. The Accounting panel can process one approved request. The ordinary worker also dispatches one accounting request per tick and supports company scoping:
+
+```sh
+npm run worker -- --once --organization=COMPANY_ID
+```
+
+This worker also runs the other configured operations and can execute already authorized financial work; it is not an accounting-only dry run. Durable leases serialize requests per connection. Stable request IDs and a saved write fence prevent blind resubmission after a lost response. Failed read-only preflight can be retried after review. After any uncertain write, use **Read provider record** to reconcile the existing marker; a missing result does not prove no write occurred and never permits an automatic second POST. External financial changes or revisions enter held/conflict review instead of overwriting Razor's ledger. A matching revision can be acknowledged explicitly. Provider status never credits company cash or proves token delivery.
+
+Disconnect stops local future access, removes saved tokens and attempts provider revocation. An already sent request can still complete. If revocation is unconfirmed, revoke the app in the provider account. Keep unknown requests and their original journals for reconciliation. Automatic bank matching, payroll-row exports, fee/FX journals, credit-note posting, noncash-setoff exports and NetSuite synchronization remain unsupported. Before claiming live support, separately demonstrate actual consent, entity/catalog selection, exact reviewed posting, refresh/revocation and unknown/conflict recovery against the configured provider. Local injected-transport checks establish none of those provider-live outcomes.
+
+## Run company-operated private invoice processing
+
+Companies may run the private invoice tool on their own computer using the reviewed source and its installed dependencies. Use Node.js 24.22.1 or later with the 512 MB heap cap. Configure the company's own `NEAR_AI_API_KEY`, `NEAR_AI_MODEL`, approved `NEAR_AI_MODEL_COMPOSE_SHA256` and `NEAR_AI_GATEWAY_COMPOSE_SHA256` in a restricted local environment file outside git. Comma-separated measurement allowlists must come from independent review of the intended deployment. Optional `NEAR_AI_MAX_ATTESTATION_AGE_MS` retains the same bounded freshness policy as hosted inference. PDF processing additionally requires Linux and local `prlimit`, `pdfinfo`, `pdftotext` and `pdftoppm` tools.
+
+Run from the checkout, replacing paths with distinct absolute local paths and choosing new output filenames:
+
+```sh
+node --max-old-space-size=512 --env-file=/absolute/company-private.env --import tsx scripts/process-invoice-private.ts --input /absolute/invoice.pdf --output /absolute/review.json --packet /absolute/evidence.json
+```
+
+The CLI accepts regular UTF-8 TXT, PDF, PNG and JPEG files up to 3 MB. Input leaves cannot be symbolic or hard links. Text is limited to 20,000 characters, PDFs to eight pages, and images to 4,000 pixels per side and 12 megapixels. Processing and output sizes are bounded. New output files are written atomically with mode `0600` and never overwrite an existing file. Parent-directory access and local machine security remain the company's responsibility.
+
+The command uses required gateway/model verification, encryption and signed-response checks through the existing NEAR AI client. Missing settings or failed verification stop processing without a Razor-hosted fallback. The company's NEAR AI account pays for inference. The command sends no source, key, extraction or evidence packet to a Razor endpoint and creates no hosted AI draft. CLI retention is forced to zero for hosted-retention configuration; this does not delete local files or revoke the provider key.
+
+`review.json` contains plaintext extracted fields and is sensitive. The optional evidence packet contains encrypted wire bytes and public attestation data by default. Use `--packet-mode metadata` to redact wire bytes or omit `--packet` to save no evidence file. Neither packet mode exports decryption keys or authenticates separately supplied plaintext invoice fields. The local `/verify` page reports each claim's limits; exporter metadata and fixture signatures do not establish real hardware attestation.
+
+Open the review JSON in the company's private-processing panel and compare it with the original document. Reading the local file uploads nothing. A finance preparer with document access may explicitly import only the reviewed source hash/type, confirmed payee, reference, description, agreed USDC amount, cost ceiling and optional due date into an ordinary bill draft. The raw document, complete extraction, payment instructions, credentials and evidence packet are excluded. Foreign-currency amounts require a separately agreed USDC obligation; import does not convert them or approve payment. These selected fields are human assertions. Exact retries return the existing bill; conflicting terms or reuse of the source under another reference are rejected.
+
+Original documents, environment files and exported artifacts remain until the company removes them. Razor deletion or expiry cannot revoke downloaded copies; revoke the API key in the company's NEAR AI account when appropriate. The local SDK-fixture checks are not evidence of successful live private inference, real hardware verification or real payment settlement.
+
 ## Recover shared treasury callbacks and refunds
 
 Set the shared treasury's `refund_reporter` to a dedicated recoverable operator account through its platform owner. Link that account to an actual Razor operator user using verified NEAR wallet linking. The operator does not need a company membership; the command verifies the current onchain platform reporter, reviewed treasury code, network and the selected company's immutable binding before granting a narrow local admin context. Audit entries retain the operator user's own identity.
