@@ -44,7 +44,7 @@ export function ExpensesPanel() {
         <td>{expense.reimbursement ? <><Status value={expense.reimbursement.status} /><p className="text-xs">Delivered {usd(expense.reimbursement.deliveredAmount)} · remaining {usd(expense.reimbursement.remainingLiability)}</p></> : <span className="text-xs text-muted-foreground">No reimbursement bill</span>}</td>
         <td><button type="button" className="text-sm text-primary" onClick={() => { setSelected(expense.id); setNotice(""); }}>Inspect expense</button></td>
       </tr>)}</DataTable>}
-      {data && data.total > 0 && <div className="flex items-center justify-between gap-3"><Action type="button" disabled={page <= 1 || overview.refreshing} onClick={() => setPage(value => value - 1)}>Previous expenses</Action><span className="text-xs">Page {page} · {data.total} requests</span><Action type="button" disabled={!data.hasMore || overview.refreshing} onClick={() => setPage(value => value + 1)}>Next expenses</Action></div>}
+      {data && data.total > 0 && <div className="flex flex-wrap items-center justify-between gap-3"><Action type="button" disabled={page <= 1 || overview.refreshing} onClick={() => setPage(value => value - 1)}>Previous expenses</Action><span className="text-xs">Page {page} · {data.total} requests</span><Action type="button" disabled={!data.hasMore || overview.refreshing} onClick={() => setPage(value => value + 1)}>Next expenses</Action></div>}
       {detail.loading && <Empty>Loading the receipt and review history...</Empty>}
       {current && <div className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">
         <h3 className="font-medium">{current.submitterName}: {current.fields.merchant}</h3>

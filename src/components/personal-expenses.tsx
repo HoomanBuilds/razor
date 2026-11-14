@@ -62,7 +62,7 @@ export function PersonalExpenses({ refreshRevision = 0 }: { refreshRevision?: nu
         }}><ExpenseFields value={expense} /><div><Action disabled={!!busy} busy={busy === `correct:${expense.id}`}>Resubmit corrected request</Action></div></form></details>}
         {expense.events.length > 0 && <details><summary className="cursor-pointer text-xs">My submission and decision history</summary><div className="mt-3 grid gap-3">{expense.events.map((item, index) => <p key={`${item.at}:${index}`} className="whitespace-pre-wrap break-words text-xs">{item.decision} · {new Date(item.at).toLocaleString()}: {item.note}</p>)}</div></details>}
       </article>)}
-      {data && data.total > 0 && <div className="flex items-center justify-between gap-3"><Action type="button" disabled={page <= 1 || resource.refreshing} onClick={() => setPage(value => value - 1)}>Previous requests</Action><span className="text-xs">Page {page} · {data.total} requests</span><Action type="button" disabled={!data.hasMore || resource.refreshing} onClick={() => setPage(value => value + 1)}>Next requests</Action></div>}
+      {data && data.total > 0 && <div className="flex flex-wrap items-center justify-between gap-3"><Action type="button" disabled={page <= 1 || resource.refreshing} onClick={() => setPage(value => value - 1)}>Previous requests</Action><span className="text-xs">Page {page} · {data.total} requests</span><Action type="button" disabled={!data.hasMore || resource.refreshing} onClick={() => setPage(value => value + 1)}>Next requests</Action></div>}
       {notice && <p role="status" className="text-sm">{notice}</p>}{(error || resource.error) && <p role="alert" className="text-sm text-destructive">{error || resource.error}</p>}
     </div>
   </Panel>;
