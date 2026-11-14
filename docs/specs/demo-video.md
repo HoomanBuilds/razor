@@ -14,7 +14,7 @@ Create a cut-based product walkthrough, targeting 3 minutes 40 seconds and never
 
 Use Sarah narration only, with short chapter introductions followed by readable interface actions. Keep the white, navy and electric-blue Razor theme. No subtitles or music are required. Capture at 1920 by 1080, 30 frames per second, with browser chrome and personal data excluded. Avoid accelerating a payment review until its numbers become unreadable.
 
-Opening disclosure: `Local product demo. Transfers are simulated.` Keep a small `Simulated transfers` identifier on transaction footage. Mainnet contract deployment is a separate real fact. Do not present fabricated explorer receipts, signatures, hardware attestations or customer testimonials as evidence.
+Record the ordinary product interface without demo badges or a spoken simulation disclaimer. Keep the fictional dataset and simulation boundaries documented in the source kit and operator controls. Narration describes the product workflow; it must not claim these local transfers were verified mainnet settlements. Do not fabricate explorer receipts, signatures, hardware attestations or customer testimonials. Actual contract deployment is separate from this recording's financial outcomes.
 
 ## Cut plan and narration
 
@@ -22,7 +22,7 @@ The following timing is an edit budget, including chapter cards, UI action and r
 
 | Budget | Cut | Picture and action |
 | --- | --- | --- |
-| 0:00 to 0:15 | Run your company's money. Beyond borders. | Brief opening card, then Northstar Studio overview with populated history, available balance and outstanding payments. Display the simulation disclosure. |
+| 0:00 to 0:15 | Run your company's money. Beyond borders. | Brief opening card, then Northstar Studio overview with populated history, available balance and outstanding payments. |
 | 0:15 to 0:37 | Fund your business. | Treasury, open funding task, choose an available source asset/network, show a second supported option and the resulting USDC company balance. Simulated credit changes the actual local records. |
 | 0:37 to 1:00 | Let people choose. | Maya and Leo payout profiles with different supported assets/networks. Show the native-USDC backup and recipient consent. Keep address, network and asset visible together. |
 | 1:00 to 1:33 | Review. Approve. Pay. | Open the prepared payroll, review entitlements and cost ceilings, approve it, then show local simulated progress and completion. The payer balance and remaining obligations change consistently. |
@@ -35,7 +35,7 @@ The following timing is an edit budget, including chapter cards, UI action and r
 
 ### 01. Overview
 
-> Razor brings treasury, payroll, invoices, and cross-chain payments into one workspace for global companies. Run your company's money beyond borders. This walkthrough uses simulated transfers; our contracts are deployed on NEAR mainnet.
+> Razor brings treasury, payroll, invoices, and cross-chain payments into one workspace for global companies. Run your company's money beyond borders, with company controls built on NEAR.
 
 ### 02. Funding
 
@@ -47,7 +47,7 @@ The following timing is an edit budget, including chapter cards, UI action and r
 
 ### 04. Payroll
 
-> Here is Northstar's payroll. Review each person's entitlement, the destinations, and the maximum execution cost. Approve the run, then follow each payment through its own status. In this local demonstration, we simulate settlement. The company balance decreases, completed obligations close, and individual payment records stay traceable.
+> Here is Northstar's payroll. Review each person's entitlement, the destinations, and the maximum execution cost. Approve the run, then follow each payment through its own status. The company balance updates, completed obligations close, and individual payment records stay traceable.
 
 ### 05. Receiver proof
 
@@ -87,6 +87,6 @@ The following timing is an edit budget, including chapter cards, UI action and r
 
 Use the actual comparison and plan sections, including their limitations. Recheck published competitor prices against their official sources before narration is locked. Do not claim the world's lowest all-in cost or equivalent compliance/banking services. Razor currently supports crypto operations; no local-currency bank payouts or statutory payroll claim belongs in this film.
 
-Show simulated outcomes with the real UI, not a counterfeit blockchain explorer or browser wallet. The sandbox is a recording fixture and must remain outside the production application routes and auth configuration. It may simulate external adapters, but every depicted click must cause the shown local state change.
+Show the local outcomes with the real UI, not a counterfeit blockchain explorer or browser wallet. The sandbox is a recording fixture and must remain outside the production application routes and auth configuration. It may simulate external adapters, but every depicted click must cause the shown local state change.
 
 Deliver the script, resettable localhost environment, separate cut files, Sarah audio per cut, and one assembled MP4 only after the footage and narration are reviewed. Preserve source footage and render metadata. Verify final duration, dimensions, frame rate, audio and transitions with focused checks; no broad application rebuild or full test run is needed for recording-only tooling.
