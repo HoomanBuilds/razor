@@ -2,6 +2,7 @@ import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {openBrowser, ready} from './browser.mjs';
+import {clickPointer, installPointer, movePointer} from './pointer.mjs';
 import {directory, loadStory, localUrl, run, wait} from './lib.mjs';
 
 const {values} = parseArgs({options: {story: {type: 'string'}, origin: {type: 'string', default: 'http://localhost:3400'}, port: {type: 'string', default: '9224'}, only: {type: 'string'}, reset: {type: 'boolean', default: false}}});
@@ -39,6 +40,7 @@ browser = await openBrowser({port: Number(values.port)});
 const reportPath = resolve(directory('capture'), 'report.json');
 const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : [];
 try {
+  await installPointer(browser);
   await browser.call('Fetch.enable', {patterns: [{urlPattern: '*'}]});
   browser.on('Fetch.requestPaused', ({requestId, request}) => {
     let allowed = false;
@@ -62,7 +64,8 @@ try {
       await browser.evaluate(`(()=>{const target=document.querySelector(${JSON.stringify(segment.frame.selector)});if(!target)throw new Error('Framing target not found');scrollTo({top:target.getBoundingClientRect().top+scrollY-${segment.frame.offset ?? 100},behavior:'instant'})})()`);
       await wait(250);
     }
-    const snapshot = () => browser.evaluate('({title:document.title,text:document.body.innerText,scrollWidth:document.documentElement.scrollWidth,width:innerWidth,brokenImages:[...document.images].filter(image=>image.complete&&!image.naturalWidth).length})');
+    const snapshot = () => browser.evaluate('({title:document.title,text:document.body.innerText,scrollWidth:document.documentElement.scrollWidth,width:innerWidth,brokenImages:[...document.images].filter(image=>image.complete&&!image.naturalWidth).length,pointer:window.__razorFilmPointer?.state()})');
+    await movePointer(browser, segment.pointerStart ?? {x: 1120, y: 760}, 0);
     const before = await snapshot();
     const frameDirectory = resolve(directory('capture'), segment.id);
     mkdirSync(frameDirectory, {recursive: true});
@@ -81,7 +84,8 @@ try {
     const events = [];
     for (const action of [...(segment.actions ?? [])].sort((a, b) => a.at - b.at)) {
       if (action.at >= captureSeconds) throw new Error(`Action exceeds footage duration: ${segment.id}`);
-      await wait(Math.max(0, action.at * 1000 - (performance.now() - started)));
+      const cursorLead = ['click', 'fill', 'select', 'point'].includes(action.type) ? 420 : 0;
+      await wait(Math.max(0, action.at * 1000 - cursorLead - (performance.now() - started)));
       try {await perform(action);}
       catch (error) {throw new Error(`${segment.id} action ${action.type} at ${action.at}s (${action.selector ?? action.text ?? action.path ?? ''}): ${error.message}`);}
       events.push({...action, actualSeconds: (performance.now() - started) / 1000});
@@ -126,7 +130,7 @@ async function perform(action) {
       const target = await browser.evaluate(`(()=>{const element=[...document.querySelectorAll(${JSON.stringify(action.selector)})][${index}];if(element.checked)return null;const r=element.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
       if (!target) continue;
       if (target.x < 0 || target.y < 0 || target.x > 1920 || target.y > 1080) throw new Error('Checkbox lies outside the frame; scroll before checking');
-      await click(target); await wait(140);
+      await clickPointer(browser, target); await wait(100);
     }
     return;
   }
@@ -135,9 +139,10 @@ async function perform(action) {
     await browser.evaluate(`(()=>{const element=${selector};if(!element)throw new Error('Reveal target not found');element.scrollIntoView({behavior:'smooth',block:${JSON.stringify(action.block ?? 'center')}});return true})()`);
     await wait(700); return;
   }
-  const target = await browser.evaluate(`(()=>{const element=${selector};if(!element)throw new Error('Capture target not found');const rect=element.getBoundingClientRect();if(!rect.width||!rect.height)throw new Error('Capture target is hidden');return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}})()`);
+  const target = await browser.evaluate(`(()=>{const element=${selector};if(!element)throw new Error('Capture target not found');const rect=element.getBoundingClientRect();if(!rect.width||!rect.height)throw new Error('Capture target is hidden');return {x:rect.x+rect.width*${action.anchorX ?? 0.5},y:rect.y+rect.height*${action.anchorY ?? 0.5}}})()`);
   if (target.x < 0 || target.y < 0 || target.x > 1920 || target.y > 1080) throw new Error('Capture target lies outside the frame');
-  await click(target);
+  if (action.type === 'point') {await movePointer(browser, target); return;}
+  await clickPointer(browser, target);
   if (action.type === 'fill') {
     await browser.call('Input.dispatchKeyEvent', {type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2});
     await browser.call('Input.dispatchKeyEvent', {type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2});
@@ -145,9 +150,4 @@ async function perform(action) {
   } else if (action.type === 'select') {
     await browser.evaluate(`(()=>{const element=${selector};element.value=${action.optionText ? `[...element.options].find(option=>option.textContent===${JSON.stringify(action.optionText)})?.value` : JSON.stringify(action.value)};element.dispatchEvent(new Event('change',{bubbles:true}));return element.value})()`);
   } else if (action.type !== 'click') throw new Error(`Unknown capture action: ${action.type}`);
-}
-async function click(target) {
-  await browser.call('Input.dispatchMouseEvent', {type: 'mouseMoved', x: target.x, y: target.y});
-  await browser.call('Input.dispatchMouseEvent', {type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1});
-  await browser.call('Input.dispatchMouseEvent', {type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1});
 }

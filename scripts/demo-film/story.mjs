@@ -11,7 +11,8 @@ export const story = {
       description: 'Treasury, payroll, invoices and cross-chain business payments. One workspace, powered by NEAR.',
       overview: 2.5, eyebrow: 'COMPANY MONEY, ON YOUR TERMS',
       narration: "Razor brings treasury, payroll, invoices, and cross-chain payments into one workspace for global companies. Run your company's money beyond borders, with company controls built on NEAR.",
-      profile: 'owner', path: '/app?company={{companies.northstar.id}}&section=overview', actions: [],
+      profile: 'owner', path: '/app?company={{companies.northstar.id}}&section=overview',
+      actions: [{at: 2, type: 'point', selector: '.dashboard-metric:first-child .dashboard-metric-value', anchorX: .8}, {at: 6, type: 'point', selector: '.dashboard-metric:nth-child(3) .dashboard-metric-value', anchorX: .8}, {at: 10, type: 'point', selector: '.dashboard-visual-grid > :nth-child(2)', anchorX: .8, anchorY: .3}],
     },
     {
       id: '02-funding', type: 'shot', chapter: 2, seconds: 26,
@@ -38,7 +39,7 @@ export const story = {
       description: 'Preferred payout. Consented USDC backup.', overview: 2,
       narration: 'Maya wants USDC on Base. Leo chooses a different supported payout asset. Each person confirms their destination and a native-USDC backup on a supported network. If the preferred route is unavailable, that consented backup provides another option. An uncertain transfer must be reconciled before trying again.',
       profile: 'maya', path: '/receive?view=profiles&recipientId={{recipientIds.maya}}',
-      actions: [{at: 10, type: 'control', endpoint: '/__demo/profile', body: {profile: 'leo'}}, {at: 10.1, type: 'navigate', path: '/receive?view=profiles&recipientId={{recipientIds.leo}}'}],
+      actions: [{at: 1, type: 'point', selector: 'button[aria-label^="Receiving asset and network:"]'}, {at: 5, type: 'point', selector: 'button[aria-label^="USDC backup network:"]'}, {at: 10, type: 'control', endpoint: '/__demo/profile', body: {profile: 'leo'}}, {at: 10.1, type: 'navigate', path: '/receive?view=profiles&recipientId={{recipientIds.leo}}'}, {at: 13, type: 'point', selector: 'button[aria-label^="Receiving asset and network:"]'}, {at: 17, type: 'point', selector: 'button[aria-label^="USDC backup network:"]'}],
     },
     {
       id: '04-payroll', type: 'shot', chapter: 3, seconds: 29, captureSeconds: 31,
@@ -92,6 +93,8 @@ export const story = {
         {at: 11, type: 'click', text: 'Use the common accepted window'},
         {at: 13, type: 'click', text: 'Calculate original net deposits and credits'},
         {at: 16, type: 'reveal', selector: '[role="tabpanel"]:not([hidden]) table'},
+        {at: 20, type: 'point', selector: '[role="tabpanel"]:not([hidden]) table tbody tr:first-child td:nth-child(2)', anchorX: .7},
+        {at: 25, type: 'point', selector: '[role="tabpanel"]:not([hidden]) table tbody tr:nth-child(2) td:nth-child(3)', anchorX: .7},
       ],
     },
     {
@@ -102,9 +105,11 @@ export const story = {
       profile: 'owner', path: '/app?company={{companies.northstar.id}}&section=payments&payment={{heldPaymentId}}',
       frame: {selector: '#payment-history', offset: 100},
       actions: [
+        {at: 3, type: 'point', text: 'Check original payout status'},
         {at: 10, type: 'navigate', path: '/app?company={{companies.northstar.id}}&section=bills'},
         {at: 13, type: 'click', text: 'New invoice'},
         {at: 17, type: 'reveal', text: 'Analyze an invoice privately'},
+        {at: 19, type: 'point', text: 'Analyze an invoice privately'},
       ],
     },
     {
@@ -113,7 +118,7 @@ export const story = {
       description: 'Compare the costs. Keep the context.', overview: 2,
       narration: "Razor takes zero percentage markup on payment principal. This comparison keeps the differences visible: PayPal's listed merchant checkout fees, Request's zero stablecoin processing, and Rise's contractor services. These products have different scopes; network and conversion costs still matter.",
       profile: 'owner', path: '/#compare', frame: {selector: '#compare', offset: 100},
-      actions: [{at: 4, type: 'click', selector: '#comparison-amount'}, {at: 8, type: 'scroll', by: 400}],
+      actions: [{at: 4, type: 'click', selector: '#comparison-amount'}, {at: 8, type: 'scroll', by: 400}, {at: 10, type: 'point', selector: '.rm-peer-grid > article:first-child strong', anchorX: .9}, {at: 13, type: 'point', selector: '.rm-peer-grid > article:nth-child(2) strong', anchorX: .9}],
     },
     {
       id: '09-business-model', type: 'shot', chapter: 6, seconds: 19,
@@ -121,7 +126,7 @@ export const story = {
       description: 'Optional plans for the way your team works.', overview: 2,
       narration: 'We earn through optional workspace subscriptions: Free, Pro at twenty-nine USDC, and Business at ninety-nine USDC per month. The current pilot includes complimentary Pro access. Companies pay for workflow capabilities, while recipients keep access to their payment history and preferences.',
       profile: 'owner', path: '/#pricing', frame: {selector: '#pricing', offset: 100},
-      actions: [{at: 8, type: 'scroll', by: 280}],
+      actions: [{at: 1, type: 'point', selector: '.rm-price-card:first-child .rm-price', anchorX: .6}, {at: 3.5, type: 'point', selector: '.rm-price-card:nth-child(2) .rm-price', anchorX: .6}, {at: 6, type: 'point', selector: '.rm-price-card:nth-child(3) .rm-price', anchorX: .6}, {at: 8, type: 'scroll', by: 280}, {at: 12, type: 'point', selector: '.rm-price-card:nth-child(2) ul', anchorX: .85, anchorY: .4}],
     },
     {
       id: '10-close', type: 'card', chapter: 7, seconds: 9,
