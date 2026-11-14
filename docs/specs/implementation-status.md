@@ -37,6 +37,8 @@ Recurring templates create reviewable draft obligations. The restricted executor
 
 ## Local evidence
 
+Competitive extensions integrated on 14 November now include browser invoice documents, mapped locale-aware payroll imports, direct native-USDC funding, a bounded maximum-weight clearing optimizer, managed payroll execution groups, independent vendor purchasing commitments and portable evidence verification. The [competitive checklist](competitive-gap-checklist.md) records their exact acceptance IDs and partial boundaries. Wave-one source `b6dd47f` passed 290 application checks, full typecheck/production build, five signed-session HTTP scenarios and six browser scenarios. No inference credential, real funding or mainnet payment was used. The later G03/G06/G08 integrations have focused source checks but still need their combined build/browser review; their presence does not establish full extension completion.
+
 | Evidence | Result and boundary |
 | --- | --- |
 | Application suite | All **186 checks passed** on open-items integration `19822ff`, including deployment plans, secret-safe setup, database permissions, private API responses and wallet module compatibility. Eight setup checks also passed after a test-environment type correction on `c128a8b`. Earlier 168-check, 135-check and 104-check reviews remain recorded in the checklist |

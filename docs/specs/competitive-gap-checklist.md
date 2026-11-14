@@ -6,7 +6,7 @@ This is the durable checklist for the competitive improvements requested after t
 
 The [baseline feature catalog](features.md) and [build checklist](../build-checklist.md) remain applicable. Their 97 feature requirements and existing evidence are not replaced or marked complete by this extension. The 22 groups below are workstreams, not 22 individually shipped features.
 
-Initial tracking: 161 workstream acceptance checks and 6 cross-feature completion checks, all open. Update these counts if acceptance scope changes; preserve stable IDs and the evidence history.
+Tracking: 161 workstream acceptance checks and 6 cross-feature completion checks. All started open; checked items below have recorded evidence. Update these counts if acceptance scope changes; preserve stable IDs and the evidence history.
 
 ## Tracking and completion rules
 
@@ -22,17 +22,17 @@ The product continues to use NEAR application accounts, contracts and financial 
 
 ## Coverage and delivery order
 
-| Group | Workstream | Starting position | Sequence and dependencies |
+| Group | Workstream | Current implementation/evidence | Sequence and dependencies |
 | --- | --- | --- | --- |
-| G01 | Document and channel invoice intake | Structured/text intake exists; file/OCR/channel ingestion missing | A; existing bill review and private analysis |
-| G02 | Flexible payroll imports | Fixed-schema CSV exists | A; existing recipient and payroll validation |
-| G03 | Managed payroll execution | Run preparation exists; financial actions are per attempt | A; existing authority, reservations and recovery; integrates G02/G04 |
-| G04 | Direct native-USDC funding | Native direct payouts exist; incoming cash still uses routing | A; shared treasury receipt/credit attribution |
+| G01 | Document and channel invoice intake | Browser files/manual review verified; private image inference and channel journeys pending | A; existing bill review and private analysis |
+| G02 | Flexible payroll imports | Manual mapped imports verified; AI suggestions pending | A; existing recipient and payroll validation |
+| G03 | Managed payroll execution | Console and durable wallet batches integrated; browser/real wallet evidence pending | A; existing authority, reservations and recovery; integrates G02/G04 |
+| G04 | Direct native-USDC funding | Company/public/obligation paths integrated with local proof fixtures; live money evidence pending | A; shared treasury receipt/credit attribution |
 | G05 | Integrated NEAR signer onboarding | Social login exists; external owner-wallet setup remains separate | A; reviewed native NEAR provider and recovery |
-| G06 | Independent vendor commitments | Invoice caps exist; pre-invoice budgets missing | B; approval policy and invoice accounting |
+| G06 | Independent vendor commitments | Application purchase budgets integrated; structured quantity checks/credit notes pending | B; approval policy and invoice accounting |
 | G07 | Standing autopay and supplier cooldown | Exact-route worker exists; fresh-route standing authority missing | B; explicit contract authority; G06 for PO-linked use |
-| G08 | Portable independent verification | Server verification and retained evidence exist | A; actual signed bytes and privacy-safe exports |
-| G09 | Better clearing optimization | Conserved cycle cancellation exists | B; accepted obligations and existing netting consent |
+| G08 | Portable independent verification | Packets, CLI, browser and scoped exports integrated; hardware/plaintext/settlement checks remain incomplete | A; actual signed bytes and privacy-safe exports |
+| G09 | Better clearing optimization | Bounded optimization and historical manifest compatibility verified; actual fees unavailable | B; accepted obligations and existing netting consent |
 | G10 | Funded clearing rounds | Current clearing discharges debt and creates payment drafts | C; USDC custody, funding, refunds and existing netting locks |
 | G11 | External API, MCP and events | Internal session APIs exist | B; scoped integration identity and existing approval services |
 | G12 | Customer-direct private processing | Verified inference exists; Razor server sees input/output | C; reviewed client/company-operated verification, G08 |
@@ -53,7 +53,7 @@ A covers core intake, first use and execution. B adds business controls and inte
 
 Baseline: invoice records, text analysis, duplicate controls and human review already exist. This group adds the missing input paths.
 
-- [ ] `G01-01` A payer or authorized supplier uploads a PDF or supported invoice image and sees a saved, company-scoped intake record with processing status, provenance and the original document subject to access/retention policy.
+- [x] `G01-01` A payer or authorized supplier uploads a PDF or supported invoice image and sees a saved, company-scoped intake record with processing status, provenance and the original document subject to access/retention policy.
 - [ ] `G01-02` Text PDFs and scanned/image documents use bounded extraction or OCR; file type/content, bytes, page count, decoded image size and processing time are validated. Password-protected, malformed or unsupported documents produce recoverable errors.
 - [ ] `G01-03` Extracted supplier, reference, dates, currency, totals and line items show confidence/missing-field warnings and the relevant source excerpt before a human confirms the obligation. Foreign currency never becomes USDC through an invented conversion.
 - [ ] `G01-04` Document bytes and a normalized invoice identity feed existing duplicate checks across upload, text and channel ingestion; repeated uploads do not create another payable obligation.
@@ -62,19 +62,19 @@ Baseline: invoice records, text analysis, duplicate controls and human review al
 - [ ] `G01-07` A configured WhatsApp connector supports the same authenticated invoice/expense intake and review rules, with clear third-party visibility, actual provider delivery evidence and a manual-upload alternative.
 - [ ] `G01-08` Document processing uses the documented NEAR private-processing boundary; retention/deletion covers originals, extracted text, temporary files and retained outputs. Failures do not silently send documents to another model provider.
 - [ ] `G01-09` Malicious document instructions, forged chat senders and document payment addresses cannot modify the confirmed recipient, approve a liability or bypass company permissions. The user can resolve extraction failure manually.
-- [ ] `G01-10` PDF/image processing uses isolated, memory-capped workers with bounded concurrency, timeouts and output, minimal environment access and temporary-file cleanup. Several uploads cannot exhaust the application or development laptop's memory.
+- [x] `G01-10` PDF/image processing uses isolated, memory-capped workers with bounded concurrency, timeouts and output, minimal environment access and temporary-file cleanup. Several uploads cannot exhaust the application or development laptop's memory.
 
 ## G02. Import a company's existing payroll sheet
 
 Baseline: row validation, recipient CSV intake and fixed payroll columns already exist.
 
-- [ ] `G02-01` A user uploads a CSV, previews its actual headers/rows and manually maps employee identity, amount, supplied bonus/adjustment, currency, note and optional cost ceiling without reshaping the source file.
+- [x] `G02-01` A user uploads a CSV, previews its actual headers/rows and manually maps employee identity, amount, supplied bonus/adjustment, currency, note and optional cost ceiling without reshaping the source file.
 - [ ] `G02-02` Optional AI suggests a mapping using minimal necessary header/sample information. The user confirms it; unsupported or invented columns are rejected, and manual mapping works without AI credentials.
-- [ ] `G02-03` Decimal separator, thousands separator, delimiter and encoding handling are explicit. Ambiguous formats, mixed currencies, empty required values, negative net pay, precision loss and overflow block affected rows rather than changing amounts silently.
-- [ ] `G02-04` Amount normalization uses deterministic exact arithmetic. Source value, normalized amount and any explicit user correction remain inspectable; a model cannot calculate salaries, infer FX or invent payee accounts.
-- [ ] `G02-05` Existing recipients are matched with company-scoped stable identities; unknown, duplicate and ambiguous identities enter an invitation/resolution flow without creating an automatically payable destination.
-- [ ] `G02-06` A confirmed mapping can be saved, renamed and versioned per company through persisted controls. Changed source headers require revalidation; another company cannot read its mappings or payroll samples.
-- [ ] `G02-07` The import preview reports accepted/rejected rows and total principal/cost ceilings, supports correction before commit, and resumes without creating duplicate employees or pay-period obligations.
+- [x] `G02-03` Decimal separator, thousands separator, delimiter and encoding handling are explicit. Ambiguous formats, mixed currencies, empty required values, negative net pay, precision loss and overflow block affected rows rather than changing amounts silently.
+- [x] `G02-04` Amount normalization uses deterministic exact arithmetic. Source value, normalized amount and any explicit user correction remain inspectable; a model cannot calculate salaries, infer FX or invent payee accounts.
+- [x] `G02-05` Existing recipients are matched with company-scoped stable identities; unknown, duplicate and ambiguous identities enter an invitation/resolution flow without creating an automatically payable destination.
+- [x] `G02-06` A confirmed mapping can be saved, renamed and versioned per company through persisted controls. Changed source headers require revalidation; another company cannot read its mappings or payroll samples.
+- [x] `G02-07` The import preview reports accepted/rejected rows and total principal/cost ceilings, supports correction before commit, and resumes without creating duplicate employees or pay-period obligations.
 
 ## G03. Execute payroll as a managed run
 
@@ -153,11 +153,11 @@ Baseline: private inference verification and encrypted evidence downloads exist.
 
 Baseline: current cycle cancellation is conserved and deterministic but does not always maximize cancellable invoice value.
 
-- [ ] `G09-01` A bounded exact-integer optimizer maximizes the defined cancelled face-value objective over accepted eligible obligations and respects all current company/edge/amount bounds.
-- [ ] `G09-02` Input ordering and equal-score ties have deterministic rules. Proposals bind exact obligation versions and original/reduced/residual amounts so later consent cannot authorize another result.
-- [ ] `G09-03` Every result preserves each company's net position, nonnegative residuals and per-edge capacities. No unrelated obligation, employee salary, disputed amount or already reserved payment enters the calculation.
-- [ ] `G09-04` Runtime/iteration limits and inability to prove optimality are explicit. A bounded fallback remains conserved, labelled and no worse than the accepted baseline on the chosen objective.
-- [ ] `G09-05` The four-obligation regression with D-to-C 3, C-to-D 3, D-to-B 3 and B-to-C 1 reduces residual gross transfer volume from the current 4 to 3 while preserving net positions. Both cases' starting-liquidity lower bound remains 3.
+- [x] `G09-01` A bounded exact-integer optimizer maximizes the defined cancelled face-value objective over accepted eligible obligations and respects all current company/edge/amount bounds.
+- [x] `G09-02` Input ordering and equal-score ties have deterministic rules. Proposals bind exact obligation versions and original/reduced/residual amounts so later consent cannot authorize another result.
+- [x] `G09-03` Every result preserves each company's net position, nonnegative residuals and per-edge capacities. No unrelated obligation, employee salary, disputed amount or already reserved payment enters the calculation.
+- [x] `G09-04` Runtime/iteration limits and inability to prove optimality are explicit. A bounded fallback remains conserved, labelled and no worse than the accepted baseline on the chosen objective.
+- [x] `G09-05` The four-obligation regression with D-to-C 3, C-to-D 3, D-to-B 3 and B-to-C 1 reduces residual gross transfer volume from the current 4 to 3 while preserving net positions. Both cases' starting-liquidity lower bound remains 3.
 - [ ] `G09-06` Exact consent, concurrent-round exclusion and existing finality/revocation controls remain enforced. Reports separate cancelled invoice face value, residual volume, required starting liquidity and actual fees paid.
 
 ## G10. Cash-backed clearing rounds
@@ -338,3 +338,5 @@ Use one row per meaningful implementation/review slice. Include exact acceptance
 | Date | Acceptance IDs | Build/deployment | Evidence class | Result and remaining work | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-14 | G01-G22 | Baseline `8cdcca1` | Planning only | Scope and acceptance criteria recorded; no extension accepted as implemented by this checklist | Product comparison translated into this specification; implementation evidence pending |
+| 2026-11-14 | G01-01, G01-10; G02-01, G02-03 through G02-07; G09-01 through G09-05; partial G04 | Wave-one build `b6dd47f` | Local tests, production build, HTTP and browser | All 290 application checks, full typecheck and memory-capped production build passed. Five fresh signed-session HTTP scenarios and six browser checks passed with no exceptions/failed requests; both mobile screens measured 390 px. Verified browser PDF/manual bill creation, deletion preserving bills, locale mapping, explicit correction and exact payroll creation. Mapping persistence/identity/error paths and clearing bounds/legacy manifests have focused service tests. Direct funding uses local RPC/receipt fixtures, not a live credit. G01 channels, real image inference, G02 AI suggestions and wallet/mainnet journeys remain open. Thirteen acceptance boxes checked, with no change to the baseline's 134 boxes | Ignored `.data/competitive-wave1-tests.log`, `competitive-wave1-typecheck.log`, `competitive-wave1-build.log`, `competitive-wave1-workflow-result.json`, `competitive-wave1-browser-result.json` and mobile screenshots; reproducible tests in `tests/` |
+| 2026-11-14 | Partial G03, G06 and G08 | Integrated source `8eb71cf` | Focused source/service verification | Managed payroll groups, independent purchasing budgets and portable verifiers integrated. G03 has 16 focused checks including forged receipt flags; G06 has 15 focused checks plus affected regressions; G08 has 16 packet/export/UI checks plus affected regressions. Combined build/browser review of these later slices is pending, so no further box is checked here. Structured quantity/credit-note handling, standalone historical hardware/plaintext binding and live wallet/settlement evidence remain open | Feature tests and source commits retained in Git; latest full browser/build evidence remains wave one |

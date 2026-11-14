@@ -4,6 +4,8 @@ Use this document to compare the actual build with the intended product througho
 
 Track the separately authorized competitive improvements in the [competitive feature checklist](specs/competitive-gap-checklist.md). Its 22 workstreams preserve every identified gap with granular acceptance IDs and their own evidence log. Review it alongside this checklist throughout implementation; no existing verified box changes merely because scope expands.
 
+The 14 November extension review records thirteen verified acceptance checks in that companion, with 290 application checks, typecheck, production build and focused HTTP/browser evidence on `b6dd47f`. Later payroll execution, purchasing-budget and portable-verifier source integration is still awaiting its combined review. This does not change the baseline verification count below or establish live settlement.
+
 Product: a NEAR-based company payments and payroll platform with easy onboarding, connected source wallets, supported-asset funding, recipient preferences, USDC backup, private financial analysis and optional business netting.
 
 Current treasury implementation: `shared_v1`, with one deployed NEAR treasury and company-scoped balances, permissions and payment records. Activation prepays company state rather than deploying another contract. Existing isolated configurations require deliberate migration. See the [shared treasury specification](specs/shared-treasury.md).
