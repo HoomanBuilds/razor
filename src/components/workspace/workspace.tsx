@@ -62,6 +62,7 @@ import { WorkflowFeedback, WorkflowFeedbackSummary } from "./workflow-feedback";
 import { CompanyPrivateAgreements } from "../private-agreements/panels";
 import { WorkingCapitalPanel } from "./financing";
 import { NetSuitePanel } from "./netsuite";
+import { EvidenceSharesPanel } from "@/components/evidence-sharing/management";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -485,7 +486,7 @@ function CompanyWorkspace({
       ) : section === "assistant" ? (
         <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
       ) : section === "activity" ? (
-        <div className="grid gap-6"><CompanyInsightsPanel /><WorkflowFeedbackSummary /><ActivityLog /><ProjectReportsPanel /></div>
+        <div className="grid gap-6"><CompanyInsightsPanel /><WorkflowFeedbackSummary /><ActivityLog /><ProjectReportsPanel /><EvidenceSharesPanel /></div>
       ) : section === "billing" ? (
         <Billing />
       ) : (

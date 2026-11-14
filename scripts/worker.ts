@@ -6,6 +6,7 @@ import { monitorDistributions } from "../src/server/distributions/service";
 import { dispatchAccountingJobs } from "../src/server/accounting";
 import { dispatchNetSuiteJobs } from "../src/server/netsuite/service";
 import { expireSupportCases } from "../src/server/support";
+import { purgeEvidenceShares } from "../src/server/evidence-sharing";
 import { monitorFundedRounds } from "../src/server/clearing/funded";
 
 const args = process.argv.slice(2);
@@ -25,6 +26,7 @@ do {
     ["fundedClearing", () => monitorFundedRounds(2, organizationId)],
     ["accounting", () => dispatchAccountingJobs({ organizationId, maxJobs: 1 })],
     ["netsuite", () => dispatchNetSuiteJobs({ organizationId, maxJobs: 1 })],
+    ["evidenceShareRetention", () => organizationId ? { skipped: true, scope: "global_housekeeping" } : purgeEvidenceShares()],
     ["supportRetention", () => organizationId ? { skipped: true, scope: "global_housekeeping" } : expireSupportCases()],
     ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],
   ] as const;

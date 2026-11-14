@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { RequestError } from "@/lib/api";
 import { useState } from "react";
 import { Download, FileJson, RefreshCw } from "lucide-react";
@@ -8,7 +9,22 @@ import type { PublicEvidenceShare } from "@/server/evidence-sharing/service";
 import { useAction, useResource } from "@/components/workspace/hooks";
 import { Action, Empty, Panel, Status } from "@/components/workspace/shared";
 
+const PacketVerifier = dynamic(
+  () =>
+    import("@/components/verification/packet-verifier").then(
+      (module) => module.PacketVerifier,
+    ),
+  {
+    loading: () => (
+      <p role="status" className="text-sm">
+        Loading local verifier...
+      </p>
+    ),
+  },
+);
+
 export function PublicEvidenceShareViewer({ token }: { token: string }) {
+  const [showVerifier, setShowVerifier] = useState(false);
   const [revision, setRevision] = useState(0),
     [notice, setNotice] = useState("");
   const resource = useResource<PublicEvidenceShare>(
@@ -131,6 +147,15 @@ export function PublicEvidenceShareViewer({ token }: { token: string }) {
                 <Download size={15} aria-hidden="true" />
                 Download frozen packet
               </Action>
+              <Action
+                type="button"
+                disabled={!!busy || resource.refreshing}
+                onClick={() => setShowVerifier((value) => !value)}
+              >
+                {showVerifier
+                  ? "Close local verifier"
+                  : "Verify this snapshot locally"}
+              </Action>
               <a
                 href="/verify"
                 rel="noreferrer"
@@ -210,6 +235,12 @@ export function PublicEvidenceShareViewer({ token }: { token: string }) {
           </p>
         ) : null}
       </Panel>
+      {showVerifier && value && (
+        <PacketVerifier
+          initialPacket={value.packet}
+          sourceNote={value.notice}
+        />
+      )}
       <p className="text-xs leading-5 text-muted-foreground">
         Revoking, deleting or expiring this link stops future hosted access. A
         packet already opened in memory, downloaded, photographed or copied

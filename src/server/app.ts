@@ -10,6 +10,7 @@ import { onboardingRoutes } from "./treasury-onboarding";
 import { operationsRoutes } from "./operations";
 import { reconciliationRoutes } from "./reconciliation";
 import { settlementLinkRoutes } from "./reconciliation/settlement-links";
+import { evidenceShareRoutes, publicEvidenceShareRoutes } from "./evidence-sharing";
 import {
   companyInvoiceIntakeRoutes,
   recipientWorkspaceRoutes,
@@ -100,6 +101,7 @@ app.onError((error, c) => {
 app.get("/health", (c) => c.json({ service: "razor", status: "ok" }));
 app.route("/integrations", integrationMachineRoutes);
 app.route("/demo", demoRoutes);
+app.route("/evidence-shares", publicEvidenceShareRoutes);
 app.route("/", identityRoutes);
 app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
@@ -130,6 +132,7 @@ app.route("/organizations/:orgId/onboarding", onboardingRoutes);
 app.route("/organizations/:orgId/operations", operationsRoutes);
 app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
 app.route("/organizations/:orgId/settlement-links", settlementLinkRoutes);
+app.route("/organizations/:orgId/evidence-shares", evidenceShareRoutes);
 app.route("/organizations/:orgId/intake", companyInvoiceIntakeRoutes);
 app.route("/organizations/:orgId/treasury-policy", treasuryPolicyRoutes);
 app.route("/organizations/:orgId/funding-requests", fundingRequestRoutes);
