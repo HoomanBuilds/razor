@@ -7,6 +7,7 @@ import { validNearAccount } from "../payments/near";
 
 interface DeploymentInput {
   network: "mainnet" | "testnet";
+  upgradePolicy?: "immutable" | "owner_controlled";
   treasuryAccount: string;
   clearingAccount?: string;
   ownerAccount: string;
@@ -62,6 +63,9 @@ function shellArgument(value: string) {
 }
 
 export function prepareDeployment(input: DeploymentInput) {
+  const upgradePolicy = input.upgradePolicy ?? "immutable";
+  if (upgradePolicy !== "immutable" && upgradePolicy !== "owner_controlled")
+    throw new Error("Choose immutable or owner_controlled for the contract upgrade policy");
   if (!["mainnet", "testnet"].includes(input.network))
     throw new Error("Select mainnet or testnet explicitly");
   if (Boolean(input.billingAccount) !== Boolean(input.billingIssuerPublicKey))
@@ -258,6 +262,8 @@ export function prepareDeployment(input: DeploymentInput) {
   return {
     mode: "unsigned_deployment_plan" as const,
     architecture: "shared_v1" as const,
+    upgradePolicy,
+    evidenceUpgradePolicy: "immutable" as const,
     treasuryStateVersion: 4,
     ...(clearing ? { clearingStateVersion: 3 } : {}),
     freshAccountsOnly: true,
@@ -386,9 +392,11 @@ export function prepareDeployment(input: DeploymentInput) {
     })),
     keyRetirement: deployments.map((step) => ({
       accountId: step.accountId,
-      required: true,
+      required: upgradePolicy === "immutable" || step.accountId === input.evidenceAccount,
       verified: false,
-      action: "remove_all_access_keys_after_verification",
+      action: upgradePolicy === "owner_controlled" && step.accountId !== input.evidenceAccount
+        ? "retain_and_pin_owner_controlled_upgrade_keys"
+        : "remove_all_access_keys_after_verification",
       prerequisites:
         step.accountId === input.evidenceAccount
           ? [
@@ -405,15 +413,20 @@ export function prepareDeployment(input: DeploymentInput) {
         request_type: "view_access_key_list",
         account_id: step.accountId,
         finality: "final",
-        expected_keys: [],
+        ...(upgradePolicy === "owner_controlled" && step.accountId !== input.evidenceAccount
+          ? { expected_key_policy: "exact_approved_public_keys_with_FullAccess", publicKeyPinsRequiredAfterCreation: true }
+          : { expected_keys: [] }),
       },
       consequence:
         step.accountId === input.evidenceAccount
           ? "Removing every access key makes this stateless evidence code immutable. There are no contract owner roles or stored funds; code upgrades and account deletion are unavailable."
-          : "Removing every access key makes this deployed code immutable. Contract owner roles remain available through their separate owner accounts; code upgrades and account deletion are unavailable.",
+          : upgradePolicy === "owner_controlled"
+            ? "Approved operator-held full-access keys can replace code and affect all contract funds. Company signatures cannot prevent a malicious upgrade. Keep upgrade keys in secure keychains, retain the exact reviewed public-key pins, preserve populated state and review any migration before an upgrade. Never reinitialize a populated contract."
+            : "Removing every access key makes this deployed code immutable. Contract owner roles remain available through their separate owner accounts; code upgrades and account deletion are unavailable.",
     })),
     environment: {
       NEAR_NETWORK: input.network,
+      NEAR_CONTRACT_UPGRADE_POLICY: upgradePolicy,
       NEAR_TREASURY_ID: input.treasuryAccount,
       NEAR_TREASURY_CODE_HASH: treasury.codeHash,
       ...(clearing

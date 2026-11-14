@@ -94,7 +94,7 @@ test("shared deployment deploys treasury code once without factory artifacts", (
     const plan = prepareDeployment(input);
     assert.equal(plan.architecture, "shared_v1");
     assert.equal(plan.keyRetirement.length,2);
-    assert(plan.keyRetirement.every(step=>step.required&&!step.verified&&step.verification.expected_keys.length===0));
+    assert(plan.keyRetirement.every(step=>step.required&&!step.verified&&step.verification.expected_keys?.length===0));
     assert.deepEqual(plan.artifacts.map(item => item.file), ["razor_treasury.wasm", "razor_clearing.wasm"]);
     assert.deepEqual(plan.steps[0].args, { owner_id: input.ownerAccount, token_contract: NATIVE_USDC.near });
     assert.equal(plan.environment.NEAR_TREASURY_ID, input.treasuryAccount);
@@ -174,5 +174,18 @@ test("basic payments deployment needs only the treasury and rejects invalid expl
     assert.throws(() => prepareDeployment({ ...core, clearingAccount }), /clearing state-version-3/);
     assert.throws(() => prepareDeployment({ ...core, clearingAccount: "" }), /valid/);
     assert.throws(() => prepareDeployment({ ...core, clearingAccount: input.treasuryAccount }), /distinct/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("owner-controlled deployments retain pinned upgrade authority while evidence remains immutable", () => {
+  const { directory, input } = fixture();
+  try {
+    const plan = prepareDeployment({ ...input, upgradePolicy: "owner_controlled" });
+    assert.equal(plan.upgradePolicy, "owner_controlled");
+    assert.equal(plan.evidenceUpgradePolicy, "immutable");
+    assert.equal(plan.environment.NEAR_CONTRACT_UPGRADE_POLICY, "owner_controlled");
+    assert(plan.keyRetirement.every(step => !step.required && step.action === "retain_and_pin_owner_controlled_upgrade_keys" && step.verification.publicKeyPinsRequiredAfterCreation));
+    assert(plan.keyRetirement.every(step => step.consequence.includes("Never reinitialize")));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
