@@ -586,7 +586,7 @@ export function AccountingPanel() {
                       >
                         <option value="bill">Accepted company bill</option>
                         <option value="settlement">
-                          Verified full installment payment
+                          Verified full or terminal partial payment
                         </option>
                         <option value="credit">
                           Accepted supplier credit, unapplied provider draft

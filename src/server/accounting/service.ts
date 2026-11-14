@@ -174,7 +174,7 @@ export function accountingOverview(access: AccessContext, page = 1) {
       dueDate: value.due_date ? companyDate(value.due_date, timezone) : null,
     })),
     settlements: rows<{ id: string; reference: string; amount: string }>(
-      "SELECT p.id,b.reference,p.amount FROM payments p JOIN bill_installments i ON i.payment_id=p.id JOIN bills b ON b.id=i.bill_id WHERE p.organization_id=? AND b.organization_id=? AND p.status='paid' AND p.delivered_amount=p.amount ORDER BY p.updated_at DESC LIMIT 100",
+      "SELECT p.id,b.reference,p.delivered_amount AS amount FROM payments p JOIN bill_installments i ON i.payment_id=p.id JOIN bills b ON b.id=i.bill_id WHERE p.organization_id=? AND b.organization_id=? AND ((p.status='paid' AND p.delivered_amount=p.amount) OR (p.status='partially_paid' AND p.delivered_amount!='0' AND EXISTS(SELECT 1 FROM partial_settlements s WHERE s.payment_id=p.id AND s.organization_id=p.organization_id AND s.credited_usdc=p.delivered_amount AND s.source_spent_usdc=p.total_spent))) ORDER BY p.updated_at DESC LIMIT 100",
       live.organizationId,
       live.organizationId,
     ),
@@ -194,7 +194,7 @@ export function accountingOverview(access: AccessContext, page = 1) {
       },
     ],
     scope:
-      "Reviewed original-face bills, accepted supplier credit drafts, verified full-principal settlements, observed final NEAR token-burn fees and separately approved crypto-clearing valuation differences. External provider records are imported for deterministic matching only and never prove Razor cash or delivery. No payroll salary rows, bank transfers, bank matching, invented route fees or automatic credit application/refunds. Xero manual-journal scope requires fresh consent.",
+      "Reviewed original-face bills, accepted supplier credit drafts, verified full installments or terminal partial entitlement credits, observed final NEAR token-burn fees and separately approved crypto-clearing valuation differences. Partial payment entries use only their final recorded USDC entitlement credit, with original face and unpaid remainder unchanged. External provider records are imported for deterministic matching only and never prove Razor cash or delivery. No payroll salary rows, bank transfers, bank matching, invented route fees or automatic credit application/refunds. Xero manual-journal scope requires fresh consent.",
   };
 }
 function requireInitiatingSession(userId: string, sessionId: string | null) {
@@ -1255,32 +1255,75 @@ function sourceTerms(
   let dueDate = sourceDueDate ?? reviewedDueDate,
     amount = bill.amount;
   const evidence: string[] = [];
+  let partialSettlement:
+    | {
+        attempt_id: string;
+        credited_usdc: string;
+        source_spent_usdc: string;
+        receipt_commitment: string;
+        confirmed_at: string;
+      }
+    | undefined;
   let externalBillId: string | undefined;
   if (kind === "settlement") {
     const payment = terms.installments.find((item) => item.id === id);
     if (
       !payment ||
-      payment.status !== "paid" ||
-      payment.delivered_amount !== payment.amount ||
-      payment.amount === "0"
+      !["paid", "partially_paid"].includes(payment.status) ||
+      payment.delivered_amount === "0" ||
+      (payment.status === "paid" && payment.delivered_amount !== payment.amount)
     )
       throw new ApiError(
         409,
-        "Only a fully satisfied installment with recorded delivery can become a settlement entry. Partial/provider-only states remain held",
+        "Only a satisfied installment or a final reviewed terminal partial entitlement credit can become a payment entry. Provider-only and unresolved states remain held",
         "ACCOUNTING_SETTLEMENT_UNVERIFIED",
       );
+    if (payment.status === "partially_paid") {
+      partialSettlement = row<{
+        attempt_id: string;
+        credited_usdc: string;
+        source_spent_usdc: string;
+        receipt_commitment: string;
+        confirmed_at: string;
+      }>(
+        "SELECT attempt_id,credited_usdc,source_spent_usdc,receipt_commitment,confirmed_at FROM partial_settlements WHERE payment_id=? AND organization_id=?",
+        id,
+        access.organizationId,
+      );
+      if (
+        !partialSettlement ||
+        partialSettlement.credited_usdc !== payment.delivered_amount ||
+        partialSettlement.source_spent_usdc !== payment.total_spent ||
+        !partialSettlement.receipt_commitment ||
+        BigInt(payment.delivered_amount) >= BigInt(payment.amount)
+      )
+        throw new ApiError(
+          409,
+          "The terminal partial payment needs its exact immutable entitlement-credit and source-cost evidence before bookkeeping",
+          "ACCOUNTING_SETTLEMENT_UNVERIFIED",
+        );
+      evidence.push(
+        `terminal_partial_entitlement_credit:${partialSettlement.receipt_commitment}`,
+      );
+    }
     const attempts = rows<{
+      id: string;
       state: string;
       source_tx_hash: string | null;
       destination_tx_hash: string | null;
     }>(
-      "SELECT state,source_tx_hash,destination_tx_hash FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at,id",
+      "SELECT id,state,source_tx_hash,destination_tx_hash FROM payout_attempts WHERE payment_id=? AND organization_id=? ORDER BY created_at,id",
       id,
       access.organizationId,
     );
     if (
       !attempts.some(
-        (item) => item.state === "delivered" && item.source_tx_hash,
+        (item) =>
+          (item.state === "delivered" ||
+            (payment.status === "partially_paid" &&
+              item.id === partialSettlement?.attempt_id &&
+              item.state === "partially_delivered")) &&
+          item.source_tx_hash,
       )
     )
       throw new ApiError(
@@ -1290,7 +1333,13 @@ function sourceTerms(
       );
     evidence.push(
       ...attempts
-        .filter((item) => item.state === "delivered")
+        .filter(
+          (item) =>
+            item.state === "delivered" ||
+            (payment.status === "partially_paid" &&
+              item.id === partialSettlement?.attempt_id &&
+              item.state === "partially_delivered"),
+        )
         .flatMap((item) =>
           [item.source_tx_hash, item.destination_tx_hash].filter(
             (value): value is string => !!value,
@@ -1329,7 +1378,7 @@ function sourceTerms(
       );
     dueDate = original.source.dueDate;
     externalBillId = posted.external_id;
-    amount = payment.amount;
+    amount = payment.delivered_amount;
   }
   if (!dueDate || !z.iso.date().safeParse(dueDate).success)
     throw new ApiError(
@@ -1357,6 +1406,7 @@ function sourceTerms(
     ...source,
     hash: digest({
       source,
+      ...(partialSettlement ? { partialSettlement } : {}),
       acceptedAt: bill.accepted_at,
       recipientVersion: snapshot,
       installment:
