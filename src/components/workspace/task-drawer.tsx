@@ -5,29 +5,36 @@ import { X } from "lucide-react";
 
 export function openTaskDrawer(id: string) {
   const drawer = document.getElementById(id);
-  if (drawer instanceof HTMLDialogElement && !drawer.open) drawer.showModal();
+  if (drawer instanceof HTMLDialogElement && !drawer.open && !document.querySelector('[data-task-drawer][data-wallet-suspended="true"]')) drawer.showModal();
 }
 
-export function closeTaskDrawer(id: string) {
+export function closeTaskDrawer(id: string, completed = false) {
   const drawer = document.getElementById(id);
-  if (drawer instanceof HTMLDialogElement && drawer.open) drawer.close();
+  if (drawer instanceof HTMLDialogElement && drawer.open && (completed || !drawer.querySelector(drawer.dataset.busySelector || '[aria-busy="true"]'))) drawer.close();
+}
+
+export async function withTaskDrawerWallet<T>(operation:()=>Promise<T>):Promise<T> {
+  const drawer=Array.from(document.querySelectorAll<HTMLDialogElement>('dialog[data-task-drawer][open]')).at(-1);
+  if(drawer){drawer.dataset.walletSuspended="true";drawer.close();}
+  try{return await operation();}
+  finally{if(drawer){delete drawer.dataset.walletSuspended;if(drawer.isConnected&&!document.querySelector('dialog[data-task-drawer][open]'))drawer.showModal();}}
 }
 
 export function TaskDrawer({ id, title, description, children, busySelector = '[aria-busy="true"]' }: { id: string; title: string; description?: string; children: ReactNode; busySelector?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false),[suspended,setSuspended]=useState(false);
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    const read = () => setBusy(Boolean(element.querySelector(busySelector)));
+    const read = () => {setBusy(Boolean(element.querySelector(busySelector)));setSuspended(element.dataset.walletSuspended === "true");};
     const observer = new MutationObserver(read);
-    observer.observe(element, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-busy", "data-wallet-action-busy"] });
+    observer.observe(element, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-busy", "data-wallet-action-busy", "data-wallet-suspended"] });
     read();
     return () => observer.disconnect();
   }, [busySelector]);
   const close = () => { if (!dialog.current?.querySelector(busySelector)) dialog.current?.close(); };
-  return <dialog ref={dialog} id={id} aria-labelledby={titleId} aria-modal="true" onCancel={event => { if (dialog.current?.querySelector(busySelector)) event.preventDefault(); }} onClick={event => {
+  return <><dialog data-task-drawer data-busy-selector={busySelector} ref={dialog} id={id} aria-labelledby={titleId} aria-modal="true" onCancel={event => { if (dialog.current?.querySelector(busySelector)) event.preventDefault(); }} onClick={event => {
     if (event.target !== event.currentTarget) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
@@ -37,5 +44,5 @@ export function TaskDrawer({ id, title, description, children, busySelector = '[
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-8">{children}</div>
       {busy && <p role="status" className="shrink-0 border-t bg-white px-5 py-3 text-xs text-muted-foreground sm:px-8">Finish the current action before closing this view.</p>}
     </div>
-  </dialog>;
+  </dialog>{suspended && <div role="status" className="fixed bottom-5 right-5 z-40 max-w-sm rounded-2xl border bg-white px-5 py-4 text-sm shadow-lg"><p className="font-medium">Wallet request in progress</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Complete or cancel the request in your wallet. Your reviewed task will reopen afterward.</p></div>}</>;
 }

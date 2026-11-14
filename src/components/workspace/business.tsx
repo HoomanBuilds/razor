@@ -3,6 +3,7 @@
 import { proportion } from "@/lib/payment-activity";
 
 import { useEffect, useState } from "react";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
 import { Plus } from "lucide-react";
 import { TokenLogo } from "@/components/assets/asset-identity";
 import { PageMetrics, focusWorkspaceForm } from "./page-metrics";
@@ -147,14 +148,14 @@ export function Bills() {
       </Panel>
       {approvalBillId !== null && <div id="bill-batch-review" className="scroll-mt-8"><PaymentManagementPanel mode="bills" initialBillId={approvalBillId}/></div>}
       {selectedBill && <div id="bill-review" className="scroll-mt-8"><BillTerms id={selectedBill} close={() => setSelectedBill("")}/></div>}
-      {canPrepare && <Panel
+      {canPrepare && <TaskDrawer id="bill-create-flow" title="Add an invoice" description="Record the supplier invoice and supporting payment terms."><Panel
         title="Add an invoice"
         description="Record the supplier, amount and due date."
         help="Approval creates one linked payment with a fixed net entitlement and fee ceiling. Recording an invoice does not fund or pay it."
       >
         <form
-          id="bill-compose"
-          className="scroll-mt-8 grid gap-4 md:grid-cols-3"
+          id="bill-compose" aria-busy={!!busy}
+          className="grid gap-4 sm:grid-cols-2"
           onSubmit={(event) => {
             event.preventDefault();
             const form = event.currentTarget,
@@ -177,7 +178,7 @@ export function Bills() {
                 costCenterReference: values.get("costCenter") || undefined,
                 ...purchaseMatchInput(values),
               });
-              form.reset();
+              form.reset();closeTaskDrawer("bill-create-flow",true);
               refresh();
             });
           }}
@@ -238,7 +239,7 @@ export function Bills() {
             <input name="costCenter" className={control} maxLength={120} />
           </Field>
           <PurchaseMatchFields />
-          <div className="md:col-span-3">
+          <div className="sm:col-span-2">
             <Field label="Acceptance evidence or notes">
               <textarea
                 name="evidence"
@@ -249,7 +250,7 @@ export function Bills() {
               />
             </Field>
           </div>
-          <div className="flex items-center gap-4 md:col-span-3">
+          <div className="flex items-center gap-4 sm:col-span-2">
             <Action busy={busy === "create"} disabled={!recipients.length}>
               Save draft
             </Action>
@@ -274,7 +275,7 @@ export function Bills() {
             {error}
           </p>
         )}
-      </Panel>}
+      </Panel></TaskDrawer>}
       <Panel title="Purchase matching" description="Link invoices to approved supplier commitments." collapsible><VendorCommitments key={base}/></Panel>
 
 
@@ -381,13 +382,13 @@ export function Payroll() {
 
       {reviewRunId && <div id="payroll-review" className="scroll-mt-8"><PaymentManagementPanel mode="payroll" initialRunId={reviewRunId}/></div>}
       {executionRunId && <div id="payroll-execution" className="scroll-mt-8"><PayrollExecution key={executionRunId} runId={executionRunId} onReview={() => setReviewRunId(executionRunId)}/></div>}
-      {canPrepare && <Panel
+      {canPrepare && <TaskDrawer id="payroll-create-flow" title="Prepare a pay run" description="Set the period, assign recipient amounts and save a draft for separate approval."><Panel
         title="Prepare a pay run"
         description="Set the pay period and each recipient's net amount."
         help="Amounts are net USDC entitlements. Recipients receive their preferred supported asset, with an approved USDC backup where consented. Company routing fees remain separate."
       >
         <form
-          id="payroll-compose"
+          id="payroll-compose" aria-busy={!!busy}
           className="scroll-mt-8 grid gap-5"
           onSubmit={(event) => {
             event.preventDefault();
@@ -433,13 +434,13 @@ export function Payroll() {
               setItems({});
               setImportedRows({});
               setImportSelection(null);
-              setReviewRunId(result.run.id);
+              setReviewRunId(result.run.id);closeTaskDrawer("payroll-create-flow",true);
               form.reset();
               refresh();
             });
           }}
         >
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Pay-run reference">
               <input
                 name="reference"
@@ -546,8 +547,8 @@ export function Payroll() {
             {error}
           </p>
         )}
-      </Panel>}
-      {canPrepare && <Panel title="Import payroll" description="Bring a pay run from a CSV file." collapsible><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); focusWorkspaceForm("payroll-compose"); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={setReviewRunId} /></Panel>}
+      </Panel></TaskDrawer>}
+      {canPrepare && <div className="flex justify-end"><button type="button" className="text-sm font-medium text-primary" onClick={()=>openTaskDrawer("payroll-import-flow")}>Import payroll from CSV</button></div>}{canPrepare && <TaskDrawer id="payroll-import-flow" title="Import payroll" description="Validate a CSV and review every imported allocation."><Panel title="Import payroll" description="Bring a pay run from a CSV file."><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection);closeTaskDrawer("payroll-import-flow");focusWorkspaceForm("payroll-compose"); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={setReviewRunId} /></Panel></TaskDrawer>}
 
 
     </div>
