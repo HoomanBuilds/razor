@@ -46,7 +46,7 @@ export async function validateWebhookDestination(value: string, resolver: Webhoo
 }
 
 export const sendWebhook: WebhookTransport = input => new Promise((resolve, reject) => {
-  const outgoing = request(input.url, { method: "POST", agent: false, autoSelectFamily: false, family: input.family, headers: input.headers, servername: input.url.hostname,
+  const outgoing = request(input.url, { method: "POST", agent: false, family: input.family, headers: input.headers, servername: input.url.hostname,
     lookup: (_hostname, _options, callback) => callback(null, input.address, input.family),
   }, response => {
     let size = 0;

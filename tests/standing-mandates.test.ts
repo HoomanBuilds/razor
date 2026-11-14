@@ -186,7 +186,8 @@ test("restricted native worker signs once, retries identical bytes and monitors 
     const attempts = chain!.attempts as { status: string; actual_output: string; credited_amount: string }[];
     attempts[0].status = "delivered"; attempts[0].actual_output = "1000000"; attempts[0].credited_amount = "1000000";
     const monitored = await tryExecuteStandingPayment(job, f.access);
-    assert.equal(monitored?.detail.monitored, true);
+    assert.ok(monitored && "monitored" in monitored.detail);
+    assert.equal(monitored.detail.monitored, true);
     assert.equal(row<Payment>("SELECT * FROM payments WHERE id=?", bill.payment_id!)!.status, "paid");
     assert.equal(broadcasts.length, 2);
   } finally {

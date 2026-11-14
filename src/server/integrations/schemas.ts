@@ -60,4 +60,4 @@ export const payrollOutput = z.strictObject({ id: identifier, reference: z.strin
 export const attemptsOutput = z.strictObject({ attempts: z.array(z.strictObject({ id: identifier, route: z.string(), state: z.string(), createdAt: time, updatedAt: time })) });
 export const evidenceOutput = z.strictObject({ evidence: z.array(z.strictObject({ id: identifier, kind: z.string(), contentHash: z.string(), receipt: z.string().nullable(), retained: z.boolean(), createdAt: time, expiresAt: time })) });
 export const integrationOutputSchemas = { draftReceipt: draftReceiptOutput, requestStatus: requestStatusOutput, funding: fundingOutput, payroll: payrollOutput, attempts: attemptsOutput, evidence: evidenceOutput,
-  ...Object.fromEntries(Object.entries(resourceOutputs).flatMap(([kind, schema]) => [[kind, schema], [`${kind}Page`, z.strictObject({ items: z.array(schema), nextCursor: identifier.nullable() })]])) };
+  ...Object.fromEntries<z.ZodType>(Object.entries(resourceOutputs).flatMap(([kind, schema]) => [[kind, schema] as const, [`${kind}Page`, z.strictObject({ items: z.array(schema), nextCursor: identifier.nullable() })] as const])) };
