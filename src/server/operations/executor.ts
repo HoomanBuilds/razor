@@ -18,6 +18,7 @@ interface ChainConfig { paused: boolean; owner_id: string; token_contract: strin
 type RoutePayment = Omit<ChainPayment, "attempts"> & { policy_version: string; recipient_version: string; attempts: (ChainPayment["attempts"][number] & { destination: { asset_id: string; network: string; address: string } })[] };
 
 export async function executeApprovedAttempt(job: OperationJob, access: AccessContext) {
+  if (row("SELECT payment_id FROM standing_executions WHERE attempt_id=? AND organization_id=?", job.entity_id, job.organization_id)) return { status: "completed" as const, detail: { authority: "native_standing", monitoredByNativeFlow: true } };
   const blocked = (reason: string) => {
     notify(job.organization_id, `execute-attention:${job.entity_id}:${reason}`, "Payment requires attention", reason, job.entity_id);
     return { status: "blocked" as const, delayMs: 300_000, detail: { mode: "manual", reason, attemptId: job.entity_id } };

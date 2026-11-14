@@ -9,7 +9,8 @@ export interface DirectExecution {
   amountIn: string;
   amountOut: string;
   deadline: string;
-  authorization: "NEAR treasury approval";
+  authorization: "NEAR treasury approval" | "NEAR standing mandate";
+  standingGrantId?: string;
 }
 
 export type ExecutionRecord = QuoteResponse | DirectExecution;
@@ -17,7 +18,7 @@ export type ExecutionRecord = QuoteResponse | DirectExecution;
 export function isDirectExecution(value: unknown): value is DirectExecution {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return record.kind === "direct" && record.network === "near" && record.authorization === "NEAR treasury approval" && !record.quoteRequest && [record.assetId, record.recipient, record.amountIn, record.amountOut, record.deadline].every((field) => typeof field === "string");
+  return record.kind === "direct" && record.network === "near" && ["NEAR treasury approval", "NEAR standing mandate"].includes(String(record.authorization)) && !record.quoteRequest && [record.assetId, record.recipient, record.amountIn, record.amountOut, record.deadline].every((field) => typeof field === "string");
 }
 
 export function executionTerms(record: ExecutionRecord) {

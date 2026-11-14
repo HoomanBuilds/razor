@@ -29,6 +29,7 @@ import { partialSettlementRoutes } from "./partial-settlement";
 import { billingRoutes } from "./billing";
 import { documentRoutes } from "./document-intake";
 import { vendorCommitmentRoutes } from "./vendor-commitments";
+import { standingMandateRoutes } from "./standing-mandates";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -116,6 +117,7 @@ app.route("/organizations/:orgId/partial-settlements", partialSettlementRoutes);
 app.route("/organizations/:orgId/billing", billingRoutes);
 app.route("/organizations/:orgId/documents", documentRoutes);
 app.route("/organizations/:orgId/vendor-commitments", vendorCommitmentRoutes);
+app.route("/organizations/:orgId/standing-mandates", standingMandateRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
