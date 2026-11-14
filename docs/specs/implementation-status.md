@@ -144,3 +144,9 @@ Activity & reports adds bounded, finance-scoped operations/cost aggregates and a
 ## Remaining scope after the contract review
 
 The checklists remain incomplete: baseline 15/134 verified, competitive 42/167. Unchecked includes both integrated workflows awaiting real signers/providers/settlement/private inference and genuinely missing implementations. Bank rails, statutory payroll, sealed company negotiation, lending/receivable advances, formation services, complete standalone hardware/plaintext/settlement verification and broader ERP matching/journals remain open. Native-only claim/mandate/escrow scope, credited-liability holds and missing clearing callback recovery limits remain explicit. Neither optimized contracts nor adding credentials completes those missing workflows. No new severe integration defect was found in the scoped read-only completion review; this is not a guarantee over every product path or every contract input.
+
+## Crypto release development update, 14 November
+
+Banking/off-ramps, statutory services and legal formation are deferred outside this release. The competitive checklist retains 146 active checks and 21 deferred historical checks.
+
+Source now includes [embedded native NEAR signing](embedded-near-signer.md), [sealed commercial agreements](private-agreements.md), [optional native working capital](working-capital.md), opt-in official SDK hardware report revalidation and private voluntary workflow feedback. Integrated application TypeScript compilation passed through `de1438a`; no tests, browser journeys, contract build, live provider request or money movement ran during this pass. Runtime, deployment and settlement gates remain unchecked, and this update does not replace the earlier verified evidence.

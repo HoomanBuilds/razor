@@ -8,6 +8,8 @@ The 14 November extension review records 42 verified acceptance checks in that c
 
 Release scope: crypto operations only. Local-currency bank payments, fiat funding/off-ramps, statutory tax/payroll services and legal formation are deferred and excluded from release completion. USDC accounting and backup payouts do not imply USD bank delivery.
 
+Latest development pass: embedded native NEAR onboarding, sealed business agreements, optional native-USDC financing, hardware packet revalidation and voluntary workflow feedback are integrated in source and passed a memory-capped TypeScript compile. This pass intentionally ran no tests or browser journeys. New contract, provider and financial outcomes remain unverified; the historical checked counts below are unchanged. See [native signer](specs/embedded-near-signer.md), [sealed agreements](specs/private-agreements.md) and [working capital](specs/working-capital.md).
+
 Product: a NEAR-based company payments and payroll platform with easy onboarding, connected source wallets, supported-asset funding, recipient preferences, USDC backup, private financial analysis and optional business netting.
 
 Current treasury implementation: `shared_v1`, with one deployed NEAR treasury and company-scoped balances, permissions and payment records. Activation prepays company state rather than deploying another contract. Existing isolated configurations require deliberate migration. See the [shared treasury specification](specs/shared-treasury.md).
