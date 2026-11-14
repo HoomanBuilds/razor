@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { TokenLogo } from "@/components/assets/asset-identity";
 import { PageMetrics, focusWorkspaceForm } from "./page-metrics";
@@ -53,6 +53,8 @@ export function Bills() {
     loading,
   } = useResource<{ bills: Bill[] }>(canRead ? `${base}/bills` : null, revision);
   const { busy, error, run } = useAction();
+  useEffect(() => { if (selectedBill) document.getElementById("bill-review")?.scrollIntoView({block:"start"}); }, [selectedBill]);
+  useEffect(() => { if (approvalBillId !== null) document.getElementById("bill-batch-review")?.scrollIntoView({block:"start"}); }, [approvalBillId]);
   if (!canRead) return null;
   return (
     <div className="grid min-w-0 gap-7">
@@ -141,6 +143,8 @@ export function Bills() {
           </DataTable>
         )}
       </Panel>
+      {approvalBillId !== null && <div id="bill-batch-review" className="scroll-mt-8"><PaymentManagementPanel mode="bills" initialBillId={approvalBillId}/></div>}
+      {selectedBill && <div id="bill-review" className="scroll-mt-8"><BillTerms id={selectedBill} close={() => setSelectedBill("")}/></div>}
       {canPrepare && <Panel
         title="Add an invoice"
         description="Record the supplier, amount and due date."
@@ -270,12 +274,7 @@ export function Bills() {
         )}
       </Panel>}
       <Panel title="Purchase matching" description="Link invoices to approved supplier commitments." collapsible><VendorCommitments key={base}/></Panel>
-      {approvalBillId !== null && (
-        <PaymentManagementPanel mode="bills" initialBillId={approvalBillId} />
-      )}
-      {selectedBill && (
-        <BillTerms id={selectedBill} close={() => setSelectedBill("")} />
-      )}
+
 
     </div>
   );
@@ -297,6 +296,8 @@ export function Payroll() {
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
   const [reviewRunId, setReviewRunId] = useState("");
   const [executionRunId, setExecutionRunId] = useState("");
+  useEffect(() => { if (reviewRunId) document.getElementById("payroll-review")?.scrollIntoView({block:"start"}); }, [reviewRunId]);
+  useEffect(() => { if (executionRunId) document.getElementById("payroll-execution")?.scrollIntoView({block:"start"}); }, [executionRunId]);
   if (!canRead) return null;
   return (
     <div className="grid min-w-0 gap-7">
@@ -376,6 +377,8 @@ export function Payroll() {
         )}
       </Panel>
 
+      {reviewRunId && <div id="payroll-review" className="scroll-mt-8"><PaymentManagementPanel mode="payroll" initialRunId={reviewRunId}/></div>}
+      {executionRunId && <div id="payroll-execution" className="scroll-mt-8"><PayrollExecution key={executionRunId} runId={executionRunId} onReview={() => setReviewRunId(executionRunId)}/></div>}
       {canPrepare && <Panel
         title="Prepare a pay run"
         description="Set the pay period and each recipient's net amount."
@@ -542,11 +545,8 @@ export function Payroll() {
           </p>
         )}
       </Panel>}
-      {canPrepare && <Panel title="Import payroll" description="Bring a pay run from a CSV file." collapsible><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={setReviewRunId} /></Panel>}
-      {reviewRunId && (
-        <PaymentManagementPanel mode="payroll" initialRunId={reviewRunId} />
-      )}
-      {executionRunId && <PayrollExecution key={executionRunId} runId={executionRunId} onReview={() => setReviewRunId(executionRunId)} />}
+      {canPrepare && <Panel title="Import payroll" description="Bring a pay run from a CSV file." collapsible><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); focusWorkspaceForm("payroll-compose"); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={setReviewRunId} /></Panel>}
+
 
     </div>
   );
