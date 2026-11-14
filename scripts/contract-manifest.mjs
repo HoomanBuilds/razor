@@ -15,6 +15,6 @@ const artifacts = [
   const digest = createHash("sha256").update(bytes).digest();
   return { file, bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest), environmentKey };
 });
-writeFileSync(new URL("manifest.json", directory), `${JSON.stringify({ architecture: "shared_v1", generatedAt: new Date().toISOString(), optimizer: process.env.WASM_OPT_BUILD_VERSION ?? null, artifacts }, null, 2)}\n`);
+writeFileSync(new URL("manifest.json", directory), `${JSON.stringify({ architecture: "shared_v1", treasuryStateVersion: 2, generatedAt: new Date().toISOString(), optimizer: process.env.WASM_OPT_BUILD_VERSION ?? null, artifacts }, null, 2)}\n`);
 for (const artifact of artifacts) process.stdout.write(`${artifact.environmentKey}=${artifact.codeHash}\n`);
 process.stdout.write(`Build metadata saved in ${fileURLToPath(new URL("manifest.json", directory))}\n`);

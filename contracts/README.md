@@ -13,7 +13,7 @@ bash contracts/build.sh
 bash contracts/check.sh
 ```
 
-The build optimizes treasury, clearing and billing separately, validates the WASMs and publishes their hashes in `.tools/wasm/manifest.json` with architecture `shared_v1`. Artifacts and compiler caches remain ignored. Deployment planning verifies each exact file against this manifest; legacy manifests are rejected.
+The build optimizes treasury, clearing and billing separately, validates the WASMs and publishes their hashes in `.tools/wasm/manifest.json` with architecture `shared_v1` and `treasuryStateVersion: 2`. Artifacts and compiler caches remain ignored. Deployment planning verifies each exact file against this manifest; stale manifests are rejected. Version 2 adds standing-authority collections to each company's Borsh state. Use fresh empty deployment accounts with atomic initialization. Populated version-1 state cannot be upgraded with these artifacts; no migration is implemented. See [native standing authority](../docs/specs/native-standing-authority.md).
 
 The native checks exercise financial state machines and company isolation. The optional actual-WASM runtime tool is documented in [wasm-checks/README.md](wasm-checks/README.md). These are local checks, not live settlement or measured mainnet gas evidence.
 
