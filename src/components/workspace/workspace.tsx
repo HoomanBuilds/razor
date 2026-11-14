@@ -482,7 +482,7 @@ function CompanyWorkspace({
       ) : section === "financing" ? (
         <WorkingCapitalPanel />
       ) : section === "assistant" ? (
-        organization.permissions.includes("documents:manage") ? <WorkspaceTabs key={section} tabs={[
+        organization.permissions?.includes("documents:manage") ? <WorkspaceTabs key={section} tabs={[
           { label: "Invoice analysis", content: <Assistant /> },
           { label: "Finance insights", content: <FinanceInsightsPanel /> },
           { label: "Private processing", content: <CompanyPrivateProcessing /> },
