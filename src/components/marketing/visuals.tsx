@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowRight, Check, CheckCheck, CircleCheck, FileText, LockKeyhole, ShieldCheck, Users, Wallet } from "lucide-react";
+import { RazorMark } from "@/components/brand/razor-logo";
 import { NetworkLogo, TokenLogo } from "@/components/assets/asset-identity";
 
 export type SceneKind = "payroll" | "funding" | "receiving" | "collaboration";
@@ -29,4 +30,17 @@ export function ReceiverVisual() {
 export function TreasuryStory() {
   const bars = [[35,24,17],[25,17,25],[30,18,16],[40,16,25],[20,29,25],[35,22,15],[28,20,12],[38,19,16],[46,22,14],[32,17,15],[27,23,18],[42,20,25]];
   return <div className="rm-treasury-story"><div className="rm-treasury-chart"><div className="rm-chart-top"><span>Treasury allocation</span><span>Example allocation</span></div><strong>31,400 <small>USDC</small></strong><div className="rm-chart-legend"><span>Available</span><span>Payments</span><span>Client reserves</span></div><div className="rm-stacked-bars" aria-hidden="true">{bars.map((segments,index)=><div key={index}>{segments.map((height,segment)=><i key={segment} style={{height:`${height}%`}}/>)}</div>)}</div></div><div className="rm-treasury-position"><div><span><TokenLogo symbol="USDC" size={25}/>Available to use</span><strong>20,000<small> USDC</small></strong></div><div className="rm-segment-bar" aria-hidden="true">{Array.from({length:30},(_,index)=><i className={index<19?"rm-segment-active":""} key={index}/>)}</div><div className="rm-position-details"><span>Payment reservations<strong>8,400 USDC</strong></span><span>Client earmarks<strong>3,000 USDC</strong></span></div><p><ShieldCheck size={14}/>A reserved amount is not available cash.</p></div></div>;
+}
+
+export function PlatformVisual() {
+  return <div className="rm-platform-visual">
+    <div className="rm-platform-flow">
+      <div className="rm-platform-sources"><span className="rm-platform-label">FUND YOUR WAY</span><div><TokenLogo symbol="ETH" size={31}/><span>ETH<small>Ethereum</small></span></div><div><TokenLogo symbol="SOL" size={31}/><span>SOL<small>Solana</small></span></div><div><TokenLogo symbol="USDT" size={31}/><span>USDT<small>Supported networks</small></span></div></div>
+      <div className="rm-platform-bridge" aria-hidden="true"><span/><ArrowRight size={18}/></div>
+      <div className="rm-platform-center"><div className="rm-platform-ledger"><span><FileText size={14}/>Payment records</span><i/><i/><i/></div><div className="rm-platform-treasury"><div><RazorMark size={24}/><span>Company treasury</span><NetworkLogo network="near" size={20}/></div><span>One settlement balance</span><strong><TokenLogo symbol="USDC" size={38}/>USDC</strong><div className="rm-platform-capsules" aria-hidden="true">{Array.from({length:24},(_,i)=><i key={i}/>)}</div><div className="rm-platform-treasury-bottom"><span><ShieldCheck size={15}/>Your company approvals</span><span>On NEAR</span></div></div><span className="rm-platform-intents"><NetworkLogo network="near" size={16}/>NEAR Intents routing</span></div>
+      <div className="rm-platform-bridge" aria-hidden="true"><span/><ArrowRight size={18}/></div>
+      <div className="rm-platform-routes"><span className="rm-platform-label">PAY PEOPLE THEIR WAY</span><div><span className="rm-platform-person"><Users size={19}/></span><span>Your team<small>Payroll</small></span><TokenLogo symbol="USDC" network="base" size={31}/></div><div><span className="rm-platform-person"><Wallet size={19}/></span><span>Contractors<small>Individual preferences</small></span><TokenLogo symbol="ETH" network="eth" size={31}/></div><div><span className="rm-platform-person"><FileText size={19}/></span><span>Suppliers<small>Company payments</small></span><TokenLogo symbol="USDC" network="sol" size={31}/></div></div>
+    </div>
+    <div className="rm-platform-foot"><div><span><ShieldCheck size={16}/>Review</span><i/><span><ArrowRight size={16}/>Route</span><i/><span><CheckCheck size={16}/>Reconcile</span></div><a href="/app?section=payments">One connected workspace<ArrowRight size={16}/></a></div>
+  </div>;
 }

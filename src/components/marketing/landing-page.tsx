@@ -1,20 +1,14 @@
-import { ArrowRight, ArrowUpRight, Check, CircleHelp, Layers3, LockKeyhole, ReceiptText, ShieldCheck, Users } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, CircleHelp, LockKeyhole, ShieldCheck, Users } from "lucide-react";
 import { RazorLogo, RazorMark } from "@/components/brand/razor-logo";
 import { NetworkLogo, TokenLogo } from "@/components/assets/asset-identity";
 import { listPublishedPlans } from "@/server/billing/catalog";
 import { formatUnits } from "@/lib/money";
 import type { BillingPlan } from "@/server/billing/types";
 import { FeeIllustration, LandingHeader, ScrollMotion, VisibilityShowcase } from "./interactive";
-import { ApprovalVisual, PrivacyVisual, ReceiverVisual, TreasuryStory } from "./visuals";
+import { ApprovalVisual, PlatformVisual, PrivacyVisual, ReceiverVisual, TreasuryStory } from "./visuals";
 import "./landing.css";
 
 const start = "/app";
-const capabilities = [
-  { icon:Users, title:"Payroll & company pay", text:"Employees, contractors and suppliers. One place for every payment." },
-  { icon:Layers3, title:"Multi-asset routing", text:"Fund in supported assets. Pay in your recipients' preferred routes." },
-  { icon:ShieldCheck, title:"Approval controls", text:"Set roles, budgets and reviews before money moves." },
-  { icon:ReceiptText, title:"Payment records", text:"Follow funding, delivery and recovery through a clear record." },
-];
 const faqs = [
   ["What does Razor do?", "Razor combines crypto company payments, payroll, invoices and treasury workflows. Recipients manage their own payout profiles, invoices and payment history."],
   ["Can we fund in one asset and pay in another?", "Yes, when assets, networks and liquidity are supported by the live NEAR Intents catalog. Company obligations settle in USDC. Review the exact quote and cost ceiling before approval."],
@@ -46,10 +40,10 @@ function Pricing() {
 }
 
 export function RazorLanding() {
-  return <div className="razor-marketing"><a className="rm-skip-link" href="#main-content">Skip to content</a><div className="rm-marketing-top"><LandingHeader/></div><main id="main-content" tabIndex={-1}><ScrollMotion/><section className="rm-hero"><div className="rm-hero-copy"><h1>Pay your people.<br/>Keep your edge.</h1><p>Manage company money and pay people their way.</p><div className="rm-hero-actions"><a className="rm-button rm-button-white" href={start}>Get started<ArrowUpRight size={17}/></a><a className="rm-button rm-button-glass" href="/demo">View demo<ArrowRight size={17}/></a></div></div><figure className="rm-dashboard-figure"><div className="rm-dashboard-frame"><img src="/marketing/dashboard-preview.png" width="1440" height="1060" alt="Razor company dashboard showing balances, recent payments and quick actions with sample records" fetchPriority="high"/></div><figcaption>Product images and workflow illustrations use example data.</figcaption></figure></section>
+  return <div className="razor-marketing"><a className="rm-skip-link" href="#main-content">Skip to content</a><div className="rm-marketing-top"><LandingHeader/></div><main id="main-content" tabIndex={-1}><ScrollMotion/><section className="rm-hero"><div className="rm-hero-copy"><h1>Pay your people.<br/>Keep your edge.</h1><p>Manage company money and pay people their way.</p><div className="rm-hero-actions"><a className="rm-button rm-button-white" href={start}>Get started<ArrowUpRight size={17}/></a><a className="rm-button rm-button-glass" href="/demo">View demo<ArrowRight size={17}/></a></div></div><figure className="rm-dashboard-figure"><div className="rm-dashboard-frame"><img src="/marketing/dashboard-preview.png" width="1440" height="1060" alt="Razor company dashboard showing balances, payment activity and company records with sample data" fetchPriority="high"/></div><figcaption>Product images and workflow illustrations use example data.</figcaption></figure></section>
     <section className="rm-rails"><div className="rm-container"><p>Networks connected by NEAR Intents.</p><div>{[["near","NEAR"],["eth","Ethereum"],["base","Base"],["sol","Solana"],["arb","Arbitrum"]].map(([network,label])=><span key={network}><NetworkLogo network={network} size={26}/>{label}</span>)}</div></div></section>
     <section className="rm-section rm-about" id="about"><div className="rm-container"><span className="rm-eyebrow">ABOUT RAZOR</span><div className="rm-about-grid"><h2>Money has work to do.<br/><span>Give it a better workspace.</span></h2><div><p>Payroll, supplier payments and treasury records, connected from approval to receipt. Built for companies working in crypto and the people they pay.</p><a className="rm-text-link" href="#platform">Explore the platform<ArrowUpRight size={16}/></a></div></div></div></section>
-    <section className="rm-section rm-capabilities" id="platform"><div className="rm-container"><div className="rm-section-heading"><span className="rm-eyebrow">THE PLATFORM</span><h2>Your payments.<br/>The whole picture.</h2></div><div className="rm-capability-grid">{capabilities.map(item=><article key={item.title}><span className="rm-feature-icon"><item.icon size={24} strokeWidth={1.6}/></span><h3>{item.title}</h3><p>{item.text}</p></article>)}</div></div></section>
+    <section className="rm-section rm-capabilities" id="platform"><div className="rm-container"><div className="rm-section-heading"><span className="rm-eyebrow">THE PLATFORM</span><h2>Your payments.<br/>The whole picture.</h2></div><PlatformVisual/></div></section>
     <section className="rm-section rm-visibility" id="visibility"><div className="rm-container"><div className="rm-section-heading"><span className="rm-eyebrow">PAYMENT VISIBILITY</span><h2>Every payment.<br/>One clear view.</h2></div><VisibilityShowcase/></div></section>
     <section className="rm-section rm-treasury-section"><div className="rm-container"><div className="rm-section-heading"><span className="rm-eyebrow">TREASURY</span><h2>See what is available.<br/>Know what is committed.</h2></div><TreasuryStory/></div></section>
     <section className="rm-section rm-operations"><div className="rm-container"><div className="rm-section-heading"><span className="rm-eyebrow">SMARTER OPERATIONS</span><h2>Less busywork.<br/>More control.</h2></div><div className="rm-operations-grid"><article><span className="rm-feature-icon"><ShieldCheck size={23}/></span><h3>Clear approvals</h3><p>Give each payment the right review before execution.</p><ApprovalVisual/></article><article><span className="rm-feature-icon"><LockKeyhole size={23}/></span><h3>Private document review</h3><p>Optional NEAR AI turns invoices into drafts for your review.</p><PrivacyVisual/></article><article><span className="rm-feature-icon"><Users size={23}/></span><h3>A recipient workspace</h3><p>Profiles, invoices and history, organized around the people you pay.</p><ReceiverVisual/></article></div></div></section>
