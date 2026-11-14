@@ -29,7 +29,7 @@ test("shared artifact publication validates modules and records exact hashes wit
     assert.equal(manifest.optimizer, "optimizer fixture"); assert.equal(manifest.artifacts.length, 3); assert.equal(manifest.architecture,"shared_v1");
     assert.equal(manifest.optimization.rustOptLevel, process.env.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "z");
     assert.equal(manifest.optimization.passes, process.env.WASM_OPT_BUILD_PASSES ?? null);
-    assert.equal(manifest.treasuryStateVersion, 3); assert.equal(manifest.clearingStateVersion, 2);
+    assert.equal(manifest.treasuryStateVersion, 4); assert.equal(manifest.clearingStateVersion, 3);
     for (const [name, bytes] of Object.entries(files)) {
       const item = manifest.artifacts.find((entry: { file: string }) => entry.file === name);
       assert.equal(item.bytes, bytes.length);

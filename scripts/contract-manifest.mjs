@@ -32,7 +32,7 @@ const artifacts = [
 });
 writeFileSync(
   new URL("manifest.json", directory),
-  `${JSON.stringify({ architecture: "shared_v1", treasuryStateVersion: 3, clearingStateVersion: 2, ...(artifacts.some((artifact) => artifact.file === "razor_credit.wasm") ? { creditStateVersion: 1 } : {}), ...(artifacts.some((artifact) => artifact.file === "razor_evidence.wasm") ? { evidenceStateVersion: 1 } : {}), generatedAt: new Date().toISOString(), optimizer: process.env.WASM_OPT_BUILD_VERSION ?? null, optimization: { rustOptLevel: process.env.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "z", passes: process.env.WASM_OPT_BUILD_PASSES ?? null }, artifacts }, null, 2)}\n`,
+  `${JSON.stringify({ architecture: "shared_v1", treasuryStateVersion: 4, clearingStateVersion: 3, ...(artifacts.some((artifact) => artifact.file === "razor_credit.wasm") ? { creditStateVersion: 2 } : {}), ...(artifacts.some((artifact) => artifact.file === "razor_evidence.wasm") ? { evidenceStateVersion: 1 } : {}), generatedAt: new Date().toISOString(), optimizer: process.env.WASM_OPT_BUILD_VERSION ?? null, optimization: { rustOptLevel: process.env.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "z", passes: process.env.WASM_OPT_BUILD_PASSES ?? null }, artifacts }, null, 2)}\n`,
 );
 for (const artifact of artifacts)
   process.stdout.write(

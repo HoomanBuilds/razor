@@ -1,5 +1,7 @@
 mod core;
 mod types;
+#[path = "../../native-reserve.rs"]
+mod native_reserve;
 pub use core::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
 pub use types::*;
 
@@ -160,6 +162,7 @@ pub struct Treasury {
     latest_deposits: LookupMap<String, U64>,
     liabilities: LookupMap<AccountId, u128>,
     refund_claims: LookupMap<String, RefundClaim>,
+    native_customer_unused: u128,
 }
 
 #[near]
@@ -186,6 +189,7 @@ impl Treasury {
             latest_deposits: LookupMap::new(b"J"),
             liabilities: LookupMap::new(b"L"),
             refund_claims: LookupMap::new(b"F"),
+            native_customer_unused: 0,
         }
     }
 
@@ -200,6 +204,15 @@ impl Treasury {
             registration_storage_bytes: U64(REGISTRATION_BYTES),
             minimum_registration_deposit: U128(storage_cost(REGISTRATION_BYTES)),
         }
+    }
+
+    pub fn get_native_reserve(&self) -> native_reserve::NativeReserveView {
+        native_reserve::reserve_view(self.native_customer_unused)
+    }
+
+    #[payable]
+    pub fn withdraw_native_reserve(&mut self, amount: U128) -> Promise {
+        native_reserve::withdraw(&self.owner_id, amount, self.native_customer_unused)
     }
 
     #[payable]
@@ -282,6 +295,7 @@ impl Treasury {
             .get_mut(&company_id)
             .expect("COMPANY_NOT_FOUND");
         company.storage_used = used;
+        self.native_customer_unused = checked_add(self.native_customer_unused, attached - used);
         company.get_config()
     }
 
@@ -309,6 +323,7 @@ impl Treasury {
             .get_mut(&company_id)
             .expect("COMPANY_NOT_FOUND");
         company.storage_credit = checked_add(company.storage_credit, amount);
+        self.native_customer_unused = checked_add(self.native_customer_unused, amount);
         self.get_storage(company_id)
     }
 
@@ -1319,6 +1334,7 @@ impl Treasury {
             .get_mut(company_id)
             .expect("COMPANY_NOT_FOUND");
         company.pool_epoch = self.pool_epoch;
+        let previous_unused = company.storage_credit.saturating_sub(company.storage_used);
         let before = company.liabilities();
         let result = operation(company);
         company.flush();
@@ -1371,6 +1387,10 @@ impl Treasury {
         require!(
             company.storage_used <= company.storage_credit.saturating_sub(reserve),
             "COMPANY_STORAGE_TOPUP_REQUIRED"
+        );
+        self.native_customer_unused = checked_add(
+            self.native_customer_unused.checked_sub(previous_unused).expect("STORAGE_RESERVE_UNDERFLOW"),
+            company.storage_credit.saturating_sub(company.storage_used),
         );
         result
     }

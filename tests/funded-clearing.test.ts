@@ -59,7 +59,7 @@ async function rpc<T>(remote: Remote, action: () => Promise<T>) {
       const args = JSON.parse(Buffer.from(params.args_base64, "base64").toString()); let value: unknown = null;
       if (method === "get_round") value = remote.round;
       else if (method === "get_cash_deposit") value = remote.round?.cash?.deposits.find(deposit => deposit.company_id === args.company_id && deposit.deposit_id === args.deposit_id) ?? null;
-      else if (method === "get_config" && params.account_id === "clearing.testnet") value = { treasury_id: "treasury.testnet", token_contract: "usdc.testnet", paused: false, state_version: 2, cash_network: remote.enabled === false ? null : "testnet", max_cash_deposits_per_company: 8 };
+      else if (method === "get_config" && params.account_id === "clearing.testnet") value = { treasury_id: "treasury.testnet", token_contract: "usdc.testnet", paused: false, state_version: 3, cash_network: remote.enabled === false ? null : "testnet", max_cash_deposits_per_company: 8 };
       else if (method === "get_platform_config") value = { architecture: "shared_v1", token_contract: "usdc.testnet" };
       else if (method === "get_config") { const party = [...companies.values()].find(party => party.company === args.company_id)!; value = { architecture: "shared_v1", company_id: party.company, owner_id: party.owner, token_contract: "usdc.testnet", paused: false, policy_version: "1" }; }
       else if (method === "get_payment" || method === "get_obligation") value = remote.sourceBusy ? { unresolved: true } : null;

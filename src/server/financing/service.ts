@@ -179,7 +179,7 @@ async function configured(scope: Scope, accepted = false) {
     minimum_registration_deposit: string;
   }>(anchor, "get_config");
   if (
-    config.version !== 1 ||
+    config.version !== 2 ||
     config.network !== scope.network ||
     config.token_contract !== scope.token_contract ||
     config.treasury_id !== scope.treasury_id ||

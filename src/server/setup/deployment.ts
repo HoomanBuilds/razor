@@ -128,13 +128,13 @@ export function prepareDeployment(input: DeploymentInput) {
     throw new Error(
       "Rebuild shared treasury contracts to generate their shared_v1 artifact manifest",
     );
-  if (manifest.treasuryStateVersion !== 3)
+  if (manifest.treasuryStateVersion !== 4)
     throw new Error(
-      "Rebuild the treasury state-version-3 artifact manifest. Claimable pools and standing mandates require fresh deployment accounts; no populated-state migration is supported",
+      "Rebuild the treasury state-version-4 artifact manifest. Claimable pools and standing mandates require fresh deployment accounts; no populated-state migration is supported",
     );
-  if (input.clearingAccount && manifest.clearingStateVersion !== 2)
+  if (input.clearingAccount && manifest.clearingStateVersion !== 3)
     throw new Error(
-      "Rebuild the clearing state-version-2 artifact manifest. Funded clearing requires a fresh empty clearing account; no populated-state migration is supported",
+      "Rebuild the clearing state-version-3 artifact manifest. Funded clearing requires a fresh empty clearing account; no populated-state migration is supported",
     );
   const treasury = artifact(
     directory,
@@ -158,9 +158,9 @@ export function prepareDeployment(input: DeploymentInput) {
         manifest.artifacts,
       )
     : null;
-  if (input.creditAccount && manifest.creditStateVersion !== 1)
+  if (input.creditAccount && manifest.creditStateVersion !== 2)
     throw new Error(
-      "Build the optional credit state-version-1 artifact with --with-credit before planning its fresh deployment",
+      "Build the optional credit state-version-2 artifact with --with-credit before planning its fresh deployment",
     );
   const credit = input.creditAccount
     ? artifact(
@@ -258,8 +258,8 @@ export function prepareDeployment(input: DeploymentInput) {
   return {
     mode: "unsigned_deployment_plan" as const,
     architecture: "shared_v1" as const,
-    treasuryStateVersion: 3,
-    ...(clearing ? { clearingStateVersion: 2 } : {}),
+    treasuryStateVersion: 4,
+    ...(clearing ? { clearingStateVersion: 3 } : {}),
     freshAccountsOnly: true,
     populatedStateMigrationSupported: false,
     network: input.network,
@@ -269,7 +269,7 @@ export function prepareDeployment(input: DeploymentInput) {
     accountsVerified: false,
     requirements: [
       "Create and fund fresh deployment accounts with owner-controlled signing access.",
-      "Verify each target has no contract code or application state. Treasury state version 3 adds distribution and cancellation collections and is incompatible with populated version-1 or version-2 company state. This plan does not migrate existing contracts.",
+      "Verify each target has no contract code or application state. Treasury state version 4 protects prepaid customer native storage during operator reserve recovery and is incompatible with populated earlier company state. This plan does not migrate existing contracts.",
       "Review storage stake and gas costs with the CLI before signing. Code is deployed once; each company later funds only its shared-state allowance and transaction gas.",
       "Deploy and initialize each contract atomically, then run the remote setup check before registering companies.",
     ],
@@ -372,6 +372,18 @@ export function prepareDeployment(input: DeploymentInput) {
               "Keep the original withdrawal pending. No timeout or owner assertion restores it.",
           }
         : null,
+    nativeReserveRecovery: deployments.map((step) => ({
+      accountId: step.accountId,
+      operatingTopupsMayBeNeeded: step.accountId !== input.evidenceAccount,
+      excessWithdrawalSupported: step.accountId !== input.evidenceAccount,
+      receiverId: step.accountId === input.evidenceAccount ? null : input.ownerAccount,
+      quoteMethod: step.accountId === input.evidenceAccount ? null : "get_native_reserve",
+      withdrawalMethod: step.accountId === input.evidenceAccount ? null : "withdraw_native_reserve",
+      authorizationDepositYocto: "1",
+      note: step.accountId === input.evidenceAccount
+        ? "Evidence needs no operating topups. Recorder accounts pay gas. Keep spare funds in the owner wallet; code collateral stays locked after key retirement."
+        : "Only the stored owner may recover positive quoted native excess, only to itself. Current storage backing and prepaid customer storage allocations cannot be withdrawn. Native transfer failure refunds return to the contract; refresh the final balance instead of resetting a ledger.",
+    })),
     keyRetirement: deployments.map((step) => ({
       accountId: step.accountId,
       required: true,
