@@ -386,7 +386,9 @@ export function prepareDeployment(input: DeploymentInput) {
         expected_keys: [],
       },
       consequence:
-        "Removing every access key makes this deployed code immutable. Contract owner roles remain available through their separate owner accounts; code upgrades and account deletion are unavailable.",
+        step.accountId === input.evidenceAccount
+          ? "Removing every access key makes this stateless evidence code immutable. There are no contract owner roles or stored funds; code upgrades and account deletion are unavailable."
+          : "Removing every access key makes this deployed code immutable. Contract owner roles remain available through their separate owner accounts; code upgrades and account deletion are unavailable.",
     })),
     environment: {
       NEAR_NETWORK: input.network,
