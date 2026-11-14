@@ -20,7 +20,7 @@ function owner(access: AccessContext) {
   if (organization.paused) throw new ApiError(409, "Unpause the company before new clearing authorizations", "PAYMENTS_PAUSED");
 }
 
-function registration(id: string): Registration {
+export function registration(id: string): Registration {
   const value = row<Registration>("SELECT * FROM clearing_companies WHERE organization_id=? AND enabled=1", id);
   if (!value || row<{ owner_id: string }>("SELECT owner_id FROM organizations WHERE id=?", id)?.owner_id !== value.owner_user_id) throw new ApiError(409, "Every participant must opt in through its current company and treasury owner", "CLEARING_PARTICIPATION_REQUIRED");
   const treasury = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", id);
@@ -128,7 +128,7 @@ function sharedWith(link: Link, organizationId: string) {
 }
 
 export interface PreviewInput { linkIds: string[]; startsAt: string; expiresAt: string }
-export function previewRound(access: AccessContext, input: PreviewInput) {
+export function previewRoundSelection(access: AccessContext, input: PreviewInput, cash = false) {
   owner(access);
   if (input.linkIds.length < 2 || input.linkIds.length > 32 || new Set(input.linkIds).size !== input.linkIds.length) throw new ApiError(422, "Choose 2 to 32 different accepted invoice agreements", "CLEARING_SELECTION_INVALID");
   const links = [...input.linkIds].sort().map(id => {
@@ -144,12 +144,13 @@ export function previewRound(access: AccessContext, input: PreviewInput) {
   const parties = companyIds.map(id => registration(id));
   if (parties.some(value => value.network !== parties[0].network || value.token_contract !== parties[0].token_contract)) throw new ApiError(409, "Round participants use incompatible settlement rails", "CLEARING_ASSET_MISMATCH");
   const calculation = computeClearing(links.map(link => ({ id: link.payment_id, debtor: link.debtor_id, creditor: link.creditor_id, amount: JSON.parse(decrypt(link.terms_ciphertext)).amount })));
-  if (calculation.dischargedInvoiceValue === "0") throw new ApiError(422, "These obligations have no reciprocal or multi-company cycle to clear", "CLEARING_NO_CYCLE");
+  if (!cash && calculation.dischargedInvoiceValue === "0") throw new ApiError(422, "These obligations have no reciprocal or multi-company cycle to clear", "CLEARING_NO_CYCLE");
   const participants = parties.map(value => ({ company_id: value.organization_id, treasury_id: value.treasury_id, treasury_company_id:value.treasury_company_id, owner_id: value.owner_account_id, version: String(value.version), policy_version: value.policy_version }));
   const obligations = calculation.obligations.map(edge => ({ ...edge, terms_hash: links.find(link => link.payment_id === edge.id)!.terms_hash }));
   const reviewed = { asset: "USDC" as const, fee: "0", starts_at_ms: String(start), expires_at_ms: String(end), participants, obligations };
   return { ...calculation, reviewed, reviewToken: hash(reviewed), linkIds: links.map(link => link.id), network: parties[0].network, warning: "NEAR consent publishes opaque obligation IDs, treasury accounts and USDC amounts. Private invoice documents and descriptions remain offchain." };
 }
+export function previewRound(access: AccessContext, input: PreviewInput) { return previewRoundSelection(access, input); }
 
 export function createRound(access: AccessContext, input: PreviewInput & { reviewToken: string }) {
   assertFeature(access, "clearing");
@@ -168,10 +169,10 @@ export function createRound(access: AccessContext, input: PreviewInput & { revie
 function ownRoundLink(id: string) { return row<Link>("SELECT * FROM clearing_links WHERE id=?", id)!; }
 function roundFor(access: AccessContext, id: string): Round {
   requirePermission(access, "payments:read");
-  const value = row<Round>("SELECT r.* FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id WHERE r.id=? AND p.organization_id=?", id, access.organizationId);
+  const value = row<Round>("SELECT r.* FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id WHERE r.id=? AND p.organization_id=? AND r.mode='debt_discharge_v1'", id, access.organizationId);
   if (!value) throw new ApiError(404, "Clearing round not found for this company", "NOT_FOUND"); return value;
 }
-function assertRoundTerms(round: Round, at = Date.now()) {
+export function assertRoundTerms(round: Round, at = Date.now()) {
   const manifest = JSON.parse(round.manifest_json) as Manifest;
   if (hash(round.manifest_json) !== round.manifest_hash) throw new ApiError(409, "The local round commitment is inconsistent", "CLEARING_REVIEW_STALE");
   const links = rows<Link>("SELECT l.* FROM clearing_links l JOIN clearing_round_links rl ON rl.link_id=l.id WHERE rl.round_id=? ORDER BY l.payment_id", round.id);
@@ -182,7 +183,7 @@ function assertRoundTerms(round: Round, at = Date.now()) {
     if (!edge || edge.terms_hash !== link.terms_hash || edge.debtor !== link.debtor_id || edge.creditor !== link.creditor_id || edge.original !== JSON.parse(decrypt(link.terms_ciphertext)).amount) throw new ApiError(409, "An accepted obligation differs from the NEAR commitment", "CLEARING_REVIEW_STALE");
   }
   for (const party of manifest.participants) { const current = registration(party.company_id); if (current.treasury_id !== party.treasury_id || current.treasury_company_id !== party.treasury_company_id || current.owner_account_id !== party.owner_id || String(current.version) !== party.version || current.policy_version !== party.policy_version) throw new ApiError(409, "Participant authority changed after proposal", "CLEARING_REVIEW_STALE"); }
-  try { if (describeCommittedClearing(manifest.obligations).dischargedInvoiceValue === "0") throw new Error("The committed clearing has no debt discharge"); }
+  try { if (describeCommittedClearing(manifest.obligations).dischargedInvoiceValue === "0" && !manifest.cash) throw new Error("The committed clearing has no debt discharge"); }
   catch { throw new ApiError(409, "The round no longer matches its exact conservation calculation", "CLEARING_REVIEW_STALE"); }
   return { manifest, links };
 }
@@ -285,7 +286,7 @@ export function overview(access: AccessContext) {
     const terms = JSON.parse(decrypt(terms_ciphertext));
     return { ...link, terms: link.debtor_id === access.organizationId || link.creditor_id === access.organizationId ? terms : { amount: terms.amount }, shares: rows<{ organization_id: string; debtor_consent: number; creditor_consent: number }>("SELECT organization_id,debtor_consent,creditor_consent FROM clearing_link_shares WHERE link_id=?", link.id) };
   });
-  const rounds = rows<{ id: string }>("SELECT r.id FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id WHERE p.organization_id=? ORDER BY r.created_at DESC", access.organizationId).map(value => roundDetail(access, value.id));
+  const rounds = rows<{ id: string }>("SELECT r.id FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id WHERE p.organization_id=? AND r.mode='debt_discharge_v1' ORDER BY r.created_at DESC", access.organizationId).map(value => roundDetail(access, value.id));
   const bills = rows<{ id: string; reference: string }>("SELECT id,reference FROM bills WHERE organization_id=? ORDER BY created_at DESC", access.organizationId).map(bill => { try { return { id: bill.id, reference: bill.reference, eligible: true, amount: eligibleTerms(access.organizationId, bill.id).amount, reason: null }; } catch (error) { return { id: bill.id, reference: bill.reference, eligible: false, amount: null, reason: error instanceof Error ? error.message : "Not eligible" }; } });
   return { registration: row<Registration>("SELECT * FROM clearing_companies WHERE organization_id=?", access.organizationId) ?? null, setup: readiness(), links, rounds, bills, companyId: access.organizationId, owner: row<{ owner_id: string }>("SELECT owner_id FROM organizations WHERE id=?", access.organizationId)?.owner_id === access.userId };
 }
