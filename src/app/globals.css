@@ -54,7 +54,7 @@
 * { box-sizing: border-box; }
 *, ::before, ::after { border-color: var(--border); }
 body { margin: 0; background: var(--background); color: var(--foreground); font-family: "Geist", Arial, Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
-button, input, select, textarea { font: inherit; }
+button, input, select, textarea { font-family: inherit; }
 button { cursor: pointer; }
 a { color: inherit; }
 
@@ -157,3 +157,5 @@ button:disabled { cursor: not-allowed; }
 
 @media (max-width: 767px) { .dashboard-meter-caption { display: grid; align-content: end; min-height: 34px; gap: 4px; line-height: 1.35; } .dashboard-meter-caption > span { white-space: nowrap; } }
 .dashboard-recent-card .workspace-table tbody td { padding-top: 14px; padding-bottom: 14px; }
+
+@media (max-width: 767px) { .workspace-surface input:not([type="checkbox"]):not([type="radio"]), .workspace-surface select, .workspace-surface textarea, .razor-onboarding input, .razor-onboarding select, .razor-native-picker { font-size: 16px; } }

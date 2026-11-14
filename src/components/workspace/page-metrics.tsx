@@ -16,7 +16,8 @@ export function focusWorkspaceForm(id: string) {
     }
     form.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     const control = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)')).find(input => input.getClientRects().length > 0 && !input.closest('[hidden], [aria-hidden="true"]'));
-    control?.focus({ preventScroll: true });
+    const target = control ?? Array.from(form.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")).find(button => button.getClientRects().length > 0 && !button.closest('[hidden], [aria-hidden="true"]'));
+    target?.focus({ preventScroll: true });
   };
   focus();
 }

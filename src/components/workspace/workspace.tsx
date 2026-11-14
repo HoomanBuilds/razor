@@ -40,10 +40,11 @@ import { InvoiceInbox } from "./invoice-inbox";
 import { useAction, useResource } from "./hooks";
 import { Action, control, Field, Panel } from "./shared";
 import { Overview } from "./overview";
-import { RazorMark } from "@/components/brand/razor-logo";
+import { TimezonePicker } from "./timezone-picker";
+import { RazorLogo, RazorMark } from "@/components/brand/razor-logo";
 import { focusWorkspaceForm } from "./page-metrics";
 import { FinanceInsightsPanel } from "./finance-insights";
-import { NetworkLogo } from "@/components/assets/asset-identity";
+import { NetworkLogo, TokenLogo } from "@/components/assets/asset-identity";
 import { WorkspaceTabs } from "./workspace-tabs";
 import { Bills, Payroll } from "./business";
 import { BusinessClearing } from "./business-clearing";
@@ -525,67 +526,20 @@ function CreateCompany({
   onCancel?: () => void;
 }) {
   const { busy, error, run } = useAction();
-  return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-5 py-12">
-      <p className="mb-8 text-3xl font-black text-primary">Razor</p>
-      <Panel
-        title="Create your company"
-        description="Start with payees, invoices and payroll. Connect your NEAR treasury when you are ready to fund payments."
-      >
-        <form
-          className="grid gap-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const values = new FormData(event.currentTarget);
-            void run("company", async () => {
-              const result = await api<{ organization: Organization }>(
-                "/organizations",
-                { name: values.get("name"), timezone: values.get("timezone") },
-              );
-              await onCreated(result.organization.id);
-            });
-          }}
-        >
-          <a href="/receive" className="text-sm text-primary">
-            Receiving payments? Open your personal workspace
-          </a>
-          <Field label="Company name">
-            <input
-              name="name"
-              className={control}
-              autoFocus
-              required
-              maxLength={120}
-            />
-          </Field>
-          <Field label="Company time zone">
-            <input
-              name="timezone"
-              className={control}
-              required
-              defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone}
-            />
-          </Field>
-          <div className="rounded-lg bg-muted p-3 text-sm">
-            Company amounts are recorded in <strong>USDC</strong>. Fund with any supported asset and choose supported payout assets for each payee.
-          </div>
-          <Action busy={busy === "company"}>Create workspace</Action>
-          {onCancel && (
-            <button
-              type="button"
-              className="text-sm text-primary"
-              onClick={onCancel}
-            >
-              Back to company
-            </button>
-          )}
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </form>
-      </Panel>
-    </main>
-  );
+  return <main className="razor-onboarding flex min-h-screen items-center justify-center bg-white px-5 py-10 sm:px-8">
+    <section className="w-full max-w-4xl" aria-labelledby="create-company-title">
+      <div className="mb-8 flex items-center justify-between gap-4"><a href="/" aria-label="Razor home"><RazorLogo size={30}/></a>{onCancel && <button type="button" disabled={!!busy} className="rounded-full bg-muted px-4 py-2 text-xs text-muted-foreground hover:bg-secondary" onClick={onCancel}>Back to workspace</button>}</div>
+      <div className="grid overflow-hidden rounded-[28px] border border-border bg-muted/50 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.15fr)]">
+        <div className="flex min-w-0 flex-col p-7 sm:p-9"><p className="text-xs font-medium text-primary">Your company workspace</p><h1 id="create-company-title" className="mt-4 max-w-xs text-[32px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">Create your company</h1><p className="mt-4 max-w-xs text-sm leading-6 text-muted-foreground">A workspace for your team, invoices and payments.</p><div className="mt-8 hidden items-start gap-3 rounded-2xl bg-white p-4 text-xs leading-5 lg:flex"><Wallet size={17} className="mt-0.5 shrink-0 text-primary"/><span>Start with payees and payment drafts. Connect your treasury when you're ready to add funds.</span></div><p className="mt-5 hidden text-xs leading-5 text-muted-foreground lg:mt-auto lg:block lg:pt-8">Just receiving payments? <a href="/receive" className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
+        <div className="border-t border-border bg-white p-7 sm:p-9 lg:border-l lg:border-t-0"><h2 className="hidden text-xl font-medium tracking-tight lg:block">Company details</h2><form className="grid gap-5 lg:mt-6" onSubmit={event => {
+          event.preventDefault();
+          const values = new FormData(event.currentTarget);
+          void run("company", async () => {
+            const result = await api<{ organization: Organization }>("/organizations", { name: values.get("name"), timezone: values.get("timezone") });
+            await onCreated(result.organization.id);
+          });
+        }}><Field label="Company name"><input name="name" className={control} autoFocus autoComplete="organization" required maxLength={120} placeholder="Your company or team" disabled={!!busy}/></Field><Field label="Time zone" hint="Used for payroll dates and payment schedules."><TimezonePicker disabled={!!busy}/></Field><div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2.5 text-xs text-muted-foreground"><TokenLogo symbol="USDC" size={18}/><span>Amounts are recorded in USDC. Fund with supported assets.</span></div>{error && <p role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}<Action busy={busy === "company"} disabled={!!busy} className="min-h-12 w-full">Create company workspace<ArrowUpRight size={16}/></Action></form><p className="mt-5 text-xs text-muted-foreground lg:hidden">Just receiving payments? <a href="/receive" className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
+      </div>
+    </section>
+  </main>;
 }
