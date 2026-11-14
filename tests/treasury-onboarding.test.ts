@@ -22,13 +22,17 @@ getDb().prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_a
 getDb().prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES(?,?,'near',?,'mainnet',?)").run("owner-wallet", access.userId, terms.ownerAccount, savedAt);
 
 const registered = new Map<string, { owner_id: string }>();
-function mockRpc(wrongCode = false) {
+function mockRpc(wrongCode = false, upgradeKeys: () => string[] = () => []) {
   const original = globalThis.fetch;
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(init!.body as string), params = request.params;
     let result: unknown;
     if (request.method === "status") result = { chain_id: "mainnet" };
-    else if (params.request_type === "view_account") result = { code_hash: wrongCode ? base58.encode(new Uint8Array(32).fill(3)) : treasuryHash };
+    else if (params.request_type === "view_account") result = { code_hash: wrongCode ? base58.encode(new Uint8Array(32).fill(3)) : treasuryHash, block_hash: base58.encode(new Uint8Array(32).fill(7)), block_height: 1234 };
+    else if (params.request_type === "view_access_key_list") {
+      assert.equal(params.block_id, base58.encode(new Uint8Array(32).fill(7)));
+      result = { keys: upgradeKeys().map(public_key => ({ public_key, access_key: { nonce: 0, permission: "FullAccess" } })), block_hash: params.block_id, block_height: 1234 };
+    }
     else {
       const args = JSON.parse(Buffer.from(params.args_base64, "base64").toString());
       const config = { architecture: "shared_v1", owner_id: terms.ownerAccount, token_contract: NATIVE_USDC.near, paused: false, per_payment_limit: terms.perPaymentLimit, daily_limit: terms.dailyLimit };
@@ -116,7 +120,8 @@ test("legacy isolated rows cannot silently become shared treasuries", async () =
 test("registration reviews configured upgrade authority and invalidates quotes when the policy changes", async () => {
   const originalMode = process.env.NEAR_CONTRACT_UPGRADE_POLICY;
   const originalKeys = process.env.NEAR_CONTRACT_UPGRADE_KEYS;
-  const restore = mockRpc();
+  let actualUpgradeKeys: string[] = [];
+  const restore = mockRpc(false, () => actualUpgradeKeys);
   const reviewAccess = { ...access, organizationId: "upgrade-review-company" };
   getDb().prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(reviewAccess.organizationId, "Upgrade review", access.userId, savedAt, savedAt);
   try {
@@ -127,6 +132,7 @@ test("registration reviews configured upgrade authority and invalidates quotes w
     process.env.NEAR_CONTRACT_UPGRADE_POLICY = "owner_controlled";
     const publicKey = `ed25519:${base58.encode(new Uint8Array(32).fill(9))}`;
     process.env.NEAR_CONTRACT_UPGRADE_KEYS = JSON.stringify({ "shared.near": [publicKey] });
+    actualUpgradeKeys = [publicKey];
     const configured = await getOnboardingConfig(reviewAccess);
     assert.equal(configured.ready, true);
     assert.equal(configured.upgradePolicy?.mode, "owner_controlled");
@@ -137,9 +143,15 @@ test("registration reviews configured upgrade authority and invalidates quotes w
     assert.deepEqual(controlled.quote.upgradePolicy.publicKeys, [publicKey]);
     assert.notEqual(controlled.quote.hash, immutable.quote.hash);
     await assert.rejects(() => prepareTreasury(reviewAccess, terms, immutable.quote.hash), (error: ApiError) => error.code === "CREATION_QUOTE_CHANGED");
-    process.env.NEAR_CONTRACT_UPGRADE_KEYS = JSON.stringify({ "shared.near": [`ed25519:${base58.encode(new Uint8Array(32).fill(10))}`] });
+    const replacementKey = `ed25519:${base58.encode(new Uint8Array(32).fill(10))}`;
+    process.env.NEAR_CONTRACT_UPGRADE_KEYS = JSON.stringify({ "shared.near": [replacementKey] });
+    actualUpgradeKeys = [replacementKey];
     await assert.rejects(() => prepareTreasury(reviewAccess, terms, controlled.quote.hash), (error: ApiError) => error.code === "CREATION_QUOTE_CHANGED");
     assert.equal(getTreasury(access).upgradePolicy?.mode, "owner_controlled");
+    actualUpgradeKeys = [];
+    await assert.rejects(() => quoteTreasury(reviewAccess, terms), (error: ApiError) => error.code === "UPGRADE_KEYS_MISMATCH");
+    process.env.NEAR_CONTRACT_UPGRADE_POLICY = "unrecognized";
+    await assert.rejects(() => quoteTreasury(reviewAccess, terms), (error: ApiError) => error.code === "UPGRADE_POLICY_INVALID");
   } finally {
     if (originalMode === undefined) delete process.env.NEAR_CONTRACT_UPGRADE_POLICY;
     else process.env.NEAR_CONTRACT_UPGRADE_POLICY = originalMode;

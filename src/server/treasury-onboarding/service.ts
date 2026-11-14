@@ -4,7 +4,7 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { row, rows } from "../db";
 import { configureTreasury } from "../payments/service";
 import { NATIVE_USDC } from "../payments/policy";
-import { deriveSharedCompanyId, isCompanyBinding, validNearAccount } from "../payments/near";
+import { contractCodeHash, deriveSharedCompanyId, isCompanyBinding, validNearAccount } from "../payments/near";
 import { atomic } from "../../lib/money";
 import { reviewedArtifactHash } from "../near-artifacts";
 import type { WalletTransaction } from "../payments/types";
@@ -49,6 +49,10 @@ async function verifiedPlatform() {
   const [status, account, response] = await Promise.all([rpc<{ chain_id: string }>(config, "status", []), rpc<{ code_hash: string }>(config, "query", { request_type: "view_account", finality: "final", account_id: config.treasuryId }), view(config, "get_platform_config")]);
   if (status.chain_id !== config.network) throw new ApiError(503, "The configured NEAR RPC uses a different network", "TREASURY_NETWORK_MISMATCH");
   if (account.code_hash !== config.treasuryCodeHash) throw new ApiError(503, "The deployed treasury code differs from the reviewed artifact", "TREASURY_CODE_MISMATCH");
+  if (process.env.NEAR_CONTRACT_UPGRADE_POLICY && process.env.NEAR_CONTRACT_UPGRADE_POLICY !== "immutable") {
+    const checkedHash = await contractCodeHash({ near_account_id: config.treasuryId, network: config.network });
+    if (checkedHash !== config.treasuryCodeHash) throw new ApiError(503, "The deployed treasury code differs from the reviewed artifact", "TREASURY_CODE_MISMATCH");
+  }
   const parsed = Platform.safeParse(response);
   if (!parsed.success) throw new ApiError(502, "The contract does not expose the reviewed shared treasury architecture", "TREASURY_RESPONSE_INVALID");
   if (config.network === "mainnet" && parsed.data.token_contract !== NATIVE_USDC.near) throw new ApiError(503, "Mainnet registration requires verified native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
