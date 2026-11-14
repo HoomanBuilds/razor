@@ -207,6 +207,5 @@ docs/               Product specifications, checklists and deployment records
 - [Private inference and verification](docs/specs/private-inference.md)
 - [Security review](docs/security-review.md) and [dependency review](docs/specs/dependency-security.md)
 - [Mainnet deployment](docs/deployments/mainnet-2026-11-14.md) and [hosting operations](docs/deployments/aws-2026-11-15.md)
-- [Third-party source acknowledgments](THIRD_PARTY_NOTICES.md)
 
 Private document processing does not make public-chain transfers private. Cross-chain delivery records distinguish provider observations, authorized attestations and independent chain evidence; an authorized report is not a cryptographic proof of external-chain delivery. The technical guides describe these trust boundaries in detail.
