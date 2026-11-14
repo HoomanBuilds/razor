@@ -98,7 +98,7 @@ export const story = {
       ],
     },
     {
-      id: '07-controls-privacy', type: 'shot', chapter: 5, seconds: 24,
+      id: '07-controls-privacy', type: 'shot', chapter: 5, seconds: 24, captionPosition: 'top',
       title: 'Keep control.', accent: 'Protect the details.',
       description: 'Reconciliation first. Private AI when you need it.', overview: 2,
       narration: 'Safety stays inside the workflow. An unknown payment is held for reconciliation, so a retry cannot silently become a second payout. Sensitive invoice processing can use optional NEAR AI Cloud. Your team still reviews the invoice and approves payment; private AI is not required to use Razor.',

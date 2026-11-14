@@ -25,7 +25,7 @@ node scripts/demo-film/capture.mjs --port 9225 --only 08-comparison
 
 Record the full sequence in order after resetting. The funding and payroll cuts intentionally change only the sandbox state, and receiver cuts depend on that local settlement. Re-recording a dependent cut requires preparing its preceding state. Profile switching applies the sandbox cookie to Chromium and checks the resulting authenticated local identity. All non-loopback browser requests are blocked during capture.
 
-Each cut records actual browser frames and timed UI actions. It retains the original frame timestamps, source MP4, before/after visible text and action times. Native UI changes are not replaced with counterfeit screenshots. Browser chrome is excluded. The recording query enables the sandbox's cleaner recording presentation without repeated environment badges. Capture never clicks an external wallet or blockchain explorer. Preserve the fictional-data provenance in this source kit and never describe this footage as verified mainnet settlement.
+Each cut records actual browser frames and timed UI actions. A capture-only arrow follows the actual mouse events, stays above dialogs and menus, and pulses on clicks. Read-only `point` actions guide attention without clicking. The pointer is excluded from chapter cards. Capture rejects a missing or interactive pointer overlay. It retains the original frame timestamps, source MP4, before/after visible text and action times. Native UI changes are not replaced with counterfeit screenshots. Browser chrome is excluded. The recording query enables the sandbox's cleaner recording presentation without repeated environment badges. Capture never clicks an external wallet or blockchain explorer. Preserve the fictional-data provenance in this source kit and never describe this footage as verified mainnet settlement.
 
 The browser port must be unused. The script launches and closes its own isolated Chromium profile and never attaches to a person's browser. FFmpeg uses two encoding threads. Run one capture or render process at a time and do not start an application production build concurrently.
 
@@ -45,3 +45,5 @@ Caption timing and formatting can be checked without rendering:
 ```sh
 node --test scripts/demo-film/captions.test.mjs
 ```
+
+The cursor-and-caption revision is stored separately in `.data/demo-film/v2-cursor-captions/`. Set `RAZOR_FILM_OUTPUT` to that directory's absolute path to rebuild this edition from its new captures. Its unchanged audio and chapter cards reference the retained originals.

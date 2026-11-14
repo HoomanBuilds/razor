@@ -67,6 +67,7 @@ try {
     const snapshot = () => browser.evaluate('({title:document.title,text:document.body.innerText,scrollWidth:document.documentElement.scrollWidth,width:innerWidth,brokenImages:[...document.images].filter(image=>image.complete&&!image.naturalWidth).length,pointer:window.__razorFilmPointer?.state()})');
     await movePointer(browser, segment.pointerStart ?? {x: 1120, y: 760}, 0);
     const before = await snapshot();
+    if (!before.pointer?.visible || before.pointer.pointerEvents !== 'none') throw new Error(`Recording pointer is unavailable: ${segment.id}`);
     const frameDirectory = resolve(directory('capture'), segment.id);
     mkdirSync(frameDirectory, {recursive: true});
     const frames = [];
@@ -94,6 +95,7 @@ try {
     await browser.call('Page.stopScreencast');
     removeFrame(); removeException();
     const after = await snapshot();
+    if (!after.pointer?.visible || after.pointer.pointerEvents !== 'none') throw new Error(`Recording pointer disappeared: ${segment.id}`);
     if (!frames.length) throw new Error(`No screencast frames: ${segment.id}`);
     const duration = Math.max(captureSeconds, (performance.now() - started) / 1000);
     const startTimestamp = frames[0].timestamp;

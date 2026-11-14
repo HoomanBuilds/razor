@@ -12,7 +12,7 @@ Story: Fund the company, approve its obligations, pay people and suppliers their
 
 Create a cut-based product walkthrough, targeting 3 minutes 40 seconds and never exceeding 4 minutes. Use the actual local Razor interface, populated fictional records and deterministic simulated transfers. Capture each section separately so timing, actions and narration can be revised without repeating the entire walkthrough.
 
-Use Sarah narration only, with short chapter introductions followed by readable interface actions. Keep the white, navy and electric-blue Razor theme. No subtitles or music are required. Capture at 1920 by 1080, 30 frames per second, with browser chrome and personal data excluded. Avoid accelerating a payment review until its numbers become unreadable.
+Use Sarah narration only, with short chapter introductions followed by readable interface actions. Keep the white, navy and electric-blue Razor theme. Include synchronized phrase captions with at most two lines. No music is required. Capture at 1920 by 1080, 30 frames per second, with browser chrome and personal data excluded. Avoid accelerating a payment review until its numbers become unreadable. Capture a visible arrow cursor with smooth movement and restrained click feedback, including inside drawers and menus. Captions must follow the final narration timing, including inserted pauses, and stay clear of the controls being demonstrated.
 
 Record the ordinary product interface without demo badges or a spoken simulation disclaimer. Keep the fictional dataset and simulation boundaries documented in the source kit and operator controls. Narration describes the product workflow; it must not claim these local transfers were verified mainnet settlements. Do not fabricate explorer receipts, signatures, hardware attestations or customer testimonials. Actual contract deployment is separate from this recording's financial outcomes.
 
@@ -92,6 +92,8 @@ Show the local outcomes with the real UI, not a counterfeit blockchain explorer 
 Deliver the script, resettable localhost environment, separate cut files, Sarah audio per cut, and one assembled MP4 only after the footage and narration are reviewed. Preserve source footage and render metadata. Verify final duration, dimensions, frame rate, audio and transitions with focused checks; no broad application rebuild or full test run is needed for recording-only tooling.
 
 ## Recorded edition
+
+The revised edition is `razor-company-demo-v2-sarah.mp4` in `.data/demo-film/v2-cursor-captions/`. It retains the 226.67-second narration and adds a visible mouse pointer, click feedback and 66 synchronized caption cues. Matching SRT and ASS files are included. Captions move to the top for the controls and private-invoice cut to keep its lower action visible. The original edition remains preserved.
 
 The first company walkthrough is `razor-company-demo-v1-sarah.mp4`, 226.67 seconds at 1920 by 1080 and 30 fps, with Sarah narration. Generated media stays outside Git in `.data/demo-film/`. The source kit is in `scripts/demo-film/`; the recording workspace is in `scripts/demo/`.
 
