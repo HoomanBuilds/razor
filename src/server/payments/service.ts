@@ -78,8 +78,15 @@ export function listLedger(access: AccessContext) {
 function balance(organizationId: string) {
   const current = row<{ balance: string; reserved: string; onchain_reserved: string; updated_at: string }>("SELECT balance,reserved,onchain_reserved,updated_at FROM treasury_balances WHERE organization_id = ?", organizationId) ?? { balance: "0", reserved: "0", onchain_reserved: "0", updated_at: "" };
   const knownChainReserved = rows<{ chain_reserved: string }>("SELECT chain_reserved FROM payments WHERE organization_id=?", organizationId).reduce((sum, payment) => sum + BigInt(payment.chain_reserved), 0n);
+  const distributions = rows<{ local_reserved: string; chain_reserved: string; pending_amount: string }>("SELECT local_reserved,chain_reserved,pending_amount FROM claim_distributions WHERE organization_id=?", organizationId);
+  const distributionLocalReserved = distributions.reduce((total, value) => total + BigInt(value.local_reserved), 0n);
+  const distributionChainReserved = distributions.reduce((total, value) => total + BigInt(value.chain_reserved), 0n);
+  const distributionPending = distributions.reduce((total, value) => total + BigInt(value.pending_amount), 0n);
   const externalReserved = BigInt(current.onchain_reserved) - knownChainReserved;
-  return { ...current, effectiveReserved: (BigInt(current.reserved) + (externalReserved > 0n ? externalReserved : 0n)).toString() };
+  const otherChainReserved = externalReserved > distributionChainReserved ? externalReserved - distributionChainReserved : 0n;
+  const paymentReserved = BigInt(current.reserved) + otherChainReserved;
+  const distributionReserved = distributionLocalReserved + distributionChainReserved;
+  return { ...current, paymentReserved: paymentReserved.toString(), distributionLocalReserved: distributionLocalReserved.toString(), distributionChainReserved: distributionChainReserved.toString(), distributionReserved: distributionReserved.toString(), distributionPending: distributionPending.toString(), effectiveReserved: (paymentReserved + distributionReserved).toString() };
 }
 
 function ledger(organizationId: string, reference: string, entryType: string, amount: string, nextBalance: string, nextReserved: string, metadata: unknown = {}) {
@@ -95,7 +102,7 @@ export function getTreasury(access: AccessContext) {
   const linked = linkedFundingTotals(access.organizationId);
   const totalReserved = BigInt(current.effectiveReserved) + BigInt(clients.clientReserved) + BigInt(linked.linkedFundingReserved);
   const available = BigInt(current.balance) - totalReserved;
-  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.effectiveReserved, ...clients, ...linked,
+  return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.paymentReserved, distributionLocalReserved: current.distributionLocalReserved, distributionChainReserved: current.distributionChainReserved, distributionReserved: current.distributionReserved, distributionPending: current.distributionPending, ...clients, ...linked,
     totalReserved: totalReserved.toString(), reserveDeficit: (available < 0n ? -available : 0n).toString(), available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
 }
 
