@@ -57,6 +57,7 @@ import { DistributionsPanel } from "./distributions";
 import { CompanyPrivateProcessing } from "./company-private";
 import { AccountingPanel } from "./accounting";
 import { SupportPanel } from "./support";
+import { CompanyInsightsPanel } from "./company-insights";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -477,7 +478,7 @@ function CompanyWorkspace({
       ) : section === "assistant" ? (
         <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
       ) : section === "activity" ? (
-        <div className="grid gap-6"><ActivityLog /><ProjectReportsPanel /></div>
+        <div className="grid gap-6"><CompanyInsightsPanel /><ActivityLog /><ProjectReportsPanel /></div>
       ) : section === "billing" ? (
         <Billing />
       ) : (
