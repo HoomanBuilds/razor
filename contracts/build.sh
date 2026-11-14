@@ -9,9 +9,12 @@ if [[ "${RAZOR_CONTRACT_BUILD_GUARDED:-}" != "1" ]]; then
 fi
 
 with_credit=0
+with_evidence=0
 for option in "$@"; do
   if [[ "$option" == "--with-credit" ]]; then
     with_credit=1
+  elif [[ "$option" == "--with-evidence" ]]; then
+    with_evidence=1
   else
     printf 'Unknown contract build option: %s\n' "$option" >&2
     exit 1
@@ -54,6 +57,11 @@ if [[ "$with_credit" == "1" ]]; then
   CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-credit/Cargo.toml" --target wasm32-unknown-unknown --release
   optimize razor_credit.wasm
   artifacts+=(razor_credit.wasm)
+fi
+if [[ "$with_evidence" == "1" ]]; then
+  CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-evidence/Cargo.toml" --target wasm32-unknown-unknown --release
+  optimize razor_evidence.wasm
+  artifacts+=(razor_evidence.wasm)
 fi
 WASM_OPT_BUILD_VERSION="$optimizer_version" WASM_OPT_BUILD_PASSES="-Oz; refine with -Oz --converge; keep smaller artifact" node "$project_root/scripts/contract-manifest.mjs" "$staging_dir"
 for file in "${artifacts[@]}" manifest.json; do
