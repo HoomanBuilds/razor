@@ -27,6 +27,8 @@ test("shared artifact publication validates modules and records exact hashes wit
     execFileSync(process.execPath, args, { env: { ...process.env, WASM_OPT_BUILD_VERSION: "optimizer fixture" }, stdio: "pipe" });
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
     assert.equal(manifest.optimizer, "optimizer fixture"); assert.equal(manifest.artifacts.length, 3); assert.equal(manifest.architecture,"shared_v1");
+    assert.equal(manifest.optimization.rustOptLevel, process.env.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "z");
+    assert.equal(manifest.optimization.passes, process.env.WASM_OPT_BUILD_PASSES ?? null);
     assert.equal(manifest.treasuryStateVersion, 3); assert.equal(manifest.clearingStateVersion, 2);
     for (const [name, bytes] of Object.entries(files)) {
       const item = manifest.artifacts.find((entry: { file: string }) => entry.file === name);
