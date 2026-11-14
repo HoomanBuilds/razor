@@ -17,6 +17,7 @@ import { fundingRefundExportRows } from "../funding-refunds/export";
 import { creditExportRows } from "../invoice-credits/accounting";
 import { clearingExportRows } from "../clearing/accounting";
 import { financingExportRows } from "../financing/accounting";
+import { expenseReturnAccounting } from "../expenses/accounting";
 
 export function csvCell(value: unknown): string {
   let text = String(value ?? "").replaceAll("\u0000", "");
@@ -435,6 +436,15 @@ function accountingSnapshot(access:AccessContext):string {
   records.push(...clearingExportRows(access.organizationId));
   records.push(...creditExportRows(access.organizationId));
   records.push(...financingExportRows(access.organizationId));
+  records.push(...expenseReturnAccounting(access.organizationId).map(value => ({
+    record_type: "expense_cash_return", record_id: value.correctionId, expense_id: value.expenseId, payment_id: value.paymentId,
+    status: value.status, created_at: value.createdAt, original_expense_gross_micro_usdc: value.originalGross,
+    original_delivered_micro_usdc: value.deliveredPrincipal, original_source_spend_micro_usdc: value.originalSourceSpend,
+    accepted_corrected_expense_micro_usdc: value.acceptedCorrectedAmount, proposed_return_micro_usdc: value.proposedReturnAmount,
+    agreed_return_micro_usdc: value.agreedReturnAmount, actual_returned_micro_usdc: value.actualReturnedUSDC,
+    unresolved_return_micro_usdc: value.unresolvedReturnAmount, unpaid_liability_adjustment_micro_usdc: value.liabilityAdjustment,
+    verification: value.provenance,
+  })));
   records.push(...fundingRefundExportRows(access).map(record => ({ record_type: "source_funding_refund", ...record })));
   for (const value of rows<{payment_id:string;attempt_id:string;actual_output:string;credited_usdc:string;source_spent_usdc:string;receipt_commitment:string;confirmed_at:string;remainder_payment_id:string|null}>("SELECT s.*,r.remainder_payment_id FROM partial_settlements s LEFT JOIN partial_remainders r ON r.original_payment_id=s.payment_id WHERE s.organization_id=? ORDER BY s.confirmed_at",access.organizationId)) records.push({...common(paymentById.get(value.payment_id)),record_type:"terminal_partial_settlement",record_id:value.payment_id,created_at:value.confirmed_at,attested_output_base_units:value.actual_output,attested_entitlement_credit_usdc:usdc(value.credited_usdc),recorded_source_spent_usdc:usdc(value.source_spent_usdc),settlement_receipt:value.receipt_commitment,residual_payment_id:value.remainder_payment_id,verification:"terminal_NEAR_reporter_attestation; explicit_entitlement_credit; no_automatic_cross_asset_conversion"});
   const headers = [
@@ -577,6 +587,16 @@ function accountingSnapshot(access:AccessContext):string {
     "loan_fee_outstanding_micro_usdc",
     "loan_cash_repaid_micro_usdc",
     "loan_collateral_applied_micro_usdc",
+    "expense_id",
+    "original_expense_gross_micro_usdc",
+    "original_delivered_micro_usdc",
+    "original_source_spend_micro_usdc",
+    "accepted_corrected_expense_micro_usdc",
+    "proposed_return_micro_usdc",
+    "agreed_return_micro_usdc",
+    "actual_returned_micro_usdc",
+    "unresolved_return_micro_usdc",
+    "unpaid_liability_adjustment_micro_usdc",
   ];
   return [
     headers.map(csvCell).join(","),
