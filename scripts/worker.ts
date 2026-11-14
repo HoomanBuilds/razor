@@ -5,6 +5,7 @@ import { dispatchIntegrationWebhooks } from "../src/server/integrations";
 import { monitorDistributions } from "../src/server/distributions/service";
 import { dispatchAccountingJobs } from "../src/server/accounting";
 import { expireSupportCases } from "../src/server/support";
+import { monitorFundedRounds } from "../src/server/clearing/funded";
 
 const args = process.argv.slice(2);
 const organizationId = args.find((arg) => arg.startsWith("--organization="))?.slice("--organization=".length);
@@ -20,6 +21,7 @@ do {
     ["billing", () => tickBilling(organizationId)],
     ["invoiceIntake", () => processPendingInvoiceEvents({ organizationId, maxEvents: 1 })],
     ["distributions", () => monitorDistributions({ organizationId, maxPools: 1 })],
+    ["fundedClearing", () => monitorFundedRounds(2, organizationId)],
     ["accounting", () => dispatchAccountingJobs({ organizationId, maxJobs: 1 })],
     ["supportRetention", () => organizationId ? { skipped: true, scope: "global_housekeeping" } : expireSupportCases()],
     ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],

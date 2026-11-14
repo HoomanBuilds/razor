@@ -8,7 +8,7 @@ import { encrypt } from "../src/server/identity/crypto";
 import { PERMISSIONS, getAccess } from "../src/server/identity/session";
 import { createBill, approveBill } from "../src/server/business/service";
 import { createRound, offerInvoice, acceptInvoice, previewRound, overview, roundDetail } from "../src/server/clearing/service";
-import { beginFundedAction, cancelFundedReview, createFundedRound, discardFundedProposal, finishFundedWallet, fundedRoundDetail, prepareFundedAction, previewFundedRound, reconcileFundedRound, verifyFundedDeposit } from "../src/server/clearing/funded";
+import { monitorFundedRounds, beginFundedAction, cancelFundedReview, createFundedRound, discardFundedProposal, finishFundedWallet, fundedRoundDetail, prepareFundedAction, previewFundedRound, reconcileFundedRound, verifyFundedDeposit } from "../src/server/clearing/funded";
 import { fundedBillDischarges, fundedClearingExportRows } from "../src/server/clearing/funded-accounting";
 import { fundingMessage } from "../src/server/clearing/funded-receipts";
 import type { CashDeposit, CashState, ChainRound, Manifest } from "../src/server/clearing/types";
@@ -142,7 +142,7 @@ test("exact accepted funding and final consent retire whole original liabilities
     assert.equal(rows("SELECT id FROM payments WHERE organization_id IN (?,?) AND delivered_amount!='0'", f.a.access.organizationId, f.b.access.organizationId).length, 0);
     assert.equal(rows("SELECT organization_id FROM treasury_balances WHERE organization_id IN (?,?)", f.a.access.organizationId, f.b.access.organizationId).length, 0);
     const credit = await prepareFundedAction(f.b.access, round.id, { manifestHash: round.manifest_hash, operation: "credit" }); const args = credit.walletActions[0].actions[0].params.args;
-    assert.equal(credit.expectedNonce, "1"); assert.ok(!("receiver_id" in args) && !("amount" in args));
+    assert.equal(credit.expectedNonce, "1"); assert.ok(args && typeof args === "object"); assert.ok(!("receiver_id" in args) && !("amount" in args));
   });
 });
 
@@ -223,5 +223,20 @@ test("a deferred escrow read cannot roll back a newer definitive callback or pai
     await reconcileFundedRound(f.a.access, round.id); release(); await rejected;
     const saved = fundedRoundDetail(f.a.access, round.id).accounts.find(account => account.organization_id === f.a.access.organizationId)!;
     assert.equal(saved.refund_paid, deposit.accepted); assert.equal(saved.refund_available, "0"); assert.equal(saved.nonce, "1"); assert.equal(saved.lastTransfer?.status, "paid");
+  });
+});
+
+
+test("scoped funded clearing monitoring never observes or mutates another company round", async () => {
+  const f = fixture(), round = proposed(f), original = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("An unrelated round must not request network state"); };
+  try {
+    assert.deepEqual(await monitorFundedRounds(2, randomUUID()), { checked: 0, held: 0 });
+    assert.equal(calls, 0);
+    assert.equal(row<{cash_checked_at:string|null}>("SELECT cash_checked_at FROM clearing_rounds WHERE id=?", round.id)!.cash_checked_at, null);
+  } finally { globalThis.fetch = original; }
+  await rpc(remote(ready(round)), async () => {
+    assert.deepEqual(await monitorFundedRounds(2, f.a.access.organizationId), { checked: 1, held: 0 });
+    assert.ok(row<{cash_checked_at:string|null}>("SELECT cash_checked_at FROM clearing_rounds WHERE id=?", round.id)!.cash_checked_at);
   });
 });

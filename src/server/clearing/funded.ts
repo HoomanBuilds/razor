@@ -330,8 +330,8 @@ export function cancelFundedReview(access: AccessContext, id: string, requestId:
     return { cancelled: true, financialEffect: "No transfer was authorized by this review" };
   });
 }
-export async function monitorFundedRounds(maxRounds = 2) {
-  const selected = rows<{ id: string; organization_id: string; owner_id: string }>("SELECT r.id,p.organization_id,o.owner_id FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id JOIN organizations o ON o.id=p.organization_id WHERE r.mode='cash_backed_native_v1' AND p.organization_id=(SELECT organization_id FROM clearing_round_participants WHERE round_id=r.id ORDER BY organization_id LIMIT 1) AND (r.status IN ('prepared','registered') OR EXISTS(SELECT 1 FROM clearing_funded_accounts a WHERE a.round_id=r.id AND (a.pending_json IS NOT NULL OR a.credit_available!='0' OR a.refund_available!='0'))) ORDER BY COALESCE(r.cash_checked_at,r.created_at),r.id LIMIT ?", Math.max(1, Math.min(3, maxRounds)));
+export async function monitorFundedRounds(maxRounds = 2, organizationId?: string) {
+  const selected = rows<{ id: string; organization_id: string; owner_id: string }>("SELECT r.id,p.organization_id,o.owner_id FROM clearing_rounds r JOIN clearing_round_participants p ON p.round_id=r.id JOIN organizations o ON o.id=p.organization_id WHERE r.mode='cash_backed_native_v1' AND p.organization_id=(SELECT organization_id FROM clearing_round_participants WHERE round_id=r.id ORDER BY organization_id LIMIT 1) AND (r.status IN ('prepared','registered') OR EXISTS(SELECT 1 FROM clearing_funded_accounts a WHERE a.round_id=r.id AND (a.pending_json IS NOT NULL OR a.credit_available!='0' OR a.refund_available!='0'))) AND (? IS NULL OR EXISTS(SELECT 1 FROM clearing_round_participants scoped WHERE scoped.round_id=r.id AND scoped.organization_id=?)) ORDER BY COALESCE(r.cash_checked_at,r.created_at),r.id LIMIT ?", organizationId ?? null, organizationId ?? null, Math.max(1, Math.min(3, maxRounds)));
   let checked = 0, held = 0;
   for (const item of selected) {
     try { await reconcileFundedRound(getAccess(item.owner_id, item.organization_id), item.id); checked++; }
