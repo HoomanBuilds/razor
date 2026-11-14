@@ -45,3 +45,10 @@ Existing isolated configurations remain explicitly marked `isolated_v1`. This ch
 ## Evidence boundary
 
 Local application, native contract and compiled-WASM checks establish the behavior recorded in the [build checklist](../build-checklist.md). They do not establish a mainnet deployment, successful cross-chain settlement, live subscription collection or configured provider access. No funds were moved to implement this change.
+
+
+## Selected deployment upgrade policy
+
+The selected release keeps treasury, clearing, billing and credit code upgradable through operator-held full-access keys. Deployment and runtime checks require the exact reviewed code hash and explicitly pinned per-account upgrade public keys. Customer company signing keys remain separate; they do not prevent an operator from replacing code. This authority is disclosed before company registration and before deposit. Code updates must preserve stored state and liabilities or use a specifically designed reviewed migration. The current planner provides fresh deployments, not populated-state migrations. Only the stateless evidence contract becomes keyless for its independent timing-proof feature.
+
+Excess native operating reserves can be quoted and withdrawn only by the stored platform owner to itself. Code/state collateral and customer prepaid storage remain protected; company USDC withdrawals remain company-owner operations. Main payment workflows require neither private AI nor inference evidence.

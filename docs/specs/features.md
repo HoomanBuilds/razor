@@ -218,3 +218,8 @@ Supplier extensions now include exact commercial quote comparison and original-s
 ### Platform native reserve recovery
 
 Operator funding is separate from customer principal and prepaid storage. The treasury, clearing, billing and credit contracts quote native NEAR excess and let only their stored platform owner withdraw a positive amount to itself, including during pause. Current storage collateral and customer prepaid storage allocations remain protected. Evidence needs no operating topups. Keep spare funds in the separate owner wallet. Native quote and withdrawal methods do not withdraw company USDC, credit principal or payroll reserves.
+
+
+### Configurable pricing and code authority
+
+Subscription pricing, feature access and usage allowances are versioned application configuration, rather than hardcoded payment-contract fees. Razor currently takes zero percentage markup on payment principal. Company spending/approval/recipient controls retain their owner-authorized contract methods. Treasury, clearing, billing and credit code can be replaced only through the selected operator-held upgrade authority, with exact approved public-key and code pins checked before applicable new financial preparation. Company onboarding quotes bind the configured authority and explain that company signatures cannot prevent a malicious code replacement. The stateless evidence contract is the only keyless exception for its independent timing proofs. Private AI and its provider credits remain optional for normal payments, payroll, manual invoices and recovery.
