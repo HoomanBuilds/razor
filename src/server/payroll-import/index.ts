@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../context";
 import * as service from "./service";
+import { mappingRequestSchema, suggestImportMapping } from "./mapping";
 
 export const payrollImportRoutes = new Hono<AppEnv>();
+payrollImportRoutes.post("/suggest-mapping", async c => c.json({ suggestion: await suggestImportMapping(c.get("access"), mappingRequestSchema.parse(await c.req.json())) }));
 payrollImportRoutes.get("/templates", c => c.json({ templates: service.listImportTemplates(c.get("access")) }));
 payrollImportRoutes.post("/templates", async c => c.json({ template: service.saveImportTemplate(c.get("access"), service.templateSchema.parse(await c.req.json())) }, 201));
 payrollImportRoutes.put("/templates/:id", async c => {
