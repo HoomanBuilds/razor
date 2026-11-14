@@ -73,7 +73,7 @@ export function ScrollMotion() {
         observer.unobserve(element);
       }
     }, { threshold:0.12, rootMargin:"0px 0px -24px 0px" });
-    root.querySelectorAll(".rm-section-heading,.rm-capability-grid article,.rm-showcase-panel,.rm-treasury-story,.rm-operations-grid article,.rm-price-card,.rm-principle-card,.rm-faq-layout").forEach(element => observer.observe(element));
+    root.querySelectorAll(".rm-section-heading,.rm-platform-visual,.rm-showcase-panel,.rm-treasury-story,.rm-operations-grid article,.rm-price-card,.rm-principle-card,.rm-faq-layout").forEach(element => observer.observe(element));
     return () => observer.disconnect();
   }, []);
   return null;
