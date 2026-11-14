@@ -1,4 +1,4 @@
-export interface Organization { near_network?: string; id: string; name: string; timezone: string; role: string; paused?: number; settlement_asset: string; permissions?: string[] }
+export interface Organization { owner_id?: string; near_network?: string; id: string; name: string; timezone: string; role: string; paused?: number; settlement_asset: string; permissions?: string[] }
 export interface Session { user: { id: string; email: string | null; name: string | null }; organizations: Organization[]; activeOrganizationId: string | null; wallets: Wallet[] }
 export interface Wallet { id: string; family: string; address: string; network: string; label: string | null }
 export interface Recipient { id: string; name: string; email: string | null; kind: string; primary_asset: string; primary_network: string; primary_address: string; primary_memo?: string | null; backup_network: string | null; backup_address: string | null; fallback_consent: number; version: number; preference_status?: string; confirmed_at?: string | null }

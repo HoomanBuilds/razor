@@ -13,7 +13,7 @@ interface Delivery { id: string; eventId: string; endpointId: string; state: str
 
 export function IntegrationsPanel() {
   const { base, organization, session, revision, refresh } = useWorkspace();
-  const allowed = !!organization.permissions?.includes("company:manage");
+  const allowed = organization.owner_id === session.user.id && !!organization.permissions?.includes("company:manage");
   const endpoint = `${base}/integrations`;
   const [page, setPage] = useState(1), [requestPage, setRequestPage] = useState(1);
   const { data, error: loadError } = useResource<{ credentials: Credential[]; principals: { id: string; name: string }[]; apiPath: string; mcpPath: string }>(allowed ? endpoint : null, revision);

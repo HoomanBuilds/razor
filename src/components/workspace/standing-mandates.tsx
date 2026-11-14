@@ -23,7 +23,7 @@ export function StandingMandatesPanel() {
   const resource = useResource<State>(canRead ? `${base}/standing-mandates` : null, revision);
   const { busy, error, run } = useAction();
   const [preview, setPreview] = useState<Preview | null>(null);
-  const owner = organization.role === "Owner" && !!organization.permissions?.includes("company:manage");
+  const owner = organization.owner_id === session.user.id && !!organization.permissions?.includes("company:manage");
   const approve = !!organization.permissions?.includes("payments:approve");
   async function status(value: GrantView, paused: boolean, revoke = false) {
     try { setPreview(await api<Preview>(`${base}/standing-mandates/${value.id}/status`, { paused, revoke })); }
