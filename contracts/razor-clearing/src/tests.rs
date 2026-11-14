@@ -6,11 +6,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const NOW: u64 = 1_800_000_000_000;
 
-fn account(value: &str) -> AccountId {
+pub(super) fn account(value: &str) -> AccountId {
     value.parse().unwrap()
 }
 
-fn context(caller: &str) -> VMContextBuilder {
+pub(super) fn context(caller: &str) -> VMContextBuilder {
     let mut builder = VMContextBuilder::new();
     builder
         .current_account_id(account("clearing.testnet"))
@@ -23,7 +23,7 @@ fn context(caller: &str) -> VMContextBuilder {
     builder
 }
 
-fn callbacks(values: Vec<serde_json::Value>) {
+pub(super) fn callbacks(values: Vec<serde_json::Value>) {
     testing_env!(
         context("clearing.testnet").build(),
         test_vm_config(),
@@ -47,7 +47,7 @@ fn participant(company: &str, treasury: &str, owner: &str) -> Participant {
     }
 }
 
-fn manifest(id: &str) -> Manifest {
+pub(super) fn manifest(id: &str) -> Manifest {
     Manifest {
         id: id.into(),
         asset: "USDC".into(),
@@ -78,12 +78,14 @@ fn manifest(id: &str) -> Manifest {
                 residual: U128(0),
             },
         ],
+        cash: None,
     }
 }
 
-fn ready(contract: &mut Clearing, manifest: Manifest) -> String {
+pub(super) fn ready(contract: &mut Clearing, manifest: Manifest) -> String {
     let id = manifest.id.clone();
     let manifest_json = serde_json::to_string(&manifest).unwrap();
+    let cash = manifest.cash.as_ref().map(CashRound::new);
     contract.rounds.insert(
         id.clone(),
         Round {
@@ -97,12 +99,13 @@ fn ready(contract: &mut Clearing, manifest: Manifest) -> String {
             request_nonce: U64(0),
             consent_requests: BTreeMap::new(),
             finalize_request: None,
+            cash,
         },
     );
     id
 }
 
-fn setup() -> Clearing {
+pub(super) fn setup() -> Clearing {
     testing_env!(context("alice.testnet").build());
     Clearing::new(
         account("operator.testnet"),
@@ -111,14 +114,15 @@ fn setup() -> Clearing {
     )
 }
 
-fn treasury(owner: &str, version: &str) -> serde_json::Value {
+pub(super) fn treasury(owner: &str, version: &str) -> serde_json::Value {
     serde_json::json!({"architecture":"shared_v1","company_id":if owner == "alice.testnet" {"company-a:aaaaaaaaaaaaaaaa"} else {"company-b:aaaaaaaaaaaaaaaa"},"owner_id": owner, "token_contract": "usdc.testnet", "paused": false, "policy_version": version})
 }
 
 #[test]
 fn typed_views_lookup_arguments_and_digests_preserve_exact_json_bytes() {
     let contract = setup();
-    let expected = serde_json::json!({"treasury_id":contract.treasury_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32});
+    let expected = serde_json::json!({"treasury_id":contract.treasury_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32,
+        "state_version":2,"cash_network":null,"max_cash_deposits_per_company":8,"cash_accepted":"0","cash_available":"0","cash_pending":"0","cash_paid":"0"});
     assert_eq!(
         serde_json::to_vec(&contract.get_config()).unwrap(),
         serde_json::to_vec(&expected).unwrap()
@@ -145,7 +149,7 @@ fn request(contract: &mut Clearing, id: &str, company: &str, caller: &str) -> U6
         .unwrap()
 }
 
-fn consent(contract: &mut Clearing, id: &str, company: &str, caller: &str) {
+pub(super) fn consent(contract: &mut Clearing, id: &str, company: &str, caller: &str) {
     let request_id = request(contract, id, company, caller);
     callbacks(vec![treasury(caller, "1")]);
     assert!(contract.on_consented(id.into(), company.into(), account(caller), request_id));

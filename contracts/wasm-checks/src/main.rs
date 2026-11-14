@@ -129,6 +129,17 @@ impl Instance {
         deposit: u128,
         promise: Option<Result<Vec<u8>, ()>>,
     ) -> CallResult {
+        self.call_with_results(caller, method, args, deposit, promise.into_iter().collect())
+    }
+
+    fn call_with_results(
+        &mut self,
+        caller: &str,
+        method: &str,
+        args: &Value,
+        deposit: u128,
+        promises: Vec<Result<Vec<u8>, ()>>,
+    ) -> CallResult {
         let old_storage = self.external.fake_trie.clone();
         let action_start = self.external.action_log.len();
         let context = VMContext {
@@ -138,7 +149,7 @@ impl Instance {
             predecessor_account_id: caller.parse().unwrap(),
             refund_to_account_id: caller.parse().unwrap(),
             input: serde_json::to_vec(args).unwrap().into(),
-            promise_results: promise
+            promise_results: promises
                 .into_iter()
                 .map(|success| match success {
                     Ok(bytes) => PromiseResult::Successful(bytes.into()),
@@ -552,7 +563,29 @@ fn actual_call(
     error: Option<&str>,
     promise: Option<Result<Vec<u8>, ()>>,
 ) -> Value {
-    let result = instance.call(caller, method, &args, deposit, promise);
+    actual_call_with_results(
+        instance,
+        calls,
+        caller,
+        method,
+        args,
+        deposit,
+        error,
+        promise.into_iter().collect(),
+    )
+}
+
+fn actual_call_with_results(
+    instance: &mut Instance,
+    calls: &mut usize,
+    caller: &str,
+    method: &str,
+    args: Value,
+    deposit: u128,
+    error: Option<&str>,
+    promises: Vec<Result<Vec<u8>, ()>>,
+) -> Value {
+    let result = instance.call_with_results(caller, method, &args, deposit, promises);
     if let Some(expected) = error {
         assert!(
             result
@@ -1413,6 +1446,555 @@ fn check_shared_clearing(directory: &Path) -> Value {
     json!({"contract":"shared_clearing","actual_wasm_calls":calls})
 }
 
+fn clearing_fixture_manifest(id: &str, cash: bool) -> Value {
+    let mut manifest = json!({"id":id,"asset":"USDC","fee":"0","starts_at_ms":(NOW_MS-1000).to_string(),
+        "expires_at_ms":(NOW_MS+60000).to_string(),"participants":[
+            {"company_id":"company-a","treasury_id":"treasury.near","treasury_company_id":"company-a:aaaaaaaaaaaaaaaa","owner_id":"alice.near","version":"1","policy_version":"1"},
+            {"company_id":"company-b","treasury_id":"treasury.near","treasury_company_id":"company-b:bbbbbbbbbbbbbbbb","owner_id":"bob.near","version":"1","policy_version":"1"}],
+        "obligations":[{"id":format!("{id}-invoice-a"),"terms_hash":"a".repeat(64),"debtor":"company-a","creditor":"company-b","original":"100","reduction":"70","residual":"30"},
+            {"id":format!("{id}-invoice-b"),"terms_hash":"b".repeat(64),"debtor":"company-b","creditor":"company-a","original":"70","reduction":"70","residual":"0"}]});
+    if cash {
+        manifest["cash"] = json!({"mode":"cash_backed_native_v1","network":"mainnet","token_contract":TOKEN,
+            "refund_policy":"return_accepted_deposits_to_fixed_owner_on_cancel","positions":[
+                {"company_id":"company-a","deposit_due":"30","credit_due":"0","destination":"alice.near"},
+                {"company_id":"company-b","deposit_due":"0","credit_due":"30","destination":"bob.near"}]});
+    }
+    manifest
+}
+
+fn clearing_fixture_authorities() -> Vec<Result<Vec<u8>, ()>> {
+    [
+        ("company-a:aaaaaaaaaaaaaaaa", "alice.near"),
+        ("company-b:bbbbbbbbbbbbbbbb", "bob.near"),
+    ]
+    .map(|(company, owner)| {
+        Ok(
+            serde_json::to_vec(&json!({"architecture":"shared_v1","company_id":company,
+            "owner_id":owner,"token_contract":TOKEN,"paused":false,"policy_version":"1"}))
+            .unwrap(),
+        )
+    })
+    .to_vec()
+}
+
+fn register_clearing_fixture(
+    instance: &mut Instance,
+    calls: &mut usize,
+    manifest: &Value,
+) -> (String, String, Value) {
+    let id = manifest["id"].as_str().unwrap();
+    let wire = manifest.to_string();
+    let hash = format!("{:x}", Sha256::digest(wire.as_bytes()));
+    let cost = actual_call(
+        instance,
+        calls,
+        "reader.near",
+        "registration_cost",
+        json!({"manifest_json":wire}),
+        0,
+        None,
+        None,
+    );
+    actual_call(
+        instance,
+        calls,
+        "alice.near",
+        "register_round",
+        json!({"manifest_json":wire,"manifest_hash":hash}),
+        cost.as_str().unwrap().parse().unwrap(),
+        None,
+        None,
+    );
+    assert_eq!(
+        actual_call_with_results(
+            instance,
+            calls,
+            "clearing.near",
+            "on_registered",
+            json!({"round_id":id}),
+            0,
+            None,
+            clearing_fixture_authorities()
+        ),
+        true
+    );
+    (wire, hash, cost)
+}
+
+fn consent_clearing_fixture(instance: &mut Instance, calls: &mut usize, id: &str, hash: &str) {
+    for (index, (company, owner)) in [("company-a", "alice.near"), ("company-b", "bob.near")]
+        .into_iter()
+        .enumerate()
+    {
+        actual_call(
+            instance,
+            calls,
+            owner,
+            "consent",
+            json!({"round_id":id,"manifest_hash":hash,"company_id":company}),
+            1,
+            None,
+            None,
+        );
+        assert_eq!(
+            actual_call(
+                instance,
+                calls,
+                "clearing.near",
+                "on_consented",
+                json!({"round_id":id,"company_id":company,"owner_id":owner,"request_id":(index+1).to_string()}),
+                0,
+                None,
+                Some(clearing_fixture_authorities().remove(index))
+            ),
+            true
+        );
+    }
+}
+
+fn cash_funding_fixture(id: &str, hash: &str, deposit: &str, amount: &str) -> Value {
+    json!({"sender_id":"alice.near","amount":amount,"msg":json!({"kind":"razor_clearing_cash_v1","round_id":id,
+        "manifest_hash":hash,"company_id":"company-a","deposit_id":deposit}).to_string()})
+}
+
+fn cash_withdraw_fixture(id: &str, hash: &str, kind: &str, nonce: &str) -> Value {
+    json!({"round_id":id,"manifest_hash":hash,"company_id":if kind == "credit" {"company-b"} else {"company-a"},"kind":kind,"expected_nonce":nonce})
+}
+
+fn accepted_cash_event(instance: &mut Instance, calls: &mut usize, args: Value) -> (Value, Value) {
+    let result = instance.call(TOKEN, "ft_on_transfer", &args, 0, None);
+    assert!(result.error.is_none(), "funding failed: {:?}", result.error);
+    *calls += 1;
+    let event = result
+        .logs
+        .iter()
+        .find(|log| log["payload"]["event"] == "cash_deposit_accepted")
+        .map(|log| log["payload"].clone())
+        .expect("Missing actual cash acceptance event");
+    assert_eq!(event["standard"], "razor-clearing");
+    assert_eq!(event["version"], "2.0.0");
+    assert_eq!(event["data"].as_array().unwrap().len(), 1);
+    let msg: Value = serde_json::from_str(args["msg"].as_str().unwrap()).unwrap();
+    for field in ["round_id", "manifest_hash", "company_id", "deposit_id"] {
+        assert_eq!(event["data"][0][field], msg[field]);
+    }
+    assert_eq!(event["data"][0]["submitted"], args["amount"]);
+    assert_eq!(event["data"][0]["sender_id"], args["sender_id"]);
+    (result.value, event)
+}
+
+fn cash_callback_fixture(id: &str, kind: &str, nonce: &str, amount: &str) -> Value {
+    json!({"round_id":id,"company_id":if kind == "credit" {"company-b"} else {"company-a"},"kind":kind,"nonce":nonce,"amount":amount})
+}
+
+fn assert_cash_transfer_actions(
+    instance: &Instance,
+    start: usize,
+    receiver: &str,
+    amount: &str,
+    callback: Value,
+) {
+    let functions: Vec<_> = instance.external.action_log[start..]
+        .iter()
+        .filter_map(|action| match action {
+            MockAction::FunctionCallWeight {
+                receipt_index,
+                method_name,
+                args,
+                attached_deposit,
+                ..
+            } => Some((
+                *receipt_index,
+                method_name,
+                serde_json::from_slice::<Value>(args).unwrap(),
+                attached_deposit,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(functions.len(), 2);
+    assert_eq!(functions[0].1.as_slice(), b"ft_transfer");
+    assert_eq!(functions[0].2["receiver_id"], receiver);
+    assert_eq!(functions[0].2["amount"], amount);
+    assert_eq!(*functions[0].3, Balance::from_yoctonear(1));
+    assert!(
+        matches!(&instance.external.action_log[functions[0].0 as usize], MockAction::CreateReceipt { receiver_id, .. } if receiver_id.as_str() == TOKEN)
+    );
+    assert_eq!(functions[1].1.as_slice(), b"on_cash_withdrawn");
+    assert_eq!(functions[1].2, callback);
+    assert!(
+        matches!(&instance.external.action_log[functions[1].0 as usize], MockAction::CreateReceipt { receiver_id, .. } if receiver_id.as_str() == "clearing.near")
+    );
+}
+
+fn assert_cash_counters(value: &Value, expected: (u128, u128, u128, u128)) {
+    let amount = |field: &str| value[field].as_str().unwrap().parse::<u128>().unwrap();
+    let values = (
+        amount("cash_accepted"),
+        amount("cash_available"),
+        amount("cash_pending"),
+        amount("cash_paid"),
+    );
+    assert_eq!(values, expected);
+    assert_eq!(values.0, values.1 + values.2 + values.3);
+}
+
+fn check_funded_clearing(directory: &Path) -> Value {
+    let mut instance = Instance::new(
+        "clearing.near".into(),
+        fs::read(directory.join("razor_clearing.wasm")).expect("Missing clearing artifact"),
+    );
+    let mut calls = 0;
+    macro_rules! invoke {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr, $promise:expr) => {
+            actual_call(
+                &mut instance,
+                &mut calls,
+                $caller,
+                $method,
+                $args,
+                $deposit,
+                $error,
+                $promise,
+            )
+        };
+    }
+    macro_rules! ok {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr) => {
+            invoke!($caller, $method, $args, $deposit, None, None)
+        };
+    }
+    macro_rules! read {
+        ($method:expr, $args:expr) => {
+            ok!("reader.near", $method, $args, 0)
+        };
+    }
+    macro_rules! reject {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr) => {
+            invoke!($caller, $method, $args, $deposit, Some($error), None)
+        };
+    }
+    ok!(
+        "operator.near",
+        "new",
+        json!({"owner_id":"operator.near","treasury_id":"treasury.near","token_contract":TOKEN}),
+        0
+    );
+    reject!(
+        "stranger.near",
+        "enable_cash",
+        json!({"network":"mainnet","testnet_token_contract":null}),
+        1,
+        "ONLY_OWNER"
+    );
+    ok!(
+        "operator.near",
+        "enable_cash",
+        json!({"network":"mainnet","testnet_token_contract":null}),
+        1
+    );
+    let configured = read!("get_config", json!({}));
+    assert_eq!(configured["state_version"], 2);
+    assert_eq!(configured["cash_network"], "mainnet");
+    assert_eq!(configured["max_cash_deposits_per_company"], 8);
+
+    let legacy = clearing_fixture_manifest("wasm-legacy-clearing", false);
+    let (legacy_wire, legacy_hash, legacy_cost) =
+        register_clearing_fixture(&mut instance, &mut calls, &legacy);
+    assert!(!legacy_wire.contains("\"cash\""));
+    let legacy_round = read!("get_round", json!({"round_id":legacy["id"]}));
+    assert_eq!(legacy_round["manifest_json"], legacy_wire);
+    assert_eq!(legacy_round["hash"], legacy_hash);
+    assert!(legacy_round["manifest"].get("cash").is_none());
+    assert!(legacy_round["cash"].is_null());
+
+    let manifest = clearing_fixture_manifest("wasm-cash-credit", true);
+    let mut invalid = manifest.clone();
+    invalid["cash"]["positions"][1]["credit_due"] = json!("31");
+    let invalid_wire = invalid.to_string();
+    reject!(
+        "alice.near",
+        "register_round",
+        json!({"manifest_json":invalid_wire,"manifest_hash":format!("{:x}",Sha256::digest(invalid_wire.as_bytes()))}),
+        YOCTO,
+        "CASH_NET_POSITION_MISMATCH"
+    );
+    let (wire, hash, cash_cost) = register_clearing_fixture(&mut instance, &mut calls, &manifest);
+    let id = manifest["id"].as_str().unwrap();
+    let deposit = cash_funding_fixture(id, &hash, "wasm-deposit-partial", "10");
+    assert_eq!(ok!(TOKEN, "ft_on_transfer", deposit.clone(), 0), "10");
+    consent_clearing_fixture(&mut instance, &mut calls, id, &hash);
+    let finalize = json!({"round_id":id,"manifest_hash":hash});
+    reject!(
+        "alice.near",
+        "finalize_round",
+        finalize.clone(),
+        1,
+        "CASH_EXACT_FUNDING_REQUIRED"
+    );
+    assert_eq!(
+        ok!("foreign.near", "ft_on_transfer", deposit.clone(), 0),
+        "10"
+    );
+    assert_eq!(ok!(TOKEN, "ft_on_transfer", deposit.clone(), 0), "0");
+    let accepted_event = instance.external.action_log.len();
+    assert_eq!(ok!(TOKEN, "ft_on_transfer", deposit, 0), "10");
+    assert_eq!(instance.external.action_log.len(), accepted_event);
+    reject!(
+        "alice.near",
+        "finalize_round",
+        finalize.clone(),
+        1,
+        "CASH_EXACT_FUNDING_REQUIRED"
+    );
+    let (unused, accepted_event) = accepted_cash_event(
+        &mut instance,
+        &mut calls,
+        cash_funding_fixture(id, &hash, "wasm-deposit-excess", "25"),
+    );
+    assert_eq!(unused, "5");
+    let recorded = read!(
+        "get_cash_deposit",
+        json!({"round_id":id,"company_id":"company-a","deposit_id":"wasm-deposit-excess"})
+    );
+    assert_eq!(recorded["accepted"], "20");
+    assert_eq!(recorded["unused"], "5");
+    assert_eq!(recorded["accepted_at_ms"], NOW_MS.to_string());
+    ok!("alice.near", "finalize_round", finalize, 1);
+    assert_eq!(
+        actual_call_with_results(
+            &mut instance,
+            &mut calls,
+            "clearing.near",
+            "on_finalized",
+            json!({"round_id":id,"request_id":"3"}),
+            0,
+            None,
+            clearing_fixture_authorities()
+        ),
+        true
+    );
+    let finalized = read!("get_round", json!({"round_id":id}));
+    assert_eq!(finalized["status"], "finalized");
+    assert_eq!(finalized["manifest_json"], wire);
+    assert_eq!(finalized["hash"], hash);
+    assert_eq!(finalized["cash"]["accounts"][1]["credit_available"], "30");
+    assert_eq!(finalized["cash"]["accounts"][0]["credit_available"], "0");
+    assert_cash_counters(&read!("get_config", json!({})), (30, 30, 0, 0));
+    let credit = cash_withdraw_fixture(id, &hash, "credit", "1");
+    reject!(
+        "stranger.near",
+        "withdraw_cash",
+        credit.clone(),
+        1,
+        "ONLY_FIXED_OWNER"
+    );
+    let actions = instance.external.action_log.len();
+    ok!("bob.near", "withdraw_cash", credit.clone(), 1);
+    let callback = cash_callback_fixture(id, "credit", "1", "30");
+    assert_cash_transfer_actions(&instance, actions, "bob.near", "30", callback.clone());
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            callback.clone(),
+            0,
+            None,
+            None
+        ),
+        false
+    );
+    reject!(
+        "bob.near",
+        "withdraw_cash",
+        cash_withdraw_fixture(id, &hash, "credit", "2"),
+        1,
+        "CASH_TRANSFER_PENDING"
+    );
+    reject!(
+        "stranger.near",
+        "on_cash_withdrawn",
+        callback.clone(),
+        0,
+        "private"
+    );
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            callback.clone(),
+            0,
+            None,
+            Some(Err(()))
+        ),
+        false
+    );
+    reject!(
+        "bob.near",
+        "withdraw_cash",
+        credit,
+        1,
+        "CASH_NONCE_MISMATCH"
+    );
+    ok!(
+        "bob.near",
+        "withdraw_cash",
+        cash_withdraw_fixture(id, &hash, "credit", "2"),
+        1
+    );
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            callback,
+            0,
+            None,
+            Some(Ok(Vec::new()))
+        ),
+        false
+    );
+    let callback = cash_callback_fixture(id, "credit", "2", "30");
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            callback.clone(),
+            0,
+            None,
+            Some(Ok(Vec::new()))
+        ),
+        true
+    );
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            callback,
+            0,
+            None,
+            Some(Ok(Vec::new()))
+        ),
+        false
+    );
+
+    let refund_manifest = clearing_fixture_manifest("wasm-cash-refund", true);
+    let (_, refund_hash, _) =
+        register_clearing_fixture(&mut instance, &mut calls, &refund_manifest);
+    let refund_id = refund_manifest["id"].as_str().unwrap();
+    consent_clearing_fixture(&mut instance, &mut calls, refund_id, &refund_hash);
+    assert_eq!(
+        ok!(
+            TOKEN,
+            "ft_on_transfer",
+            cash_funding_fixture(refund_id, &refund_hash, "wasm-refund-deposit", "17"),
+            0
+        ),
+        "0"
+    );
+    ok!(
+        "bob.near",
+        "revoke",
+        json!({"round_id":refund_id,"manifest_hash":refund_hash}),
+        1
+    );
+    ok!(
+        "bob.near",
+        "revoke",
+        json!({"round_id":refund_id,"manifest_hash":refund_hash}),
+        1
+    );
+    let refundable = read!("get_cash_round", json!({"round_id":refund_id}));
+    assert_eq!(refundable["accounts"][0]["refund_available"], "17");
+    assert_eq!(refundable["accounts"][1]["refund_available"], "0");
+    ok!(
+        "alice.near",
+        "withdraw_cash",
+        cash_withdraw_fixture(refund_id, &refund_hash, "refund", "1"),
+        1
+    );
+    assert_eq!(
+        invoke!(
+            "clearing.near",
+            "on_cash_withdrawn",
+            cash_callback_fixture(refund_id, "refund", "1", "17"),
+            0,
+            None,
+            Some(Ok(Vec::new()))
+        ),
+        true
+    );
+
+    let expired_manifest = clearing_fixture_manifest("wasm-cash-expired", true);
+    let (_, expired_hash, _) =
+        register_clearing_fixture(&mut instance, &mut calls, &expired_manifest);
+    let expired_id = expired_manifest["id"].as_str().unwrap();
+    consent_clearing_fixture(&mut instance, &mut calls, expired_id, &expired_hash);
+    assert_eq!(
+        ok!(
+            TOKEN,
+            "ft_on_transfer",
+            cash_funding_fixture(expired_id, &expired_hash, "wasm-expired-deposit", "30"),
+            0
+        ),
+        "0"
+    );
+    ok!(
+        "alice.near",
+        "finalize_round",
+        json!({"round_id":expired_id,"manifest_hash":expired_hash}),
+        1
+    );
+    instance.now_ms = NOW_MS + 60000;
+    assert_eq!(
+        actual_call_with_results(
+            &mut instance,
+            &mut calls,
+            "clearing.near",
+            "on_finalized",
+            json!({"round_id":expired_id,"request_id":"3"}),
+            0,
+            None,
+            clearing_fixture_authorities()
+        ),
+        false
+    );
+    assert_eq!(
+        ok!(
+            TOKEN,
+            "ft_on_transfer",
+            cash_funding_fixture(expired_id, &expired_hash, "wasm-expired-late", "5"),
+            0
+        ),
+        "5"
+    );
+    ok!("anyone.near", "expire", json!({"round_id":expired_id}), 0);
+    ok!(
+        "alice.near",
+        "withdraw_cash",
+        cash_withdraw_fixture(expired_id, &expired_hash, "refund", "1"),
+        1
+    );
+    let held = read!("get_round", json!({"round_id":expired_id}));
+    assert_eq!(held["status"], "expired");
+    assert_eq!(held["cash"]["stage"], "refunds");
+    assert_eq!(held["cash"]["accounts"][0]["pending"]["amount"], "30");
+    reject!(
+        "alice.near",
+        "withdraw_cash",
+        cash_withdraw_fixture(expired_id, &expired_hash, "refund", "2"),
+        1,
+        "CASH_TRANSFER_PENDING"
+    );
+    let final_config = read!("get_config", json!({}));
+    assert_cash_counters(&final_config, (77, 0, 30, 47));
+    json!({"contract":"funded_clearing","actual_wasm_calls":calls,"fixture_only":true,"live_network":false,
+        "legacy_manifest":{"manifest_json":legacy_wire,"manifest_hash":legacy_hash,"registration_cost":legacy_cost},
+        "cash_manifest":{"manifest_json":wire,"manifest_hash":hash,"registration_cost":cash_cost,"onchain_manifest_json":finalized["manifest_json"],"onchain_hash":finalized["hash"]},
+        "finalized_credit":finalized["cash"],"excess_deposit":recorded,"accepted_event":accepted_event,"unresolved_refund":held["cash"],"final_config":final_config,
+        "checks":{"original_net_validated":true,"all_consent_exact_funding":true,"partial_excess_duplicate":true,"fixed_destination_nonce_and_replay":true,
+        "cancelled_depositor_refund":true,"deadline_blocks_late_credit":true,"unknown_stays_pending":true,"global_counters_conserved":true}})
+}
+
 fn main() {
     assert_eq!(
         env::var("RAYON_NUM_THREADS").as_deref(),
@@ -1431,10 +2013,11 @@ fn main() {
         );
         let treasury = check_shared_treasury(&directory);
         let clearing = check_shared_clearing(&directory);
+        let funded_clearing = check_funded_clearing(&directory);
         let billing = check_billing(&directory, &directory);
         println!(
             "{}",
-            json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","architecture":"shared_v1","actual_wasm":true,"live_network":false,"results":[treasury,clearing,billing]})
+            json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","architecture":"shared_v1","actual_wasm":true,"live_network":false,"results":[treasury,clearing,billing,funded_clearing]})
         );
         return;
     }
