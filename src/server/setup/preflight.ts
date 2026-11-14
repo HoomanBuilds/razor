@@ -9,6 +9,7 @@ import { reviewedArtifactHash } from "../near-artifacts";
 import { validNearAccount } from "../payments/near";
 import { NATIVE_USDC } from "../../lib/native-usdc";
 import { billingIssuer, billingSettings } from "../billing/chain";
+import { assertContractUpgradeKeys, describeContractUpgradePolicy } from "../near-upgrade-policy";
 
 type Status = "pass" | "blocked" | "warning" | "not_checked" | "disabled";
 interface Check { id: string; stage: "configuration" | "remote" | "workflow"; status: Status; message: string }
@@ -108,6 +109,15 @@ export async function setupPreflight(options: Options = {}) {
     }catch{add("billing-checkout","blocked","Configure the dedicated billing contract, reviewed code hash and matching ed25519 invoice issuer key; testnet also requires its explicit billing token. Existing money recovery remains available.");}
   }else add("billing-checkout","disabled","Paid checkout is not configured. Complimentary pilot access is not paid revenue.");
 
+  try {
+    const accounts = [env.NEAR_TREASURY_ID, env.NEAR_CLEARING_ID, env.RAZOR_BILLING_CONTRACT_ID].filter((account): account is string => Boolean(account));
+    const policy = describeContractUpgradePolicy(accounts[0] || "unconfigured.near", env);
+    for (const account of accounts.slice(1)) describeContractUpgradePolicy(account, env);
+    add("contract-upgrade-policy", policy.upgradable ? "warning" : "pass", policy.disclosure);
+  } catch {
+    add("contract-upgrade-policy", "blocked", "Configure an explicit supported contract upgrade policy and exact approved public keys for each configured upgradable contract. No private keys belong in upgrade-policy settings.");
+  }
+
   if (options.remote && !failed("near-network") && !failed("near-rpc")) {
     const transport = options.fetch ?? fetch;
     const rpc = async <T>(method: string, params: unknown): Promise<T> => {
@@ -117,8 +127,20 @@ export async function setupPreflight(options: Options = {}) {
       if (payload.error || payload.result === undefined) throw new Error();
       return payload.result;
     };
+    let snapshot: Promise<{hash: string; height: number}> | undefined;
+    const finalizedQuery = async <T>(params: Record<string, unknown>): Promise<T> => {
+      snapshot ??= rpc<{header:{hash:string; height:number}}>("block", {finality:"final"}).then(({header}) => {
+        if (!header || !Number.isSafeInteger(header.height) || header.height <= 0 || base58.decode(header.hash).length !== 32) throw new Error();
+        return {hash:header.hash, height:header.height};
+      });
+      const block = await snapshot;
+      const {finality, block_id, ...query} = params;
+      const value = await rpc<T & {block_hash:string; block_height:number}>("query", {...query, block_id:block.hash});
+      if (value.block_hash !== block.hash || value.block_height !== block.height) throw new Error();
+      return value;
+    };
     const view = async <T>(account: string, method: string, args: object = {}): Promise<T> => {
-      const value = await rpc<{result:number[]}>("query", { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
+      const value = await finalizedQuery<{result:number[]}>({ request_type: "call_function", account_id: account, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
       return JSON.parse(Buffer.from(value.result).toString()) as T;
     };
     let networkMatches = false;
@@ -129,48 +151,52 @@ export async function setupPreflight(options: Options = {}) {
     if (networkMatches) {
       if(billingExpected) {
         try {
-          const block=await rpc<{header:{hash:string}}>("block",{finality:"final"});
-          if(!block.header?.hash)throw new Error();
-          const query=<T>(account:string,method:string)=>rpc<{result:number[]}>("query",{request_type:"call_function",block_id:block.header.hash,account_id:account,method_name:method,args_base64:Buffer.from(JSON.stringify(method==="storage_balance_of"?{account_id:billingExpected!.billingContract}:{})).toString("base64")}).then(value=>JSON.parse(Buffer.from(value.result).toString()) as T);
-          const code=await rpc<{code_hash:string}>("query",{request_type:"view_account",block_id:block.header.hash,account_id:billingExpected.billingContract});
-          const config=await query<{version:number;owner_id:string;network:string;token_contract:string;issuer_public_key:string;paused:boolean}>(billingExpected.billingContract,"get_config"),storage=await query<{total:string}|null>(billingExpected.tokenContract,"storage_balance_of");
-          if(code.code_hash!==billingExpected.codeHash || config.version!==1 || config.network!==network || config.token_contract!==billingExpected.tokenContract || config.issuer_public_key!==billingExpected.issuerPublicKey || !validNearAccount(config.owner_id) || config.owner_id===billingExpected.billingContract || config.paused!==false || !storage || !/^[1-9]\d*$/.test(storage.total))throw new Error();
-          add("remote-billing","pass","At one final NEAR block, billing code, network, token, quote issuer and token-storage registration match. No checkout or subscription payment was sent.","remote");
-        }catch{add("remote-billing","blocked","The billing deployment, invoice issuer, pause state or token storage could not be verified. Do not enable paid checkout until these match.","remote");}
+          const account = billingExpected.billingContract;
+          const code = await finalizedQuery<{code_hash:string; global_contract_account_id?:string|null}>({request_type:"view_account", account_id:account});
+          const keys = await finalizedQuery<{keys:unknown[]}>({request_type:"view_access_key_list", account_id:account});
+          assertContractUpgradeKeys(account, keys.keys, env);
+          const config=await view<{version:number;owner_id:string;network:string;token_contract:string;issuer_public_key:string;paused:boolean}>(account,"get_config"),storage=await view<{total:string}|null>(billingExpected.tokenContract,"storage_balance_of",{account_id:account});
+          if(code.code_hash!==billingExpected.codeHash || code.global_contract_account_id != null || config.version!==1 || config.network!==network || config.token_contract!==billingExpected.tokenContract || config.issuer_public_key!==billingExpected.issuerPublicKey || !validNearAccount(config.owner_id) || config.owner_id===billingExpected.billingContract || config.paused!==false || !storage || !/^[1-9]\d*$/.test(storage.total))throw new Error();
+          add("remote-billing","pass","At one final NEAR block, billing code, configured upgrade-key policy, network, token, quote issuer and token-storage registration match. No checkout or subscription payment was sent.","remote");
+        }catch{add("remote-billing","blocked","The billing deployment, upgrade-key policy, invoice issuer, pause state or token storage could not be verified. Do not enable paid checkout until these match.","remote");}
       }else add("remote-billing","not_checked","Complete billing checkout configuration before reading its deployment.","remote");
       let treasuryToken: string | undefined;
       if (!failed("treasury-account") && pins.has("treasury")) {
         try {
           const account = env.NEAR_TREASURY_ID!;
-          const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:account});
-          const keys = await rpc<{keys:unknown[]}>("query", {request_type:"view_access_key_list",finality:"final",account_id:account});
-          if (!Array.isArray(keys.keys) || keys.keys.length !== 0) throw new Error();
+          const code = await finalizedQuery<{code_hash:string; global_contract_account_id?:string|null}>({request_type:"view_account", account_id:account});
+          const keys = await finalizedQuery<{keys:unknown[]}>({request_type:"view_access_key_list", account_id:account});
+          assertContractUpgradeKeys(account, keys.keys, env);
           const platform = await view<{architecture:string;version:number;owner_id:string; token_contract:string; paused:boolean; minimum_registration_deposit:string}>(account, "get_platform_config");
-          if (code.code_hash !== pins.get("treasury") || platform.architecture !== "shared_v1" || platform.version !== 1 || !validNearAccount(platform.owner_id) || platform.owner_id === account || !validNearAccount(platform.token_contract) || typeof platform.paused !== "boolean" || network === "mainnet" && platform.token_contract !== NATIVE_USDC.near || !/^[1-9]\d*$/.test(platform.minimum_registration_deposit)) throw new Error();
+          if (code.code_hash !== pins.get("treasury") || code.global_contract_account_id != null || platform.architecture !== "shared_v1" || platform.version !== 1 || !validNearAccount(platform.owner_id) || platform.owner_id === account || !validNearAccount(platform.token_contract) || typeof platform.paused !== "boolean" || network === "mainnet" && platform.token_contract !== NATIVE_USDC.near || !/^[1-9]\d*$/.test(platform.minimum_registration_deposit)) throw new Error();
           const storage = await view<{total:string}|null>(platform.token_contract, "storage_balance_of", {account_id:account});
           if (!storage || !/^[1-9]\d*$/.test(storage.total)) throw new Error();
           treasuryToken = platform.token_contract;
-          add("remote-treasury", platform.paused ? "blocked" : "pass", platform.paused ? "The reviewed shared treasury is initialized but paused." : "Shared treasury code, keyless account, architecture, settlement token, registration allowance and token-storage registration match. No per-company code deployment is required.", "remote");
-        } catch { add("remote-treasury", "blocked", "Shared treasury code, absence of access keys, initialized platform configuration or token-storage registration could not be verified.", "remote"); }
+          add("remote-treasury", platform.paused ? "blocked" : "pass", platform.paused ? "The reviewed shared treasury is initialized but paused." : "At one final NEAR block, shared treasury code, configured upgrade-key policy, architecture, settlement token, registration allowance and token-storage registration match. No per-company code deployment is required.", "remote");
+        } catch { add("remote-treasury", "blocked", "Shared treasury code, configured upgrade-key policy, initialized platform configuration or token-storage registration could not be verified at one final block.", "remote"); }
       } else add("remote-treasury", "not_checked", "Valid shared treasury account and artifact configuration are required before deployment verification.", "remote");
       if (env.NEAR_CLEARING_ID && !failed("clearing-account") && pins.has("clearing") && treasuryToken) {
         try {
           const account = env.NEAR_CLEARING_ID!;
-          const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:account});
+          const code = await finalizedQuery<{code_hash:string; global_contract_account_id?:string|null}>({request_type:"view_account", account_id:account});
+          const keys = await finalizedQuery<{keys:unknown[]}>({request_type:"view_access_key_list", account_id:account});
+          assertContractUpgradeKeys(account, keys.keys, env);
           const clearing = await view<{treasury_id:string; token_contract:string; paused:boolean}>(account, "get_config");
-          if (code.code_hash !== pins.get("clearing") || clearing.treasury_id !== env.NEAR_TREASURY_ID || clearing.token_contract !== treasuryToken || typeof clearing.paused !== "boolean") throw new Error();
-          add("remote-clearing", clearing.paused ? "blocked" : "pass", clearing.paused ? "The reviewed clearing contract is initialized but paused." : "Clearing code, shared treasury binding and settlement token match the reviewed deployment.", "remote");
-        } catch { add("remote-clearing", "blocked", "Clearing code or initialized settings could not be matched to the shared treasury and settlement token.", "remote"); }
+          if (code.code_hash !== pins.get("clearing") || code.global_contract_account_id != null || clearing.treasury_id !== env.NEAR_TREASURY_ID || clearing.token_contract !== treasuryToken || typeof clearing.paused !== "boolean") throw new Error();
+          add("remote-clearing", clearing.paused ? "blocked" : "pass", clearing.paused ? "The reviewed clearing contract is initialized but paused." : "At one final NEAR block, clearing code, configured upgrade-key policy, shared treasury binding and settlement token match the reviewed deployment.", "remote");
+        } catch { add("remote-clearing", "blocked", "Clearing code, configured upgrade-key policy or initialized settings could not be matched to the shared treasury and settlement token at one final block.", "remote"); }
       } else add("remote-clearing", env.NEAR_CLEARING_ID ? "not_checked" : "disabled", "Clearing deployment checks apply only when business clearing is configured; they do not gate basic treasury payments.", "remote");
       if (workerReady && pins.has("treasury")) {
         try {
           const treasury = env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!, executor = env.RAZOR_EXECUTOR_ACCOUNT_ID!;
-          const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:treasury});
+          const code = await finalizedQuery<{code_hash:string; global_contract_account_id?:string|null}>({request_type:"view_account", account_id:treasury});
+          const keys = await finalizedQuery<{keys:unknown[]}>({request_type:"view_access_key_list", account_id:treasury});
+          assertContractUpgradeKeys(treasury, keys.keys, env);
           const config = await view<{architecture:string;company_id:string;owner_id:string; token_contract:string; executors:string[]; approvers:string[]; paused:boolean}>(treasury, "get_config", {company_id:env.RAZOR_EXECUTOR_COMPANY_ID});
-          if (code.code_hash !== pins.get("treasury") || config.architecture !== "shared_v1" || config.company_id !== env.RAZOR_EXECUTOR_COMPANY_ID || config.owner_id === executor || !config.executors.includes(executor) || config.approvers.includes(executor) || config.paused || !validNearAccount(config.token_contract) || network === "mainnet" && config.token_contract !== NATIVE_USDC.near) throw new Error();
+          if (code.code_hash !== pins.get("treasury") || code.global_contract_account_id != null || config.architecture !== "shared_v1" || config.company_id !== env.RAZOR_EXECUTOR_COMPANY_ID || config.owner_id === executor || !config.executors.includes(executor) || config.approvers.includes(executor) || config.paused || !validNearAccount(config.token_contract) || network === "mainnet" && config.token_contract !== NATIVE_USDC.near) throw new Error();
           const { KeyPairSigner } = await import("near-api-js");
           const publicKey = await KeyPairSigner.fromSecretKey(env.RAZOR_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`).getPublicKey();
-          const key = await rpc<{permission:unknown}>("query", {request_type:"view_access_key", finality:"final", account_id:executor, public_key:publicKey.toString()});
+          const key = await finalizedQuery<{permission:unknown}>({request_type:"view_access_key", account_id:executor, public_key:publicKey.toString()});
           const permission = key.permission && typeof key.permission === "object" && "FunctionCall" in key.permission ? key.permission.FunctionCall as {receiver_id:string; method_names:string[]} : null;
           if (!permission || permission.receiver_id !== treasury || permission.method_names.length !== 1 || permission.method_names[0] !== "execute_payment") throw new Error();
           add("remote-executor", "pass", "The reviewed treasury grants a dedicated executor role and the configured key is restricted to its execute_payment method. Company mandate and actual route approvals are still required.", "remote");
