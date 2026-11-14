@@ -77,11 +77,15 @@ function digestQuote(quote: string) {
   return createHash("sha256").update(quote).digest("hex");
 }
 
+function assertNoInvoiceCredit(access:AccessContext,paymentId:string){if(row("SELECT b.id FROM bills b JOIN bill_installments i ON i.bill_id=b.id WHERE i.payment_id=? AND b.organization_id=? AND b.accepted_credit_amount!='0'",paymentId,access.organizationId))throw new ApiError(409,"Credited invoice lineages require a separately reviewed ordinary residual installment, not partial-delivery replacement","CREDIT_PARTIAL_REVIEW_REQUIRED");}
+
 export async function createRemainder(access: AccessContext, paymentId: string, input: { reviewToken: string; maxFee: string }) {
   requirePermission(access, "payments:prepare");
   if (!/^(0|[1-9]\d*)$/.test(input.maxFee) || input.maxFee.length > 31 || BigInt(input.maxFee) > 10n ** 30n) throw new ApiError(422, "Review a valid new routing cost ceiling", "INVALID_AMOUNT");
+  assertNoInvoiceCredit(access,paymentId);
   await reconcilePayment(access, paymentId);
   return transaction(db => {
+    assertNoInvoiceCredit(access,paymentId);
     const review = partialReview(access, paymentId);
     if (review.remainder) return { payment: review.remainder, alreadyPrepared: true };
     if (review.reviewToken !== input.reviewToken || !review.settlement || review.payment.status !== "partially_paid" || !review.remaining || !review.currentRecipientConfirmed) throw new ApiError(409, "Review the terminal partial settlement and current confirmed recipient before preparing a remainder", "PARTIAL_REMAINDER_NOT_READY");
@@ -100,6 +104,7 @@ export async function createRemainder(access: AccessContext, paymentId: string, 
 
 export function approveRemainder(access: AccessContext, paymentId: string, reviewToken: string) {
   requirePermission(access, "payments:approve");
+  assertNoInvoiceCredit(access,paymentId);
   return transaction(() => {
     const review = partialReview(access, paymentId), child = review.remainder;
     if (review.reviewToken !== reviewToken || !child || child.amount !== review.remaining || !review.settlement || child.recipient_version !== review.currentRecipientVersion) throw new ApiError(409, "Review the exact remaining entitlement, new fee ceiling and current recipient terms again", "PARTIAL_APPROVAL_STALE");

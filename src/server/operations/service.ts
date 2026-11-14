@@ -219,12 +219,13 @@ export function captureTemplate(
       requires_acceptance?: number;
       project_reference: string | null;
       cost_center_reference: string | null;
+      accepted_credit_amount:string;
     }>(
       "SELECT * FROM bills WHERE id=? AND organization_id=?",
       entityId,
       organizationId,
     );
-    if (!invoice || invoice.status !== "approved" || !invoice.payment_id)
+    if (!invoice || invoice.status !== "approved" || !invoice.payment_id || invoice.accepted_credit_amount !== "0")
       throw new ApiError(
         409,
         "Choose an approved bill as the template",

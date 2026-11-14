@@ -7,9 +7,10 @@ import { activity } from "./service";
 import { liabilityPayments } from "../partial-settlement/model";
 import { assertSameRecipientOwner } from "../payments/recipient-names";
 import { activeClearingRound, assertNoActiveClearing } from "../clearing/locks";
+import { acceptedBillCredits } from "../invoice-credits/accounting";
 import { fundedBillDischarges } from "../clearing/funded-accounting";
 
-interface TermsBill { id: string; recipient_id: string; amount: string; setoff_amount: string; funded_clearing_amount:string; status: string; due_date: string | null; payment_id: string | null; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
+interface TermsBill { id: string; recipient_id: string; amount: string; setoff_amount: string; funded_clearing_amount:string; accepted_credit_amount:string; status: string; due_date: string | null; payment_id: string | null; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null; dispute_reason: string | null }
 function bill(access: AccessContext, id: string): TermsBill {
   const result = row<TermsBill>("SELECT * FROM bills WHERE id=? AND organization_id=?", id, access.organizationId);
   if (!result) throw new ApiError(404, "Invoice not found", "NOT_FOUND");
@@ -23,16 +24,16 @@ export function getBillTerms(access: AccessContext, id: string) {
   requirePermission(access, "payments:read");
   const current = bill(access, id);
   const installments = rows<Payment>("SELECT p.* FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND p.organization_id=? ORDER BY i.created_at", id,access.organizationId);
-  const paid = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(current.setoff_amount),funded=BigInt(current.funded_clearing_amount);
+  const paid = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(current.setoff_amount),funded=BigInt(current.funded_clearing_amount),credit=BigInt(current.accepted_credit_amount);
   const committed = installments.filter((item) => item.status !== "cancelled").reduce((sum, item) => sum + BigInt(item.status === "partially_paid" ? item.delivered_amount : item.amount), 0n);
   const clearingSetoffs = rows<{ round_id: string; amount: string; original_payment_id: string; residual_payment_id: string | null; proof_block_hash: string; proof_block_height: string; created_at: string }>("SELECT round_id,amount,original_payment_id,residual_payment_id,proof_block_hash,proof_block_height,created_at FROM clearing_setoffs WHERE bill_id=? AND organization_id=? ORDER BY created_at", id, access.organizationId);
-  return { ...current, activeClearingRound: current.payment_id ? activeClearingRound(access.organizationId, current.payment_id) : null, acceptance_evidence: current.acceptance_evidence ? decrypt(current.acceptance_evidence) : null, dispute_reason: current.dispute_reason ? decrypt(current.dispute_reason) : null, installments, clearingSetoffs, fundedClearingDischarges:fundedBillDischarges(access.organizationId,id), paid: paid.toString(), setoffAmount: setoff.toString(), fundedClearingAmount:funded.toString(), remainingLiability: (BigInt(current.amount) - paid - setoff - funded).toString(), uncommitted: (BigInt(current.amount) - committed - setoff - funded).toString() };
+  return { ...current, activeClearingRound: current.payment_id ? activeClearingRound(access.organizationId, current.payment_id) : null, acceptance_evidence: current.acceptance_evidence ? decrypt(current.acceptance_evidence) : null, dispute_reason: current.dispute_reason ? decrypt(current.dispute_reason) : null, installments, clearingSetoffs, fundedClearingDischarges:fundedBillDischarges(access.organizationId,id), paid: paid.toString(), setoffAmount: setoff.toString(), fundedClearingAmount:funded.toString(), acceptedCreditAmount:credit.toString(), acceptedCreditNotes:acceptedBillCredits(access.organizationId,id), remainingLiability: (BigInt(current.amount) - paid - setoff - funded - credit).toString(), uncommitted: (BigInt(current.amount) - committed - setoff - funded - credit).toString() };
 }
 export function setBillTerms(access: AccessContext, id: string, input: { paymentAmount: string; maxFee: string; requiresAcceptance: boolean }) {
   requirePermission(access, "payments:prepare");
   return transaction((db) => {
     const current = getBillTerms(access, id);
-    if(BigInt(current.fundedClearingAmount)>0n&&BigInt(current.remainingLiability)<=0n)throw new ApiError(409,"This invoice was discharged into funded escrow rights and has no new installment to prepare","CLEARED_LIABILITY");
+    if((BigInt(current.fundedClearingAmount)>0n||BigInt(current.acceptedCreditAmount)>0n)&&BigInt(current.remainingLiability)<=0n)throw new ApiError(409,"This invoice has no remaining liability after its accepted credits or funded discharge","CLEARED_LIABILITY");
     if (!current.payment_id) throw new ApiError(409, "This invoice has no unpaid installment to change", "TERMS_LOCKED");
     const payment = getPayment(access, current.payment_id);
     assertNoActiveClearing(access.organizationId, payment.id);
@@ -80,7 +81,7 @@ export function addBillInstallment(access: AccessContext, id: string, input: { a
   requirePermission(access, "payments:prepare");
   return transaction((db) => {
     const current = getBillTerms(access, id);
-    if(BigInt(current.fundedClearingAmount)>0n&&BigInt(current.remainingLiability)<=0n)throw new ApiError(409,"This invoice was discharged into funded escrow rights and has no new installment to prepare","CLEARED_LIABILITY");
+    if((BigInt(current.fundedClearingAmount)>0n||BigInt(current.acceptedCreditAmount)>0n)&&BigInt(current.remainingLiability)<=0n)throw new ApiError(409,"This invoice has no remaining liability after its accepted credits or funded discharge","CLEARED_LIABILITY");
     if (current.payment_id) assertNoActiveClearing(access.organizationId, current.payment_id);
     if (current.status === "disputed" || current.installments.some((item) => !["paid", "cancelled", "partially_paid"].includes(item.status))) throw new ApiError(409, "Reconcile the earlier installment before preparing another", "PRIOR_INSTALLMENT_UNRESOLVED");
     if (current.installments.some(item => item.status === "partially_paid" && !row("SELECT original_payment_id FROM partial_remainders WHERE original_payment_id=?", item.id))) throw new ApiError(409, "Prepare this terminal partial payment's explicitly reviewed remainder before another installment", "PARTIAL_REMAINDER_REQUIRED");
