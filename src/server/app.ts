@@ -37,15 +37,15 @@ app.use("*", async (c, next) => {
   await next();
 });
 const defaultBodyLimit = bodyLimit({
-    maxSize: 1_048_576,
-    onError: (c) =>
-      c.json(
-        {
-          error: "Submit a request smaller than 1 MB",
-          code: "REQUEST_TOO_LARGE",
-        },
-        413,
-      ),
+  maxSize: 1_048_576,
+  onError: (c) =>
+    c.json(
+      {
+        error: "Submit a request smaller than 1 MB",
+        code: "REQUEST_TOO_LARGE",
+      },
+      413,
+    ),
 });
 app.use("*", async (c, next) => {
   if (c.req.method === "POST" && /^\/api\/organizations\/[^/]+\/documents\/upload$/.test(c.req.path)) return next();
