@@ -3,6 +3,7 @@ import { rows, transaction } from "../db";
 import { getAccess } from "../identity/session";
 import { csvCell } from "../reconciliation/export";
 import { aggregateInsights, compareCosts, comparisonInput, insightWindow, type InsightAttempt, type InsightPayment, type InsightSubscription } from "./model";
+import { observedCompanyCosts } from "./observed-costs";
 
 function financeAccess(access: AccessContext) { const live = getAccess(access.userId, access.organizationId); for (const permission of ["company:read", "payments:read", "reports:read"]) requirePermission(live, permission); return live; }
 export function companyInsights(access: AccessContext, data: unknown = {}, at = new Date()) {
@@ -16,7 +17,7 @@ export function companyInsights(access: AccessContext, data: unknown = {}, at = 
     const subscriptions = bound(rows<InsightSubscription>("SELECT amount,refunded_amount,status FROM billing_invoices WHERE organization_id=? AND confirmed_at>=? AND confirmed_at<? AND status IN ('paid','credit_required','refunded') ORDER BY confirmed_at,id LIMIT 5001", live.organizationId, window.start, window.endExclusive), 5000, "subscription_confirmations");
     const events = (table: "clearing_setoffs" | "clearing_funded_discharges", category: string) => bound(rows<{ amount: string }>(`SELECT amount FROM ${table} WHERE organization_id=? AND created_at>=? AND created_at<? ORDER BY created_at,id LIMIT 5001`, live.organizationId, window.start, window.endExclusive), 5000, category);
     const acceptedCredits = bound(rows<{ amount: string }>("SELECT v.amount FROM invoice_credit_notes n JOIN invoice_credit_versions v ON v.note_id=n.id AND v.version=n.accepted_version WHERE n.organization_id=? AND n.status='accepted' AND n.accepted_at>=? AND n.accepted_at<? ORDER BY n.accepted_at,n.id LIMIT 5001", live.organizationId, window.start, window.endExclusive), 5000, "accepted_supplier_credits");
-    return { window, ...aggregateInsights({ acceptedCredits, payments, attempts, subscriptions, setoffs: events("clearing_setoffs", "noncash_discharge"), fundedDischarges: events("clearing_funded_discharges", "funded_discharge"), truncated }),
+    return { window, ...aggregateInsights({ acceptedCredits, payments, attempts, subscriptions, setoffs: events("clearing_setoffs", "noncash_discharge"), fundedDischarges: events("clearing_funded_discharges", "funded_discharge"), truncated }),observedCosts:observedCompanyCosts(live.organizationId,window),
       scopes: { payments: "Payments created in this inclusive UTC window, with their latest recorded outcomes observed now. These are not settlement-date cash flows. Principal includes retired and replacement records and must not be treated as unique invoice liability.",
         discharges: "Invoice discharge records created in this UTC window. Noncash setoff and funded escrow rights are separate from token delivery and company treasury cash.", subscriptions: "Subscription invoices confirmed in this UTC window, with refunds observed now. Their service periods and refund dates can fall outside the window.",
         costs: "Source spend is recorded USDC consumption, including incomplete outcomes. Signed spend-minus-delivery spread is not a measured network fee. Closed-route spread excludes unmeasured gas, funding conversion, storage and destination fees; negative spread is not a rebate.",
@@ -48,7 +49,28 @@ export function companyInsightsCsv(access: AccessContext, data: unknown = {}) {
   add("recorded_invoice_events", "funded_escrow_discharge", report.discharge.fundedEscrow, "microUSDC", report.scopes.discharges);
   add("accepted_supplier_credit_events", "accepted_supplier_credit", report.credits.acceptedAmount, "microUSDC", report.scopes.credits);
   add("accepted_supplier_credit_events", "accepted_credit_records", report.credits.acceptedRecords, "notes", report.scopes.credits);
-  for (const key of Object.keys(report.measurements)) add("unmeasured", key, null, "unavailable", "Unknown, not zero. No all-in fee or universal savings claim.");
+  const observed=report.observedCosts,feeNote=observed.scope+" "+observed.limits;
+  for(const network of observed.networks) {
+    add("fee_observation_window",`${network.network}_actual_native_burn`,network.transactions?network.actualBurnAtomic:null,"yoctoNEAR",feeNote);
+    add("fee_observation_window",`${network.network}_unique_transactions`,network.transactions,"transactions",feeNote);
+    add("fee_observation_window",`${network.network}_distinct_fee_payers`,network.feePayers,"payers",feeNote);
+    add("fee_observation_window",`${network.network}_payment_reference_transactions`,network.paymentReferences,"transactions",feeNote);
+    add("fee_observation_window",`${network.network}_funding_reference_transactions`,network.fundingReferences,"transactions",feeNote);
+  }
+  add("approved_fee_valuation_observed_now","reviewed_derived_fee_estimate",observed.valuation.estimatedMicroUSDC,"microUSDC",observed.valuation.basis+" This is an accounting estimate for the fee observation cohort, not actual USDC spend or the payment-creation route cohort.");
+  add("approved_fee_valuation_observed_now","native_burn_covered",observed.valuation.nativeBurnCoveredAtomic,"yoctoNEAR","Mainnet fee evidence covered by an unambiguous approved valuation. "+observed.valuation.basis);
+  add("approved_fee_valuation_observed_now","transactions_covered",observed.valuation.transactionsCovered,"transactions","Denominator: mainnet verified fee observations in this window; no prorating of groups crossing the window.");
+  add("approved_fee_valuation_observed_now","unvalued_mainnet_transactions",observed.valuation.unvaluedMainnetTransactions,"transactions",observed.valuation.basis);
+  for(const field of ["approvedGroups","postedGroups","exactGroups","halfEvenToCentGroups","precisionHeldGroups","conflictingGroups","boundaryGroups","invalidGroups"] as const)add("approved_fee_valuation_observed_now",field,observed.valuation[field],"groups",observed.valuation.basis);
+  add("approved_fee_valuation_observed_now","complete_approved_view_inspection",observed.valuation.inspectionComplete?"yes":"no","status","No valuation subtotal is reported when the bounded inspection could miss another approved view or group member.");
+  add("approved_fee_valuation_observed_now","reviewed_rate_date_range",observed.valuation.rateDates.length?`${observed.valuation.rateDates[0]} to ${observed.valuation.rateDates.at(-1)}`:null,"UTC dates","Native and functional-currency/USDC rates can have different reviewed dates. This is a valuation estimate, not an executed FX price or observed conversion cost.");
+  for(const currency of observed.valuation.functionalCurrencies)add("approved_fee_valuation_observed_now",`${currency.currency}_approved_functional_valuation`,currency.functionalCents,`cents_${currency.currency}`,"Approved accounting value, not an observed currency payment or an additional fee. One group is counted once across identical approved bookkeeping views; incompatible views are excluded.");
+  add("fee_observation_coverage","included_evidence_records",observed.coverage.includedRecords,"records",feeNote);
+  add("fee_observation_coverage","invalid_or_conflicting_records_excluded",observed.coverage.invalidOrConflictingRecords,"records",feeNote);
+  add("fee_observation_coverage","duplicate_records_excluded",observed.coverage.duplicateRecordsExcluded,"records",feeNote);
+  add("fee_observation_coverage","complete_bounded_inspection",observed.coverage.complete?"yes":"no","status",observed.coverage.truncated.length?`Narrow the fee observation window. Limits reached: ${observed.coverage.truncated.join(", ")}`:feeNote);
+  for(const key of Object.keys(observed.unknown))add("fee_observation_unmeasured_costs",key,null,"unavailable",feeNote);
+  for (const key of Object.keys(report.measurements)) add("payment_cohort_complete_cost_unavailable", key, null, "unavailable", "Complete payment-cohort measurement remains unknown, not zero. Separately recorded fee-observation evidence is listed in its own scope; no all-in fee or universal savings claim.");
   add("coverage", "complete", report.coverage.complete ? "yes" : "no", "status", report.coverage.truncated.length ? `Included bounded sample; narrow the UTC window. Truncated: ${report.coverage.truncated.join(", ")}` : "A bounded local record snapshot, not independent live-chain verification.");
   const headers = ["from_utc", "to_utc_inclusive", "observed_at", "scope", "metric", "value", "unit", "note", "privacy"];
   return [headers, ...records.map(record => [report.window.from, report.window.to, report.window.observedAt, record.scope, record.metric, record.value, record.unit, record.note, report.scopes.privacy])].map(values => values.map(csvCell).join(",")).join("\r\n");
