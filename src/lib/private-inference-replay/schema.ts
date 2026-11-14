@@ -70,12 +70,24 @@ export type ReplayFieldPath = z.infer<typeof replayFieldPath>;
 export function parseReplayDisclosure(text: string): ReplayDisclosure {
   if (new TextEncoder().encode(text).length > REPLAY_MAX_DISCLOSURE_BYTES)
     throw new Error("Local replay key disclosure exceeds its limit");
-  return replayDisclosureSchema.parse(JSON.parse(text));
+  try {
+    return replayDisclosureSchema.parse(JSON.parse(text));
+  } catch {
+    throw new Error(
+      "The local replay key disclosure is invalid or unsupported",
+    );
+  }
 }
 export function parseReplayExpectations(text: string): ReplayExpectations {
   if (new TextEncoder().encode(text).length > REPLAY_MAX_EXPECTATIONS_BYTES)
     throw new Error("Local replay expectations exceed their limit");
-  return replayExpectationsSchema.parse(JSON.parse(text));
+  try {
+    return replayExpectationsSchema.parse(JSON.parse(text));
+  } catch {
+    throw new Error(
+      "The separate replay expectations are invalid or unsupported",
+    );
+  }
 }
 export function clearReplayDisclosure(
   value: ReplayDisclosure | null | undefined,
