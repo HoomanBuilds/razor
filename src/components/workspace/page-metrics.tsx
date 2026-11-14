@@ -10,6 +10,15 @@ export function focusWorkspaceForm(id: string) {
   let remaining = 8;
   const focus = () => {
     const form = document.getElementById(id);
+    const hiddenPanels:HTMLElement[]=[];
+    let parent=form?.parentElement;
+    while(parent){if(parent.hidden&&parent.getAttribute("role")==="tabpanel")hiddenPanels.push(parent);parent=parent.parentElement;}
+    const hiddenPanel=hiddenPanels.at(-1);
+    if(hiddenPanel){
+      const tab=document.getElementById(hiddenPanel.getAttribute("aria-labelledby") || "");
+      if(tab instanceof HTMLButtonElement&&!tab.disabled&&tab.getAttribute("role")==="tab"&&tab.getAttribute("aria-controls")===hiddenPanel.id&&tab.getClientRects().length){tab.click();if(remaining-- > 0)requestAnimationFrame(focus);}
+      return;
+    }
     if (form && !form.closest('[hidden], [aria-hidden="true"]')) {
       const drawer = form.closest("dialog");
       if (drawer && !drawer.open && !document.querySelector('[data-task-drawer][data-wallet-suspended="true"]')) drawer.showModal();
