@@ -79,7 +79,8 @@ export function listDocuments(access: AccessContext, query: unknown = {}) {
 export function getDocument(access: AccessContext, id: string) {
   const value = getStored(access, id);
   const similar = value.text_hash ? rows<{ id: string; bill_id: string | null }>("SELECT id,bill_id FROM invoice_documents WHERE organization_id=? AND text_hash=? AND id<>? ORDER BY created_at LIMIT 10", access.organizationId, value.text_hash, value.id) : [];
-  return { ...summary(value), text: value.text_ciphertext ? decrypt(value.text_ciphertext) : "", needsVision: value.needs_vision === 1, analysis: value.analysis_ciphertext ? JSON.parse(decrypt(value.analysis_ciphertext)) : null, similarDocumentIds: similar.map(item => item.id), review: value.review_ciphertext ? JSON.parse(decrypt(value.review_ciphertext)) : null };
+  const sources = rows<{ provider: string; channelName: string; receivedAt: string }>("SELECT c.provider,c.label AS channelName,e.created_at AS receivedAt FROM invoice_channel_events e JOIN invoice_channels c ON c.id=e.channel_id WHERE e.document_id=? AND e.organization_id=? AND e.status='received' ORDER BY e.created_at LIMIT 10", value.id, access.organizationId);
+  return { ...summary(value), sources, text: value.text_ciphertext ? decrypt(value.text_ciphertext) : "", needsVision: value.needs_vision === 1, analysis: value.analysis_ciphertext ? JSON.parse(decrypt(value.analysis_ciphertext)) : null, similarDocumentIds: similar.map(item => item.id), review: value.review_ciphertext ? JSON.parse(decrypt(value.review_ciphertext)) : null };
 }
 
 export function documentOriginal(access: AccessContext, id: string) {

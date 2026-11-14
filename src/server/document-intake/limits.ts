@@ -14,6 +14,41 @@ export const DOCUMENT_LIMITS = {
   renderedBytes: 8 * 1024 * 1024,
 } as const;
 
+let activeIngress = 0;
+
+export async function withDocumentIngress<T>(work: () => Promise<T>) {
+  if (activeIngress >= 2) throw new ApiError(429, "The file inbox is receiving other uploads. Retry shortly", "DOCUMENT_UPLOAD_BUSY");
+  activeIngress++;
+  try { return await work(); } finally { activeIngress--; }
+}
+
+export async function boundedInvoiceRequest(request: Request, maxBytes: number) {
+  const declared = request.headers.get("content-length");
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) throw new ApiError(413, "The invoice request exceeds its size limit", "DOCUMENT_SIZE_INVALID");
+  if (!request.body) return request;
+  const reader = request.body.getReader(), chunks: Uint8Array[] = [];
+  let size = 0, timedOut = false;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  const timer = setTimeout(() => { timedOut = true; cancel(); }, DOCUMENT_LIMITS.processMs);
+  request.signal.addEventListener("abort", cancel, { once: true });
+  try {
+    if (request.signal.aborted) throw new ApiError(408, "The invoice upload was interrupted", "DOCUMENT_UPLOAD_INTERRUPTED");
+    while (true) {
+      const chunk = await reader.read();
+      if (timedOut || request.signal.aborted) throw new ApiError(408, "The invoice upload timed out or was interrupted", "DOCUMENT_UPLOAD_INTERRUPTED");
+      if (chunk.done) break;
+      size += chunk.value.length;
+      if (size > maxBytes) throw new ApiError(413, "The invoice request exceeds its size limit", "DOCUMENT_SIZE_INVALID");
+      chunks.push(chunk.value);
+    }
+    const headers = new Headers(request.headers); headers.set("content-length", String(size)); headers.delete("transfer-encoding");
+    return new Request(request, { headers, body: new Uint8Array(Buffer.concat(chunks, size)) });
+  } finally {
+    clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
+    await reader.cancel().catch(() => {}); reader.releaseLock();
+  }
+}
+
 export type DocumentKind = "pdf" | "png" | "jpeg";
 export const mediaTypes = { pdf: "application/pdf", png: "image/png", jpeg: "image/jpeg" } as const;
 
