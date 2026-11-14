@@ -4,6 +4,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt, hashToken } from "../identity/crypto";
 import { getRecipient, getRecipientVersion } from "../identity/recipients";
 import { audit, getAccess } from "../identity/session";
+import { assertBillUnassigned } from "../financing/accounting";
 import type { Payment } from "../payments/types";
 import { acceptanceInput, decisionInput, digest, pageInput, proposalInput, revisionInput, type BillRecord, type CreditNote, type CreditReview, type NoteRecord, type SupplierBill } from "./model";
 export type { CreditNote, CreditReview, SupplierBill } from "./model";
@@ -58,6 +59,7 @@ export function rejectCredit(userId:string,org:string,id:string,data:unknown){co
 function review(userId:string,org:string,id:string):CreditReview {
  const note=companyNote(userId,org,id),bill=invoice(org,note.bill_id),payments=installments(bill),proposal=view(note),locks:CreditReview["locks"]=[],drafts:CreditReview["draftsToRetire"]=[];
  const lock=(code:string,message:string,paymentId?:string)=>{locks.push({code,message,...(paymentId?{paymentId}:{})});};
+ try{assertBillUnassigned(org,bill.id);}catch(error){if(error instanceof ApiError)lock(error.code,error.message);else throw error;}
  try{supplierBill(note.supplier_user_id,bill.id);}catch(error){if(error instanceof ApiError)lock(error.code,error.message);else throw error;}
  if(note.status!=="proposed")lock("CREDIT_NOT_PROPOSED","Only the current supplier proposal can be accepted");
  if(bill.status==="disputed")lock("CREDIT_BILL_DISPUTED","Resolve the invoice dispute through ordinary review first");

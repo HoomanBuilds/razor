@@ -17,6 +17,10 @@ function verifiedCredit(organizationId: string, funding: FundingLeg) {
   const amount = receipts.reduce((sum, receipt) => sum + BigInt(receipt.amount), 0n);
   return funding.status === "confirmed" && amount > 0n && amount === BigInt(funding.credited_amount) ? amount : 0n;
 }
+
+function isFinancingCredit(organizationId: string, fundingId: string) {
+  return !!row("SELECT id FROM funding_credit_receipts WHERE organization_id=? AND funding_id=? AND CASE WHEN json_valid(evidence) THEN json_extract(evidence,'$.sharedDeposit.deposit_id') ELSE NULL END LIKE 'loan:%' LIMIT 1", organizationId, fundingId);
+}
 function clientRestrictions(organizationId: string) {
   const holds = reservePositions(organizationId).filter(item => !["released", "closed"].includes(item.state));
   return { funding: new Set(holds.map(item => item.reserve.funding_id).filter(Boolean)), unassigned: holds.some(item => !item.reserve.funding_id) };
@@ -30,6 +34,7 @@ export function classifyProjectFunding(access: AccessContext, input: { fundingId
   return transaction(db => {
     const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", input.fundingId, access.organizationId);
     if (!funding || verifiedCredit(access.organizationId, funding) === 0n) throw new ApiError(409, "Classify only funding backed by final verified NEAR token receipts", "PROJECT_FUNDING_UNVERIFIED");
+    if (input.classification !== "internal_transfer" && isFinancingCredit(access.organizationId, funding.id)) throw new ApiError(409, "A verified loan advance is financing cash with a separate repayment liability. It cannot be classified as earned revenue or a client deposit", "PROJECT_FINANCING_NOT_REVENUE");
     const held = clientRestrictions(access.organizationId);
     if (input.classification === "earned_revenue" && (held.unassigned || held.funding.has(funding.id))) throw new ApiError(409, "Resolve or attribute active client cash earmarks before classifying this receipt as earned", "PROJECT_CLIENT_FUNDS_HELD");
     const existing = row<Entry>("SELECT * FROM project_funding_classifications WHERE funding_id=? AND organization_id=?", funding.id, access.organizationId);

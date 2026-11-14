@@ -59,6 +59,8 @@ import { AccountingPanel } from "./accounting";
 import { SupportPanel } from "./support";
 import { CompanyInsightsPanel } from "./company-insights";
 import { WorkflowFeedback, WorkflowFeedbackSummary } from "./workflow-feedback";
+import { CompanyPrivateAgreements } from "../private-agreements/panels";
+import { WorkingCapitalPanel } from "./financing";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -73,6 +75,7 @@ const navigation = [
   { id: "clearing", title: "Business clearing", icon: Building2 },
   { id: "recipients", title: "Payees", icon: Users },
   { id: "treasury", title: "Treasury", icon: Building2 },
+  { id: "financing", title: "Working capital", icon: CreditCard },
   { id: "assistant", title: "Private assistant", icon: Sparkles },
   { id: "activity", title: "Activity & reports", icon: Activity },
   { id: "accounting", title: "Accounting", icon: BookOpen },
@@ -458,7 +461,7 @@ function CompanyWorkspace({
       ) : section === "support" ? (
         <SupportPanel />
       ) : section === "procurement" ? (
-        <div className="grid gap-6"><ProcurementPanel /><VendorCommitments /></div>
+        <div className="grid gap-6"><ProcurementPanel /><CompanyPrivateAgreements /><VendorCommitments /></div>
       ) : section === "bills" ? (
         <div className="grid gap-6">
           <InvoiceInbox />
@@ -476,6 +479,8 @@ function CompanyWorkspace({
           <ClientReservesPanel />
           <FundingRequestsPanel />
         </div>
+      ) : section === "financing" ? (
+        <WorkingCapitalPanel />
       ) : section === "assistant" ? (
         <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
       ) : section === "activity" ? (

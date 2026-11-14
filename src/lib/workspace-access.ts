@@ -13,6 +13,7 @@ const requirements: Record<Section, readonly string[]> = {
   clearing: ["company:read", "payments:read"],
   recipients: ["company:read", "recipients:read"],
   treasury: ["company:read"],
+  financing: ["company:read", "payments:read"],
   assistant: ["company:read", "payments:read"],
   activity: ["company:read", "reports:read"],
   billing: ["company:read"],

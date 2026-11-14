@@ -1040,6 +1040,7 @@ export function CompanyPrivateAgreements({
   assets?: readonly QuoteAsset[];
 }) {
   const { organization, base, revision, refresh } = useWorkspace();
+  const catalog = useResource<{ tokens: QuoteAsset[] }>(assets.length ? null : "/assets", revision);
   if (
     !["company:read", "payments:read"].every((permission) =>
       organization.permissions?.includes(permission),
@@ -1053,7 +1054,7 @@ export function CompanyPrivateAgreements({
       base={`${base}/private-agreements`}
       refreshRevision={revision}
       onRefresh={refresh}
-      assets={assets}
+      assets={assets.length ? assets : catalog.data?.tokens ?? []}
       canPrepare={
         organization.permissions?.includes("payments:prepare") === true
       }

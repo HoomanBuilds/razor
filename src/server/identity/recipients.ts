@@ -9,6 +9,7 @@ import { appOrigin, audit, requireOrganization, requireUser } from "./session";
 import { parseCsv } from "../../lib/csv";
 import { getSupportedTokens, nativeUsdc, type Token } from "../payments/intents";
 import { canonicalNetwork, DestinationError, normalizeDestination } from "../../lib/recipient-destination";
+import { assertBillUnassigned } from "../financing/accounting";
 
 export interface RecipientRecord {
   id: string; organization_id: string; user_id: string | null; name: string; email: string | null; kind: string;
@@ -183,6 +184,7 @@ recipientRoutes.patch("/:orgId/recipients/:recipientId",requireOrganization("rec
     if(existing.version!==input.expectedVersion) throw new ApiError(409,"This recipient changed. Refresh before saving.","RECIPIENT_VERSION_CHANGED");
     const email=input.email?.toLowerCase() || null;
     const identityChanged=existing.email!==email;
+    if(identityChanged || input.kind!==existing.kind) for(const bill of rows<{id:string}>("SELECT id FROM bills WHERE organization_id=? AND recipient_id=?",orgId,id)) assertBillUnassigned(orgId,bill.id);
     db.prepare("UPDATE recipients SET name = ?,email = ?,kind = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = 0,preference_status = 'pending_confirmation',confirmed_at = NULL,user_id = CASE WHEN ? THEN NULL ELSE user_id END,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
       .run(encrypt(input.name),email?encrypt(email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(identityChanged),new Date().toISOString(),id,orgId,input.expectedVersion);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
@@ -202,6 +204,7 @@ recipientRoutes.delete("/:orgId/recipients/:recipientId",requireOrganization("re
   const orgId=c.req.param("orgId"),id=c.req.param("recipientId");
   transaction((db)=>{
     getRecipient(orgId,id);
+    for(const bill of rows<{id:string}>("SELECT id FROM bills WHERE organization_id=? AND recipient_id=?",orgId,id)) assertBillUnassigned(orgId,bill.id);
     db.prepare("UPDATE recipients SET archived = 1,version = version + 1,updated_at = ?,invitation_token_hash = NULL WHERE id = ? AND organization_id = ?").run(new Date().toISOString(),id,orgId);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.archived",id);

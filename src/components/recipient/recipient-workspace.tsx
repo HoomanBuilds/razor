@@ -12,6 +12,8 @@ import { PersonalExpenses } from "../personal-expenses";
 import { PersonalProcurement } from "../personal-procurement";
 import { RecipientDistributions } from "../recipient-distributions";
 import { SupplierInvoiceCredits } from "../invoice-credits";
+import { SupplierPrivateAgreements } from "../private-agreements/panels";
+import { LenderFinancingPanel } from "../financing-lenders";
 
 interface Profile {historicalOnly?:boolean;recipient:{id:string;name:string;kind:string;version:number;primary_asset:string;primary_network:string;primary_address:string;primary_memo?:string|null;backup_network:string|null;backup_address:string|null;fallback_consent:number;preference_status:string;confirmed_at:string|null;archived:number};company:{id:string;name:string}}
 interface Attempt {destination_symbol?:string|null;destination_decimals?:number|null;confirmedOutputAtomic?:string|null;id:string;route:string;state:string;destination_asset:string;destination_network:string;destination_address:string;destination_memo?:string|null;expected_output:string;reportedOutputAtomic:string|null;destination_tx_hash:string|null;source_tx_hash:string|null;treasuryReceipt:string|null}
@@ -119,6 +121,8 @@ export function RecipientWorkspace() {
     <Panel title="My payment history" description="USDC entitlement is separate from the received asset and network. Recorded settlement and provider reports are identified separately."><Field label="Payer profile"><select className={control} value={profileFilter} onChange={event=>{setProfileFilter(event.target.value);setPaymentPage(1);}}><option value="">All my payer profiles</option>{workspace?.profiles.map(profile=><option key={profile.recipient.id} value={profile.recipient.id}>{profile.company.name} - {profile.recipient.name}</option>)}</select></Field>{payments.error?<p role="alert" className="mt-4 text-sm text-destructive">{payments.error}</p>:null}<div className="mt-4">{payments.loading?<Empty>Loading your payments...</Empty>:payments.data?.payments.length?<PaymentHistory payments={payments.data.payments} assets={assets}/>:<Empty>No payments have been created for these linked profiles yet.</Empty>}</div>{payments.data&&<HistoryPager {...payments.data} loading={payments.loading} label="Payment history pages" onPage={setPaymentPage}/>}</Panel>
     <PersonalExpenses refreshRevision={revision} />
     <PersonalProcurement refreshRevision={revision} assets={assets} />
+    <SupplierPrivateAgreements refreshRevision={revision} assets={assets} />
+    <LenderFinancingPanel />
     <RecipientDistributions revision={revision} />
     <SupplierInvoiceCredits refreshRevision={revision} />
     <InvoiceSubmission profiles={workspace?.profiles || []} onSubmitted={async()=>{setRequestPage(1);await load();}}/>

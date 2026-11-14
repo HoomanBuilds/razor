@@ -40,6 +40,8 @@ import { accountingRoutes, accountingOAuthRoutes } from "./accounting";
 import { supportRoutes } from "./support";
 import { insightsRoutes } from "./insights";
 import { companyCreditRoutes, supplierCreditRoutes } from "./invoice-credits";
+import { companyPrivateAgreementRoutes, supplierPrivateAgreementRoutes } from "./private-agreements";
+import { financingRoutes, lenderFinancingRoutes } from "./financing";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -105,6 +107,8 @@ app.route("/recipient-distributions", recipientDistributionRoutes);
 app.route("/accounting-oauth", accountingOAuthRoutes);
 app.route("/support", supportRoutes);
 app.route("/supplier-invoice-credits", supplierCreditRoutes);
+app.route("/supplier-private-agreements", supplierPrivateAgreementRoutes);
+app.route("/financing", lenderFinancingRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/account", accountRecoveryRoutes);
 app.route("/funding-requests", publicFundingRoutes);
@@ -147,6 +151,8 @@ app.route("/organizations/:orgId/company-private", companyPrivateRoutes);
 app.route("/organizations/:orgId/accounting", accountingRoutes);
 app.route("/organizations/:orgId/insights", insightsRoutes);
 app.route("/organizations/:orgId/invoice-credits", companyCreditRoutes);
+app.route("/organizations/:orgId/private-agreements", companyPrivateAgreementRoutes);
+app.route("/organizations/:orgId/financing", financingRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );

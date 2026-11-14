@@ -9,6 +9,7 @@ import { computeClearing, describeCommittedClearing, hash, type ClearingOptimiza
 import { finalContext, readiness, roundEvidence, settings, verifyRegistration } from "./chain";
 import type { FinalEvidence, Link, Manifest, Registration, Round } from "./types";
 import { consumeBillCommitment } from "../vendor-commitments/service";
+import { assertBillUnassigned } from "../financing/accounting";
 
 const now = () => new Date().toISOString();
 interface Bill { id: string; organization_id: string; recipient_id: string; reference: string; title: string; amount: string; setoff_amount: string; accepted_credit_amount:string; max_fee: string; payment_id: string | null; status: string; due_date: string | null; requires_acceptance: number; milestone_accepted_at: string | null; project_reference: string | null; cost_center_reference: string | null }
@@ -50,6 +51,7 @@ function activePayment(paymentId: string, exceptRound?: string) {
 }
 
 export function eligibleTerms(organizationId: string, billId: string, exceptRound?: string) {
+  assertBillUnassigned(organizationId, billId);
   const bill = row<Bill>("SELECT * FROM bills WHERE id=? AND organization_id=?", billId, organizationId);
   if (!bill?.payment_id) throw new ApiError(409, "Select an invoice with an unpaid payment draft", "CLEARING_BILL_INELIGIBLE");
   const payment = row<Payment>("SELECT * FROM payments WHERE id=? AND organization_id=?", bill.payment_id, organizationId), recipient = getRecipient(organizationId, bill.recipient_id);
