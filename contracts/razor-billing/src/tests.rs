@@ -177,7 +177,7 @@ fn native_reserve_quote_and_exact_boundary_preserve_current_storage() {
     let storage_bytes = 400;
     let storage_cost = env::storage_byte_cost().as_yoctonear() * storage_bytes as u128;
     let mut builder = context("owner.testnet", 1);
-    builder.storage_usage(storage_bytes).account_balance(NearToken::from_yoctonear(storage_cost + 5));
+    builder.storage_usage(storage_bytes).account_balance(NearToken::from_yoctonear(storage_cost + 4));
     testing_env!(builder.build());
     let quote = billing.get_native_reserve();
     assert_eq!(quote.balance, U128(storage_cost + 5));
