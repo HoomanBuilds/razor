@@ -7,6 +7,8 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { treasuryArgs, view, validNearAccount } from "../payments/near";
 import { purgePrivateEvidence } from "../reconciliation/evidence";
 import { purgeFinancePlans } from "../assistant/finance";
+import { purgeDocumentRetention } from "../document-intake/service";
+import { purgeExpiredPayrollImports } from "../payroll-import/service";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import type {
   AgentMandate,
@@ -701,6 +703,8 @@ export function purgeRetention(access: AccessContext) {
     .run(access.organizationId, iso());
   purgePrivateEvidence(access.organizationId);
   purgeFinancePlans();
+  purgeDocumentRetention();
+  purgeExpiredPayrollImports();
   return { purged: Number(result.changes) };
 }
 export function overview(access: AccessContext) {

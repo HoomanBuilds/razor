@@ -6,6 +6,16 @@ The server verifies fresh Gateway and model attestations before sending invoice 
 
 Razor's application server receives the original text and decrypted output. This feature protects inference transport and processing; it does not conceal invoices from the organization or its application operator. A valid attestation proves the checked execution identity and byte binding. It does not establish that an invoice is truthful or the model's extraction is correct.
 
+## Invoice file intake
+
+The Bills workspace accepts PDF, PNG and JPEG originals up to 3 MB. Files, filenames, extracted text and retained review data are encrypted in company-scoped storage. Uploading does not approve payment, select a new receiving address or require an AI credential. A preparer can inspect the source, correct text and agree a USDC obligation manually before creating the ordinary approval draft.
+
+PDFs support up to eight pages. Text PDFs use isolated extraction; scans and mixed text/image PDFs use bounded page rasterization before verified NEAR AI image processing. Image content uses the same SDK field encryption, model identity and signed-response requirements as text. The chosen model must support image input. Missing credentials, tools or unsupported model input leave an explicit manual-review path, without another inference provider.
+
+PDF processing requires Linux `prlimit`, `pdfinfo`, `pdftotext` and `pdftoppm` in the standard system binary directories. Readiness reports missing tools. One native parser job runs at a time with 256 MB address-space and bounded CPU, runtime, page count, image dimensions, output and temporary files. Images are limited to 4,000 pixels per side and 12 megapixels. Upload requests are separately authenticated and bounded; the ordinary API request limit stays 1 MB.
+
+`DOCUMENT_RETENTION_DAYS` is an integer from 1 to 30, default 7. It controls the retained file/source record separately from inference-draft retention. Expiry or explicit deletion removes the original and associated retained analysis without deleting a previously created bill, its approval or payment history. Cleanup runs on document access and through the existing operations retention job. Backups follow the operator's storage policy. Telegram, watched-folder and WhatsApp intake are separately tracked workstreams, not enabled by browser upload.
+
 ## Configuration
 
 Use Node.js 24.22.1 or newer. Configure these server variables:

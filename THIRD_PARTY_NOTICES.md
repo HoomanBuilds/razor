@@ -6,6 +6,10 @@ Razor adapts selected source components and integration patterns rather than ado
 
 Additional adapted modules retain their applicable license notices alongside the source. Dependency licenses remain applicable to their respective packages.
 
+- Payroll column mapping and exact locale normalization adapt MIT-licensed Blindroll logic. See the [notice](src/lib/payroll-import.NOTICE).
+- Bounded invoice-document processing adapts reviewed MIT-licensed patterns from GetLeash and Bursar. See the [notice](src/server/document-intake/NOTICE). Native PDF tools retain their own applicable licenses.
+- The bounded maximum-weight clearing solver adapts MIT-licensed Setoff logic. See the [notice](src/server/clearing/circulation.NOTICE).
+
 - XRP address encoding in `src/lib/recipient-destination.ts` adapts the Apache-2.0 ripple-address-codec layout. See its [notice](src/lib/recipient-destination.NOTICE) and [license](src/lib/licenses/XRPL-APACHE-2.0.txt).
 
 - Token and network logos use direct React components from [Web3 Icons](https://github.com/0xa3k5/web3icons), version 4.1.25, under the [MIT license](src/lib/licenses/WEB3ICONS-MIT.txt). Logo availability is presentation metadata and does not determine asset or network support.

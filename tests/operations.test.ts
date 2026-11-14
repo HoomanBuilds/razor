@@ -8,6 +8,8 @@ import { createRecurring, listNotices, readNotice, setRecurring, saveMandate } f
 import { tickOperations } from "../src/server/operations/worker";
 import { executeApprovedAttempt } from "../src/server/operations/executor";
 import type { OperationJob } from "../src/server/operations/types";
+import { createImportDraft } from "../src/server/payroll-import/service";
+import { reviewDocument, uploadDocument } from "../src/server/document-intake/service";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "ac".repeat(32);
@@ -26,6 +28,25 @@ function fixture() {
   const due = new Date(Date.now() - 60_000).toISOString();
   return { access, invoice, recipientId, due };
 }
+
+test("scheduled retention removes expired intake sources while preserving their financial records", async () => {
+  const { access, invoice, recipientId } = fixture();
+  const imported = createImportDraft(access, {
+    requestKey: randomUUID(), filename: "retention.csv", source: `recipient_id,amount\n${recipientId},10`,
+    settings: { delimiter: ",", decimal: ".", thousands: "", defaultCurrency: "USDC", defaultMaxFee: "1", mapping: { recipientId: "recipient_id", amount: "amount" } },
+    corrections: {}, resolutions: {},
+  });
+  const uploaded = await uploadDocument(access, { filename: "retention.png", mediaType: "image/png", bytes: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/amcAAAAASUVORK5CYII=", "base64") });
+  const reviewed = reviewDocument(access, uploaded.document.id, { revision: uploaded.document.revision, sourceHash: uploaded.document.sourceHash, recipientId, reference: "retain-bill", title: "Retained financial record", agreedUSDC: "10", maxFee: "1", reviewConfirmed: true });
+  const db = getDb();
+  db.prepare("UPDATE payroll_import_drafts SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(imported.id);
+  db.prepare("UPDATE invoice_documents SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(uploaded.document.id);
+  await tickOperations({ organizationId: access.organizationId, maxJobs: 20 });
+  assert.equal(row<{ payload_ciphertext: string }>("SELECT payload_ciphertext FROM payroll_import_drafts WHERE id=?", imported.id)!.payload_ciphertext, "");
+  assert.equal(row("SELECT id FROM invoice_documents WHERE id=?", uploaded.document.id), undefined);
+  assert.ok(row("SELECT id FROM bills WHERE id=?", reviewed.billId));
+  assert.equal(row<{ status: string }>("SELECT status FROM bills WHERE id=?", invoice.id)!.status, "approved");
+});
 
 test("durable recurring jobs create one unapproved draft across ticks and recovered leases", async () => {
   const { access, invoice, due } = fixture();

@@ -12,6 +12,8 @@ node --max-old-space-size=512 --import tsx scripts/worker.ts --organization=comp
 
 Use the same `DATABASE_PATH` and `DATA_ENCRYPTION_KEY` as the web application. The CLI processes up to 20 jobs serially per tick, then waits 15 seconds. HTTP `POST /organizations/:orgId/operations/tick` processes at most five jobs and requires `company:manage` plus `payments:read`. A separate process or scheduled task is required for continuous work; a web page alone does not run the scheduler.
 
+The daily retention job also deletes expired encrypted invoice-file originals and purges expired payroll-import source/corrections. Document retention follows `DOCUMENT_RETENTION_DAYS` (default 7, range 1-30); payroll-import sources expire after seven days. Completed bills, pay runs and their accounting history remain available. Access-triggered expiry remains active when the background worker is stopped.
+
 ## Recurring drafts
 
 Company managers with payment preparation access can capture an approved bill or pay run with an interval of 1 to 365 company-zone calendar days or 1 to 12 calendar months, first due date and maximum total entitlement per cycle. The encrypted snapshot binds approved amounts, fee ceilings, membership access and confirmed recipient versions. Changed source terms, changed receiving preferences, a disputed source or lost creator access hold the cycle. A manager reviews the change and creates a new template.
