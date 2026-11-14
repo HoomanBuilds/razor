@@ -12,6 +12,7 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | [Competitive feature checklist](specs/competitive-gap-checklist.md) | All 22 competitive workstreams, acceptance IDs, dependencies and separate implementation/live-evidence gates |
 | [Product overview](specs/product-overview.md) | Customer, product promise, roles, workflows, scope, NEAR services and product defaults |
 | [Business model](specs/business-model.md) | Subscription strategy, zero payment markup, versioned pilot prices and billing boundaries |
+| [Demo film](specs/demo-video.md) | Company-focused narration, cut plan, fictional dataset and simulation boundaries for a video under four minutes |
 | [Subscription billing](specs/subscription-billing.md) | Company plans, signed NEAR checkout, subscription periods, safe entitlements and shared usage |
 | [Billing operations](billing-operations.md) | Catalog administration, deployment, issuer keys, refunds and reconciliation |
 | [Feature catalog](specs/features.md) | Required behavior and acceptance criteria for each product area |
