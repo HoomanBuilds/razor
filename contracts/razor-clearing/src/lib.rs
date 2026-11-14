@@ -6,6 +6,9 @@ use near_sdk::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "../../native-reserve.rs"]
+mod native_reserve;
+
 mod cash;
 pub use cash::{
     CashAccount, CashDeposit, CashKind, CashPending, CashPosition, CashRound, CashStage, CashTerms,
@@ -117,6 +120,8 @@ pub struct Clearing {
     treasury_id: AccountId,
     token_contract: AccountId,
     paused: bool,
+    native_storage_base_bytes: u64,
+    native_customer_deposits: u128,
     rounds: IterableMap<String, Round>,
     locks: IterableMap<String, String>,
     cash_network: Option<String>,
@@ -130,11 +135,17 @@ pub struct Clearing {
 impl Clearing {
     #[init]
     pub fn new(owner_id: AccountId, treasury_id: AccountId, token_contract: AccountId) -> Self {
+        require!(
+            owner_id != env::current_account_id(),
+            "OWNER_MUST_BE_RECOVERABLE"
+        );
         Self {
             owner_id,
             treasury_id,
             token_contract,
             paused: false,
+            native_storage_base_bytes: 0,
+            native_customer_deposits: 0,
             rounds: IterableMap::new(b"r"),
             locks: IterableMap::new(b"l"),
             cash_network: None,
@@ -144,6 +155,13 @@ impl Clearing {
             cash_paid: 0,
         }
     }
+    pub fn get_native_reserve(&self) -> native_reserve::NativeReserveView {
+        native_reserve::reserve_view(self.protected_native_storage())
+    }
+    #[payable]
+    pub fn withdraw_native_reserve(&mut self, amount: U128) -> Promise {
+        native_reserve::withdraw(&self.owner_id, amount, self.protected_native_storage())
+    }
     pub fn get_config(&self) -> ClearingConfig {
         ClearingConfig {
             treasury_id: self.treasury_id.clone(),
@@ -151,7 +169,7 @@ impl Clearing {
             paused: self.paused,
             max_participants: 8,
             max_obligations: 32,
-            state_version: 2,
+            state_version: 3,
             cash_network: self.cash_network.clone(),
             max_cash_deposits_per_company: cash::MAX_DEPOSITS_PER_COMPANY,
             cash_accepted: U128(self.cash_accepted),
@@ -213,6 +231,13 @@ impl Clearing {
                 None => config,
             });
         }
+        if self.native_customer_deposits == 0 {
+            self.native_storage_base_bytes = env::storage_usage();
+        }
+        self.native_customer_deposits = self
+            .native_customer_deposits
+            .checked_add(env::attached_deposit().as_yoctonear())
+            .expect("NATIVE_STORAGE_OVERFLOW");
         let round_id = manifest.id.clone();
         let cash = manifest.cash.as_ref().map(CashRound::new);
         self.rounds.insert(
@@ -481,6 +506,19 @@ impl Clearing {
 }
 
 impl Clearing {
+    fn protected_native_storage(&self) -> u128 {
+        let price = env::storage_byte_cost().as_yoctonear();
+        let baseline = (self.native_storage_base_bytes as u128)
+            .checked_mul(price)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        let protected = baseline
+            .checked_add(self.native_customer_deposits)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        let used = (env::storage_usage() as u128)
+            .checked_mul(price)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        protected.saturating_sub(used)
+    }
     fn live(&self, round_id: &str, manifest_hash: &str) -> Round {
         let round = self.rounds.get(round_id).expect("ROUND_NOT_FOUND").clone();
         require!(

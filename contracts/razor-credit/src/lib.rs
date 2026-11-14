@@ -7,6 +7,9 @@ use near_sdk::{
     store::LookupMap,
 };
 
+#[path = "../../native-reserve.rs"]
+mod native_reserve;
+
 const MAINNET_USDC: &str = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 const DAY: u64 = 86_400_000;
 const STORAGE_BYTES: u64 = 32_768;
@@ -129,6 +132,8 @@ pub struct Credit {
     treasury_id: AccountId,
     network: String,
     paused: bool,
+    native_storage_base_bytes: u64,
+    native_customer_deposits: u128,
     loans: LookupMap<String, Loan>,
     deposits: LookupMap<Vec<u8>, bool>,
 }
@@ -162,12 +167,21 @@ impl Credit {
             treasury_id,
             network,
             paused: false,
+            native_storage_base_bytes: 0,
+            native_customer_deposits: 0,
             loans: LookupMap::new(b"c"),
             deposits: LookupMap::new(b"d"),
         }
     }
+    pub fn get_native_reserve(&self) -> native_reserve::NativeReserveView {
+        native_reserve::reserve_view(self.protected_native_storage())
+    }
+    #[payable]
+    pub fn withdraw_native_reserve(&mut self, amount: U128) -> Promise {
+        native_reserve::withdraw(&self.owner_id, amount, self.protected_native_storage())
+    }
     pub fn get_config(&self) -> serde_json::Value {
-        json!({"version":1,"network":self.network,"token_contract":self.token_contract,"treasury_id":self.treasury_id,"paused":self.paused,"storage_bytes":U64(STORAGE_BYTES),"minimum_registration_deposit":self.registration_cost()})
+        json!({"version":2,"network":self.network,"token_contract":self.token_contract,"treasury_id":self.treasury_id,"paused":self.paused,"storage_bytes":U64(STORAGE_BYTES),"minimum_registration_deposit":self.registration_cost()})
     }
     pub fn registration_cost(&self) -> U128 {
         U128(
@@ -253,6 +267,13 @@ impl Credit {
             env::attached_deposit().as_yoctonear() >= self.registration_cost().0,
             "STORAGE_DEPOSIT_REQUIRED"
         );
+        if self.native_customer_deposits == 0 {
+            self.native_storage_base_bytes = env::storage_usage();
+        }
+        self.native_customer_deposits = self
+            .native_customer_deposits
+            .checked_add(env::attached_deposit().as_yoctonear())
+            .expect("NATIVE_STORAGE_OVERFLOW");
         let loan = Loan {
             terms: terms.clone(),
             terms_json,
@@ -699,6 +720,19 @@ impl Credit {
     }
 }
 impl Credit {
+    fn protected_native_storage(&self) -> u128 {
+        let price = env::storage_byte_cost().as_yoctonear();
+        let baseline = (self.native_storage_base_bytes as u128)
+            .checked_mul(price)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        let protected = baseline
+            .checked_add(self.native_customer_deposits)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        let used = (env::storage_usage() as u128)
+            .checked_mul(price)
+            .expect("NATIVE_STORAGE_OVERFLOW");
+        protected.saturating_sub(used)
+    }
     fn load(&self, id: &String, hash: &str) -> Loan {
         let loan = self.loans.get(id).cloned().expect("LOAN_NOT_FOUND");
         require!(loan.terms_hash == hash, "TERMS_HASH_MISMATCH");

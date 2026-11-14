@@ -122,7 +122,7 @@ pub(super) fn treasury(owner: &str, version: &str) -> serde_json::Value {
 fn typed_views_lookup_arguments_and_digests_preserve_exact_json_bytes() {
     let contract = setup();
     let expected = serde_json::json!({"treasury_id":contract.treasury_id,"token_contract":contract.token_contract,"paused":contract.paused,"max_participants":8,"max_obligations":32,
-        "state_version":2,"cash_network":null,"max_cash_deposits_per_company":8,"cash_accepted":"0","cash_available":"0","cash_pending":"0","cash_paid":"0"});
+        "state_version":3,"cash_network":null,"max_cash_deposits_per_company":8,"cash_accepted":"0","cash_available":"0","cash_pending":"0","cash_paid":"0"});
     assert_eq!(
         serde_json::to_vec(&contract.get_config()).unwrap(),
         serde_json::to_vec(&expected).unwrap()
@@ -327,5 +327,72 @@ fn shared_obligation_locks_include_company_identity() {
     assert_ne!(
         obligation_key(&terms, &terms.obligations[0]),
         obligation_key(&terms, &other)
+    );
+}
+
+
+#[test]
+fn native_reserve_protects_full_registration_budget_after_rejection() {
+    let mut contract = setup();
+    let terms = manifest("round-native-reserve");
+    let wire = serde_json::to_string(&terms).unwrap();
+    let deposit = contract.registration_cost(wire.clone()).0 + 123;
+    testing_env!(
+        context("alice.testnet")
+            .attached_deposit(NearToken::from_yoctonear(deposit))
+            .build()
+    );
+    let baseline = env::storage_usage();
+    contract.register_round(wire.clone(), digest(&wire)).detach();
+    contract.rounds.flush();
+    assert_eq!(contract.native_storage_base_bytes, baseline);
+    assert_eq!(contract.native_customer_deposits, deposit);
+    callbacks(vec![
+        treasury("invalid.testnet", "1"),
+        treasury("bob.testnet", "1"),
+    ]);
+    assert!(!contract.on_registered(terms.id.clone()));
+    assert_eq!(contract.get_round(terms.id).unwrap().status, "rejected");
+    assert_eq!(contract.native_storage_base_bytes, baseline);
+    assert_eq!(contract.native_customer_deposits, deposit);
+}
+
+#[test]
+fn native_reserve_recovers_only_excess_to_owner_even_when_paused() {
+    use near_sdk::{mock::MockAction, test_utils::get_created_receipts};
+
+    let mut contract = setup();
+    contract.paused = true;
+    contract.native_storage_base_bytes = 100_000;
+    contract.native_customer_deposits = NearToken::from_near(1).as_yoctonear();
+    testing_env!(
+        context("operator.testnet")
+            .account_balance(NearToken::from_near(10))
+            .storage_usage(100_000)
+            .build()
+    );
+    assert_eq!(
+        contract.protected_native_storage(),
+        NearToken::from_near(1).as_yoctonear()
+    );
+    let available = contract.get_native_reserve().withdrawable.0;
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| contract.withdraw_native_reserve(U128(available)))).is_err()
+    );
+    let amount = U128(NearToken::from_near(2).as_yoctonear());
+    contract.withdraw_native_reserve(amount).detach();
+    let receipts = get_created_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].receiver_id, account("operator.testnet"));
+    assert!(
+        matches!(receipts[0].actions.as_slice(), [MockAction::Transfer { deposit, .. }] if deposit.as_yoctonear() == amount.0)
+    );
+    assert_eq!(
+        contract.native_customer_deposits,
+        NearToken::from_near(1).as_yoctonear()
+    );
+    assert_eq!(
+        (contract.cash_accepted, contract.cash_available, contract.cash_pending, contract.cash_paid),
+        (0, 0, 0, 0)
     );
 }
