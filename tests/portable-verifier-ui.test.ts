@@ -7,11 +7,14 @@ import { PortableEvidenceExport } from "../src/components/verification/packet-ex
 
 test("public verifier starts in offline local-file mode with visible independent trust and hardware limits", () => {
   const html = renderToStaticMarkup(createElement(PacketVerifier));
-  assert.equal((html.match(/type="file"/g) || []).length, 2);
-  assert.match(html, /No workspace sign-in, AI key or file upload is required/);
-  assert.match(html, /Offline checks make no network requests/);
-  assert.match(html, /independently reviewed trust input/);
-  assert.match(html, /does not replace Intel\/NVIDIA hardware verification/);
+  for (const label of ["Evidence packet", "Separately reviewed signer, deployment and financial expectations", "Final challenge and response-commitment evidence", "Independently reviewed anchor trust", "Destination evidence", "Independent exact destination and token behavior expectations", "Settlement-link evidence", "Independent source, payment/route/version, reporter and destination trust"]) {
+    assert.ok(html.includes(label));
+  }
+  assert.equal((html.match(/type="file"/g) || []).length, 8);
+  assert.match(html, /No sign-in, AI credential, file\s*upload or wallet action is required/);
+  assert.match(html, /Authorize bounded archival NEAR lookups/);
+  assert.match(html, /Separately reviewed signer/);
+  assert.match(html, /Intel\/NVIDIA collateral/);
   assert.doesNotMatch(html, /type="checkbox"[^>]*checked/);
   assert.match(html, /disabled=""/);
 });

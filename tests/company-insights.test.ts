@@ -96,7 +96,7 @@ test("current company finance roles and tenant scope gate reports, calculator an
   const report = companyInsights(a.access, window, at); assert.equal(report.payments.included, 1); assert.equal(report.payments.deliveredPrincipal, "100000000");
   const csv = companyInsightsCsv(a.access, window), serialized = JSON.stringify(report);
   for (const secret of ["CONFIDENTIAL-SALARY", "PRIVATE-OWNER-WALLET", "PRIVATE-DESTINATION", "SECRET-PAYROLL-DOCUMENT", a.access.organizationId, b.access.organizationId]) { assert.ok(!csv.includes(secret)); assert.ok(!serialized.includes(secret)); }
-  assert.ok(csv.includes("Unknown, not zero")); assert.ok(csv.includes("payment_creation_cohort_observed_now"));
+  assert.match(csv, /unknown, not zero/i); assert.ok(csv.includes("payment_creation_cohort_observed_now"));
   assert.throws(() => companyInsights({ ...a.access, organizationId: b.access.organizationId }, window, at), code("COMPANY_ACCESS_DENIED"));
   getDb().prepare("UPDATE organization_roles SET permissions_json='[\"company:read\",\"payments:read\"]' WHERE id=?").run(a.role);
   for (const action of [() => companyInsights(a.access, window, at), () => companyInsightsCsv(a.access, window), () => compareCompanyCosts(a.access, comparison())]) assert.throws(action, code("FORBIDDEN"));

@@ -114,8 +114,8 @@ test("imports use current company permissions and confirmed recipient ownership 
 const sdkFixture = (auditPath: string) => `
 import { appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { InferenceClient, prepareE2eeChatRequest } from ${JSON.stringify(pathToFileURL(resolve("node_modules/@nearai/inference-sdk/dist/node.js")).href)};
-import { ed25519 } from ${JSON.stringify(pathToFileURL(resolve("node_modules/@noble/curves/ed25519.js")).href)};
+import { InferenceClient, prepareE2eeChatRequest } from ${JSON.stringify(import.meta.resolve("@nearai/inference-sdk/node"))};
+import { ed25519 } from ${JSON.stringify(import.meta.resolve("@noble/curves/ed25519.js"))};
 const hash=value=>createHash('sha256').update(value).digest('hex'), secret=new Uint8Array(32).fill(7);
 const signer={signingAlgo:'ed25519',signingAddress:Buffer.from(ed25519.getPublicKey(secret)).toString('hex')};
 const compose='fixture-reviewed-compose', report={nonce:'11'.repeat(32),signer,intelQuote:'fixture-not-hardware-evidence',eventLog:'[]',appCompose:compose};
