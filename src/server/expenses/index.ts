@@ -1,9 +1,10 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { ApiError, type AppEnv } from "../context";
-import { requireUser } from "../identity/session";
+import { requireFreshSession, requireUser } from "../identity/session";
 import { DOCUMENT_LIMITS, boundedInvoiceRequest, withDocumentIngress } from "../document-intake/limits";
 import * as service from "./service";
+import * as returns from "./returns";
 
 const page = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1) });
 const cancel = z.object({ expectedVersion: z.number().int().positive() }).strict();
@@ -17,6 +18,12 @@ function originalResponse(c: Context<AppEnv>, source: ReturnType<typeof service.
 
 export const personalExpenseRoutes = new Hono<AppEnv>();
 personalExpenseRoutes.use("*", requireUser);
+personalExpenseRoutes.get("/:id/paid-corrections",c=>c.json(returns.personalExpenseCorrections(c.get("userId"),c.req.param("id"))));
+personalExpenseRoutes.post("/:id/paid-corrections",async c=>{requireFreshSession(c);return c.json({correction:await returns.proposeExpenseCorrection(c.get("userId"),"staff",c.req.param("id"),await c.req.json())});});
+personalExpenseRoutes.post("/corrections/:correctionId/decision",async c=>{requireFreshSession(c);return c.json({correction:await returns.decideExpenseCorrection(c.get("userId"),"staff",c.req.param("correctionId"),await c.req.json())});});
+personalExpenseRoutes.post("/corrections/:correctionId/prepare-return",async c=>{requireFreshSession(c);return c.json({correction:await returns.prepareExpenseReturn(c.get("userId"),c.req.param("correctionId"),await c.req.json())});});
+personalExpenseRoutes.post("/corrections/:correctionId/legs/:legId/begin",async c=>{requireFreshSession(c);return c.json(await returns.beginExpenseReturn(c.get("userId"),c.req.param("correctionId"),c.req.param("legId"),await c.req.json()));});
+personalExpenseRoutes.post("/corrections/:correctionId/legs/:legId/reconcile",async c=>c.json({correction:await returns.reconcileExpenseReturn(c.get("userId"),"staff",c.req.param("correctionId"),c.req.param("legId"),await c.req.json())}));
 personalExpenseRoutes.get("/", c => c.json(service.personalExpenseOverview(c.get("userId"), page.parse(c.req.query()).page)));
 personalExpenseRoutes.get("/:id", c => c.json({ expense: service.ownExpense(c.get("userId"), c.req.param("id")) }));
 personalExpenseRoutes.get("/:id/original", c => originalResponse(c, service.ownExpenseOriginal(c.get("userId"), c.req.param("id"))));
@@ -40,6 +47,9 @@ personalExpenseRoutes.post("/profiles/:recipientId/upload", async c => {
 });
 
 export const companyExpenseRoutes = new Hono<AppEnv>();
+companyExpenseRoutes.post("/:id/paid-corrections",async c=>{requireFreshSession(c);return c.json({correction:await returns.proposeExpenseCorrection(c.get("userId"),"company",c.req.param("id"),await c.req.json(),c.get("access"))});});
+companyExpenseRoutes.post("/corrections/:correctionId/decision",async c=>{requireFreshSession(c);return c.json({correction:await returns.decideExpenseCorrection(c.get("userId"),"company",c.req.param("correctionId"),await c.req.json(),c.get("access"))});});
+companyExpenseRoutes.post("/corrections/:correctionId/legs/:legId/reconcile",async c=>c.json({correction:await returns.reconcileExpenseReturn(c.get("userId"),"company",c.req.param("correctionId"),c.req.param("legId"),await c.req.json(),c.get("access"))}));
 companyExpenseRoutes.get("/", c => c.json(service.listCompanyExpenses(c.get("access"), page.parse(c.req.query()).page)));
 companyExpenseRoutes.get("/policy", c => c.json({ policy: service.getExpensePolicy(c.get("access")) }));
 companyExpenseRoutes.put("/policy", async c => c.json({ policy: service.saveExpensePolicy(c.get("access"), await c.req.json()) }));

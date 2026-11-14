@@ -9,6 +9,7 @@ import { documentOriginal, getDocument, reviewDocument, uploadDocument } from ".
 import { documentFilename, validateDocument } from "../document-intake/limits";
 import { getBillTerms } from "../business/bill-terms";
 import { formatUnits, parseUnits } from "../../lib/money";
+import { expenseCorrectionSummary } from "./returns";
 
 const now = () => new Date().toISOString();
 const hash = (value: unknown) => createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest("hex");
@@ -135,7 +136,7 @@ function projection(expense: Expense, sourceText = false) {
   return { id: expense.id, organizationId: expense.organization_id, companyName: row<{ name: string }>("SELECT name FROM organizations WHERE id=?", expense.organization_id)!.name,
     submitterName: decrypt(expense.submitter_name_ciphertext), recipientId: expense.recipient_id, recipientVersion: expense.recipient_version, version: expense.version, amount: expense.amount,
     fields: payload(expense), status: expense.status, billId: expense.bill_id, replacesExpenseId: expense.replaces_expense_id, supersededBy: expense.superseded_by, canReplace: replacementEligible(expense), review: expense.review_ciphertext ? JSON.parse(decrypt(expense.review_ciphertext)) as { note: string; decision: string; at: string; maxFee?: string } : null,
-    policyMonth: expense.policy_month, submittedAt: expense.submitted_at, updatedAt: expense.updated_at, receipt: receipt(expense, sourceText), reimbursement: reimbursement(expense),
+    policyMonth: expense.policy_month, submittedAt: expense.submitted_at, updatedAt: expense.updated_at, receipt: receipt(expense, sourceText), reimbursement: reimbursement(expense),paidCorrections:expenseCorrectionSummary(expense.id),
     events: rows<{ decision: string; note_ciphertext: string; created_at: string }>("SELECT decision,note_ciphertext,created_at FROM expense_events WHERE expense_id=? ORDER BY created_at,id", expense.id).map(value => ({ decision: value.decision, note: decrypt(value.note_ciphertext), at: value.created_at })) };
 }
 function verifyCurrentRecipient(expense: Expense) {
