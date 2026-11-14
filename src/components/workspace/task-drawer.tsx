@@ -20,7 +20,7 @@ export async function withTaskDrawerWallet<T>(operation:()=>Promise<T>):Promise<
   finally{if(drawer){delete drawer.dataset.walletSuspended;if(drawer.isConnected&&!drawer.open&&!document.querySelector('dialog[data-task-drawer][open]')){try{drawer.showModal();}catch{}}}}
 }
 
-export function TaskDrawer({ id, title, description, children, busySelector = '[aria-busy="true"]' }: { id: string; title: string; description?: string; children: ReactNode; busySelector?: string }) {
+export function TaskDrawer({ id, title, description, children, busySelector = '[aria-busy="true"]', wide=false }: { id: string; title: string; description?: string; children: ReactNode; busySelector?: string; wide?:boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [busy, setBusy] = useState(false),[suspended,setSuspended]=useState(false);
@@ -38,7 +38,7 @@ export function TaskDrawer({ id, title, description, children, busySelector = '[
     if (event.target !== event.currentTarget) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
-  }} className="fixed inset-0 m-0 ml-auto h-dvh max-h-none w-full max-w-3xl border-0 bg-background p-0 text-foreground shadow-2xl backdrop:bg-black/25 backdrop:backdrop-blur-[2px]">
+  }} className={`fixed inset-0 m-0 ml-auto h-dvh max-h-none w-full ${wide ? "max-w-6xl" : "max-w-3xl"} border-0 bg-background p-0 text-foreground shadow-2xl backdrop:bg-black/25 backdrop:backdrop-blur-[2px]`}>
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-start justify-between gap-4 border-b bg-white px-5 py-5 sm:px-8 sm:py-6"><div className="min-w-0"><p className="text-[11px] font-medium uppercase tracking-[.12em] text-muted-foreground">Razor workspace</p><h2 id={titleId} className="mt-2 text-xl font-medium tracking-tight">{title}</h2>{description && <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{description}</p>}</div><button type="button" onClick={close} disabled={busy} aria-label={`Close ${title}`} className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40"><X size={18}/></button></header>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-8">{children}</div>
