@@ -21,11 +21,13 @@ The native checks exercise financial state machines and company isolation. The o
 
 ## Operator deployment
 
-Choose distinct funded shared-treasury, clearing and owner accounts. Generate unsigned deployment commands with:
+For basic company funding and payments, choose distinct funded shared-treasury and owner accounts. Clearing, paid billing, financing and inference commitments are separate optional deployments. Generate unsigned deployment commands with:
 
 ```sh
-npm run prepare:deployment -- --network mainnet --treasury YOUR_TREASURY.near --clearing YOUR_CLEARING.near --owner YOUR_OWNER.near
+npm run prepare:deployment -- --network mainnet --treasury YOUR_TREASURY.near --owner YOUR_OWNER.near
 ```
+
+Add `--clearing YOUR_CLEARING.near` to the same plan when enabling business clearing. An omitted clearing account requires no clearing artifact, registration, setup step or environment pin. Existing explicit clearing plans retain their code/version/identity checks.
 
 The treasury initializes atomically with `new({owner_id,token_contract})`. Clearing initializes with `new({owner_id,treasury_id,token_contract})`. The planner fixes mainnet to canonical native NEAR USDC. Testnet requires `--testnet-token`; it cannot establish live Intents support. Add the billing arguments documented in [billing operations](../docs/billing-operations.md) when using paid checkout.
 
@@ -83,4 +85,4 @@ Reproduction evidence is saved in ignored `.data/contract-optimization-*` logs a
 
 The evidence contract stores no company records, tokens or private content. It emits a blinded challenge and later exact wire/report commitments. It does not verify AI or authorize a payment. Its optional deployment needs no token registration or per-company storage allowance. Retire every deployment access key and wait for a later FINAL block before recording. Recorder calls still consume NEAR transaction gas. Independently completed verifier trust is supplied as a local file, rather than inferred from the build manifest or a runtime environment pin. See [private inference](../docs/specs/private-inference.md).
 
-The later crypto-extension compilation produced treasury 663385, clearing 332296, billing 181298, credit 232016 and evidence 110756 bytes. These are optimized artifact sizes, not an audit or a claim of mathematically minimal code. The existing three hashes and credit hash are unchanged; evidence hash is `5YNnSsS9pEuZTXVC9gfa4dRH8Eo8HeuqAhB6QtFqCuuT`. This later pass ran compilation only, with no test suite, deployment, transfer or gas measurement. Required application contracts remain treasury and clearing; billing, credit and evidence are optional deployments for their respective enabled flows.
+The later crypto-extension compilation produced treasury 663385, clearing 332296, billing 181298, credit 232016 and evidence 110756 bytes. These are optimized artifact sizes, not an audit or a claim of mathematically minimal code. The existing three hashes and credit hash are unchanged; evidence hash is `5YNnSsS9pEuZTXVC9gfa4dRH8Eo8HeuqAhB6QtFqCuuT`. This later pass ran compilation only, with no test suite, deployment, transfer or gas measurement. The treasury is the only contract required for basic payments. Clearing, billing, credit and evidence are optional deployments for their respective enabled flows.

@@ -57,6 +57,10 @@ export async function setupPreflight(options: Options = {}) {
   const rpcUrl = env.NEAR_RPC_URL || `https://rpc.${network}.near.org`;
   add("near-rpc", httpUrl(rpcUrl, true) ? "pass" : "blocked", "Use an HTTPS NEAR RPC for the selected network; local HTTP endpoints are accepted for development only.");
   for (const [id, key, file] of artifacts) {
+    if (id === "clearing" && !env.NEAR_CLEARING_ID) {
+      add("clearing-artifact", "disabled", "Business clearing is not configured. Basic treasury funding, payments and recovery do not require its artifact.");
+      continue;
+    }
     try {
       const pin = reviewedArtifactHash(key, file, env, artifactDirectory);
       const path = resolve(artifactDirectory, file);
@@ -66,6 +70,10 @@ export async function setupPreflight(options: Options = {}) {
     } catch { add(`${id}-artifact`, "blocked", `Build the reviewed contract or configure ${key}; a configured pin must match any local artifact.`); }
   }
   for (const [id, key] of [["treasury", "NEAR_TREASURY_ID"], ["clearing", "NEAR_CLEARING_ID"]] as const) {
+    if (id === "clearing" && !env[key]) {
+      add("clearing-account", "disabled", "Business clearing is not configured; basic company payments remain available after treasury setup.");
+      continue;
+    }
     add(`${id}-account`, env[key] && validNearAccount(env[key]) ? "pass" : "blocked", `Configure a deployed, initialized ${key} on the selected network.`);
   }
   if (env.NEAR_TREASURY_ID && env.NEAR_TREASURY_ID === env.NEAR_CLEARING_ID) add("contract-accounts", "blocked", "Shared treasury and clearing require distinct deployment accounts.");
@@ -145,7 +153,7 @@ export async function setupPreflight(options: Options = {}) {
           add("remote-treasury", platform.paused ? "blocked" : "pass", platform.paused ? "The reviewed shared treasury is initialized but paused." : "Shared treasury code, keyless account, architecture, settlement token, registration allowance and token-storage registration match. No per-company code deployment is required.", "remote");
         } catch { add("remote-treasury", "blocked", "Shared treasury code, absence of access keys, initialized platform configuration or token-storage registration could not be verified.", "remote"); }
       } else add("remote-treasury", "not_checked", "Valid shared treasury account and artifact configuration are required before deployment verification.", "remote");
-      if (!failed("clearing-account") && pins.has("clearing") && treasuryToken) {
+      if (env.NEAR_CLEARING_ID && !failed("clearing-account") && pins.has("clearing") && treasuryToken) {
         try {
           const account = env.NEAR_CLEARING_ID!;
           const code = await rpc<{code_hash:string}>("query", {request_type:"view_account", finality:"final", account_id:account});
@@ -153,7 +161,7 @@ export async function setupPreflight(options: Options = {}) {
           if (code.code_hash !== pins.get("clearing") || clearing.treasury_id !== env.NEAR_TREASURY_ID || clearing.token_contract !== treasuryToken || typeof clearing.paused !== "boolean") throw new Error();
           add("remote-clearing", clearing.paused ? "blocked" : "pass", clearing.paused ? "The reviewed clearing contract is initialized but paused." : "Clearing code, shared treasury binding and settlement token match the reviewed deployment.", "remote");
         } catch { add("remote-clearing", "blocked", "Clearing code or initialized settings could not be matched to the shared treasury and settlement token.", "remote"); }
-      } else add("remote-clearing", "not_checked", "Verified shared treasury and clearing configuration are required before clearing deployment verification.", "remote");
+      } else add("remote-clearing", env.NEAR_CLEARING_ID ? "not_checked" : "disabled", "Clearing deployment checks apply only when business clearing is configured; they do not gate basic treasury payments.", "remote");
       if (workerReady && pins.has("treasury")) {
         try {
           const treasury = env.RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID!, executor = env.RAZOR_EXECUTOR_ACCOUNT_ID!;

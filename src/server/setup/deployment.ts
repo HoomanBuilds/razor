@@ -8,7 +8,7 @@ import { validNearAccount } from "../payments/near";
 interface DeploymentInput {
   network: "mainnet" | "testnet";
   treasuryAccount: string;
-  clearingAccount: string;
+  clearingAccount?: string;
   ownerAccount: string;
   testnetToken?: string;
   artifactDirectory?: string;
@@ -83,7 +83,7 @@ export function prepareDeployment(input: DeploymentInput) {
   }
   const accounts = [
     input.treasuryAccount,
-    input.clearingAccount,
+    ...(input.clearingAccount !== undefined ? [input.clearingAccount] : []),
     input.ownerAccount,
     ...(input.billingAccount ? [input.billingAccount] : []),
     ...(input.creditAccount ? [input.creditAccount] : []),
@@ -132,7 +132,7 @@ export function prepareDeployment(input: DeploymentInput) {
     throw new Error(
       "Rebuild the treasury state-version-3 artifact manifest. Claimable pools and standing mandates require fresh deployment accounts; no populated-state migration is supported",
     );
-  if (manifest.clearingStateVersion !== 2)
+  if (input.clearingAccount && manifest.clearingStateVersion !== 2)
     throw new Error(
       "Rebuild the clearing state-version-2 artifact manifest. Funded clearing requires a fresh empty clearing account; no populated-state migration is supported",
     );
@@ -142,12 +142,14 @@ export function prepareDeployment(input: DeploymentInput) {
     "NEAR_TREASURY_CODE_HASH",
     manifest.artifacts,
   );
-  const clearing = artifact(
-    directory,
-    "razor_clearing.wasm",
-    "NEAR_CLEARING_CODE_HASH",
-    manifest.artifacts,
-  );
+  const clearing = input.clearingAccount
+    ? artifact(
+        directory,
+        "razor_clearing.wasm",
+        "NEAR_CLEARING_CODE_HASH",
+        manifest.artifacts,
+      )
+    : null;
   const billing = input.billingAccount
     ? artifact(
         directory,
@@ -185,7 +187,9 @@ export function prepareDeployment(input: DeploymentInput) {
       artifact: treasury,
       args: { owner_id: input.ownerAccount, token_contract: token },
     },
-    {
+  ];
+  if (clearing && input.clearingAccount)
+    deployments.push({
       accountId: input.clearingAccount,
       artifact: clearing,
       args: {
@@ -193,8 +197,7 @@ export function prepareDeployment(input: DeploymentInput) {
         treasury_id: input.treasuryAccount,
         token_contract: token,
       },
-    },
-  ];
+    });
   if (billing && input.billingAccount && input.billingIssuerPublicKey)
     deployments.push({
       accountId: input.billingAccount,
@@ -256,7 +259,7 @@ export function prepareDeployment(input: DeploymentInput) {
     mode: "unsigned_deployment_plan" as const,
     architecture: "shared_v1" as const,
     treasuryStateVersion: 3,
-    clearingStateVersion: 2,
+    ...(clearing ? { clearingStateVersion: 2 } : {}),
     freshAccountsOnly: true,
     populatedStateMigrationSupported: false,
     network: input.network,
@@ -272,7 +275,7 @@ export function prepareDeployment(input: DeploymentInput) {
     ],
     artifacts: [
       treasury,
-      clearing,
+      ...(clearing ? [clearing] : []),
       ...(billing ? [billing] : []),
       ...(credit ? [credit] : []),
       ...(evidence ? [evidence] : []),
@@ -330,38 +333,45 @@ export function prepareDeployment(input: DeploymentInput) {
             note: "Deployment does not publish a financing offer, create a lender or make credit available. An authorized operator must publish actual eligibility and responsibilities in the database after verifying this immutable deployment and token storage. Each loan remains explicitly accepted, storage-funded and backed by real principal.",
           }
         : null,
-    optionalCashClearingSetup: {
-      enabledByDeployment: false,
-      completed: false,
-      signerAccountId: input.ownerAccount,
-      storageRegistration: {
-        receiverId: token,
-        methodName: "storage_deposit",
-        args: { account_id: input.clearingAccount, registration_only: true },
-        gas: "30000000000000",
-        requiresLiveStorageQuote: true,
-        depositQuote: {
-          methodName: "storage_balance_bounds",
-          args: {},
-          field: "min",
-        },
-        note: "Inspect storage_balance_of first. Register the clearing contract only if needed, using the token's live minimum storage deposit; this unsigned plan does not quote or spend it.",
-      },
-      enableCash: {
-        receiverId: input.clearingAccount,
-        methodName: "enable_cash",
-        args: {
-          network: input.network,
-          testnet_token_contract: input.network === "testnet" ? token : null,
-        },
-        gas: "30000000000000",
-        deposit: "1",
-        note: "Optional one-time owner call after verified atomic deployment and token registration. Native USDC deposits, company storage, withdrawals and gas remain separate actions.",
-      },
-      freshStateRequired: true,
-      missingCallbackPolicy:
-        "Keep the original withdrawal pending. No timeout or owner assertion restores it.",
-    },
+    optionalCashClearingSetup:
+      clearing && input.clearingAccount
+        ? {
+            enabledByDeployment: false,
+            completed: false,
+            signerAccountId: input.ownerAccount,
+            storageRegistration: {
+              receiverId: token,
+              methodName: "storage_deposit",
+              args: {
+                account_id: input.clearingAccount,
+                registration_only: true,
+              },
+              gas: "30000000000000",
+              requiresLiveStorageQuote: true,
+              depositQuote: {
+                methodName: "storage_balance_bounds",
+                args: {},
+                field: "min",
+              },
+              note: "Inspect storage_balance_of first. Register the clearing contract only if needed, using the token's live minimum storage deposit; this unsigned plan does not quote or spend it.",
+            },
+            enableCash: {
+              receiverId: input.clearingAccount,
+              methodName: "enable_cash",
+              args: {
+                network: input.network,
+                testnet_token_contract:
+                  input.network === "testnet" ? token : null,
+              },
+              gas: "30000000000000",
+              deposit: "1",
+              note: "Optional one-time owner call after verified atomic deployment and token registration. Native USDC deposits, company storage, withdrawals and gas remain separate actions.",
+            },
+            freshStateRequired: true,
+            missingCallbackPolicy:
+              "Keep the original withdrawal pending. No timeout or owner assertion restores it.",
+          }
+        : null,
     keyRetirement: deployments.map((step) => ({
       accountId: step.accountId,
       required: true,
@@ -394,8 +404,12 @@ export function prepareDeployment(input: DeploymentInput) {
       NEAR_NETWORK: input.network,
       NEAR_TREASURY_ID: input.treasuryAccount,
       NEAR_TREASURY_CODE_HASH: treasury.codeHash,
-      NEAR_CLEARING_ID: input.clearingAccount,
-      NEAR_CLEARING_CODE_HASH: clearing.codeHash,
+      ...(clearing
+        ? {
+            NEAR_CLEARING_ID: input.clearingAccount!,
+            NEAR_CLEARING_CODE_HASH: clearing.codeHash,
+          }
+        : {}),
       ...(billing
         ? {
             RAZOR_BILLING_CONTRACT_ID: input.billingAccount!,

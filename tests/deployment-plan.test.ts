@@ -31,6 +31,7 @@ test("deployment plan preserves canonical mainnet USDC, reviewed hashes and atom
     assert.equal(plan.accountsVerified, false);
     assert.equal(plan.treasuryStateVersion, 3);
     assert.equal(plan.clearingStateVersion, 2);
+    assert.ok(plan.optionalCashClearingSetup);
     assert.equal(plan.optionalCashClearingSetup.completed, false);
     assert.equal(plan.optionalCashClearingSetup.enabledByDeployment, false);
     assert.equal(plan.optionalCashClearingSetup.signerAccountId, input.ownerAccount);
@@ -65,6 +66,7 @@ test("deployment plans reject unsafe identities and mixed mainnet/testnet tokens
     const plan = prepareDeployment({ ...input, network: "testnet", testnetToken: "usdc.testnet" });
     assert.equal(plan.settlementEnabled, false);
     assert.equal(plan.tokenContract, "usdc.testnet");
+    assert.ok(plan.optionalCashClearingSetup);
     assert.deepEqual(plan.optionalCashClearingSetup.enableCash.args, { network: "testnet", testnet_token_contract: "usdc.testnet" });
     assert.equal(plan.optionalCashClearingSetup.storageRegistration.receiverId, "usdc.testnet");
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -147,5 +149,30 @@ test("funded clearing refuses old or unknown state manifests before planning a d
       writeFileSync(path, JSON.stringify(manifest));
       assert.throws(() => prepareDeployment(input), /fresh empty clearing account.*no populated-state migration/);
     }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("basic payments deployment needs only the treasury and rejects invalid explicitly enabled clearing", () => {
+  const { directory, input } = fixture();
+  try {
+    const { clearingAccount, ...core } = input;
+    const path = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(path, "utf8"));
+    manifest.artifacts = manifest.artifacts.filter((item: { file: string }) => item.file === "razor_treasury.wasm");
+    delete manifest.clearingStateVersion;
+    writeFileSync(path, JSON.stringify(manifest));
+    rmSync(join(directory, "razor_clearing.wasm"));
+    rmSync(join(directory, "razor_billing.wasm"));
+    const plan = prepareDeployment(core);
+    assert.deepEqual(plan.steps.map(step => step.accountId), [input.treasuryAccount]);
+    assert.deepEqual(plan.artifacts.map(item => item.file), ["razor_treasury.wasm"]);
+    assert.equal(plan.optionalCashClearingSetup, null);
+    assert.equal(plan.clearingStateVersion, undefined);
+    assert.equal(plan.environment.NEAR_CLEARING_ID, undefined);
+    assert.equal(plan.environment.NEAR_CLEARING_CODE_HASH, undefined);
+    assert.deepEqual(plan.keyRetirement.map(step => step.accountId), [input.treasuryAccount]);
+    assert.throws(() => prepareDeployment({ ...core, clearingAccount }), /clearing state-version-2/);
+    assert.throws(() => prepareDeployment({ ...core, clearingAccount: "" }), /valid/);
+    assert.throws(() => prepareDeployment({ ...core, clearingAccount: input.treasuryAccount }), /distinct/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

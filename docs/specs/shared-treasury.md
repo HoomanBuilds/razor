@@ -38,7 +38,7 @@ Initial registration prepays 8,192 bytes of company state. The contract measures
 
 At mainnet block 224391286 on 13 November 2026, the queried storage price was `10^19` yoctoNEAR per byte. The initial allowance is therefore **0.08192 NEAR**, excluding execution gas. The preceding isolated factory required **4.01036 NEAR** for a company creation deposit, largely because it copied the entire treasury WASM. These amounts are storage capital and allowances, not equivalent burned transaction fees.
 
-Build and deploy the shared treasury, clearing and optional billing contracts using the current manifest and deployment planner. The old factory is excluded from the supported deployment path. Complete token registration, role configuration and deployment-key retirement as described in [contract deployment](../../contracts/README.md). An account retaining a deployment key can still have its code replaced.
+Build and deploy the shared treasury using the current manifest and deployment planner. Add the separate clearing, billing, credit and evidence contracts only when their features are enabled; company registration and ordinary payments do not call them. The old factory is excluded from the supported deployment path. Complete token registration, role configuration and deployment-key retirement as described in [contract deployment](../../contracts/README.md). An account retaining a deployment key can still have its code replaced.
 
 Existing isolated configurations remain explicitly marked `isolated_v1`. This change does not migrate their assets, retag their balances or change immutable deployed contracts. A fresh shared deployment and deliberate migration are required.
 

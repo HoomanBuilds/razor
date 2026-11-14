@@ -19,13 +19,13 @@ try {
   });
   if (values.help) {
     process.stdout.write(
-      "Usage: npm run prepare:deployment -- --network mainnet|testnet --treasury ACCOUNT --clearing ACCOUNT --owner ACCOUNT [--billing ACCOUNT --issuer-public-key ed25519:PUBLIC_KEY] [--credit ACCOUNT] [--evidence ACCOUNT] [--testnet-token ACCOUNT] [--artifacts DIRECTORY]\nPrints reviewed deploy-plus-init commands. Does not connect, sign, send, create accounts or change environment files.\n",
+      "Usage: npm run prepare:deployment -- --network mainnet|testnet --treasury ACCOUNT --owner ACCOUNT [--clearing ACCOUNT] [--billing ACCOUNT --issuer-public-key ed25519:PUBLIC_KEY] [--credit ACCOUNT] [--evidence ACCOUNT] [--testnet-token ACCOUNT] [--artifacts DIRECTORY]\nPrints reviewed deploy-plus-init commands. Does not connect, sign, send, create accounts or change environment files.\n",
     );
   } else {
     if (values.network !== "mainnet" && values.network !== "testnet")
       throw new Error("Pass --network mainnet or --network testnet");
-    if (!values.treasury || !values.clearing || !values.owner)
-      throw new Error("Pass --treasury, --clearing and --owner accounts");
+    if (!values.treasury || !values.owner)
+      throw new Error("Pass --treasury and --owner accounts");
     const plan = prepareDeployment({
       network: values.network,
       treasuryAccount: values.treasury,
