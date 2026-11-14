@@ -97,6 +97,7 @@ fn native_reserve_requires_owner_one_yocto_and_exact_positive_capacity_even_when
     assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(available + 1)))).is_err());
     let protected = treasury.native_customer_unused;
     drop(treasury.withdraw_native_reserve(U128(available)));
+    assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(1)))).is_err());
     assert_eq!(treasury.native_customer_unused, protected);
     let receipts = near_sdk::test_utils::get_created_receipts();
     assert_eq!(receipts.len(), 1);
