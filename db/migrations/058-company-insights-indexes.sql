@@ -3,3 +3,4 @@ CREATE INDEX insights_attempt_payment ON payout_attempts(organization_id,payment
 CREATE INDEX insights_subscription_confirmed ON billing_invoices(organization_id,confirmed_at,id);
 CREATE INDEX insights_noncash_recorded ON clearing_setoffs(organization_id,created_at,id);
 CREATE INDEX insights_funded_recorded ON clearing_funded_discharges(organization_id,created_at,id);
+CREATE INDEX insights_credit_accepted ON invoice_credit_notes(organization_id,status,accepted_at,id);

@@ -61,12 +61,12 @@ test("exact amounts and outcome denominators keep partial, held, unresolved and 
     { id: "draft", status: "draft", amount: "10", total_spent: "0", delivered_amount: "0" },
   ];
   values.attempts = [{ payment_id: "complete", state: "delivered", destination_network: "near", execution_kind: "direct" }, { payment_id: "partial", state: "partially_delivered", destination_network: "near", execution_kind: "direct" }];
-  values.setoffs = [{ amount: "900" }]; values.fundedDischarges = [{ amount: "700" }];
+  values.setoffs = [{ amount: "900" }]; values.fundedDischarges = [{ amount: "700" }]; values.acceptedCredits = [{ amount: "500" }];
   const result = aggregateInsights(values);
   assert.equal(result.payments.deliveredPrincipal, "9007199254740993000050"); assert.equal(result.payments.signedSpread, "105");
   assert.deepEqual(result.payments.outcomes, { successful: 1, partial: 1, held: 1, unresolved: 3, retired: 1, failed: 1, awaiting: 1 });
   assert.deepEqual(result.payments.attemptedSuccessRate, { numerator: 1, denominator: 2, basisPoints: 5000 });
-  assert.equal(result.discharge.noncashSetoff, "900"); assert.equal(result.discharge.fundedEscrow, "700");
+  assert.equal(result.discharge.noncashSetoff, "900"); assert.equal(result.discharge.fundedEscrow, "700"); assert.equal(result.credits.acceptedAmount, "500"); assert.equal(result.credits.acceptedRecords, 1);
 });
 
 test("negative spreads, unresolved route records and truncated samples cannot become observed savings", () => {

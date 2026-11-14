@@ -15,7 +15,7 @@ export function insightWindow(data: unknown = {}, at = new Date()) {
 export interface InsightPayment { id: string; status: string; amount: string; delivered_amount: string; total_spent: string }
 export interface InsightAttempt { payment_id: string; state: string; destination_network: string; execution_kind: string | null }
 export interface InsightSubscription { amount: string; refunded_amount: string; status: string }
-export interface InsightRecords { payments: InsightPayment[]; attempts: InsightAttempt[]; subscriptions: InsightSubscription[]; setoffs: { amount: string }[]; fundedDischarges: { amount: string }[]; truncated: string[] }
+export interface InsightRecords { payments: InsightPayment[]; attempts: InsightAttempt[]; subscriptions: InsightSubscription[]; setoffs: { amount: string }[]; fundedDischarges: { amount: string }[]; acceptedCredits?: { amount: string }[]; truncated: string[] }
 const terminalAttempts = new Set(["delivered", "partially_delivered", "refunded_verified", "closed_unfunded", "cancelled"]);
 function money(value: string) { try { return atomic(value, true); } catch { throw new ApiError(409, "A stored financial amount needs review before these aggregates can be reported", "INSIGHTS_DATA_REVIEW_REQUIRED"); } }
 
@@ -62,6 +62,7 @@ export function aggregateInsights(records: InsightRecords) {
       networkScope: measuredCompleted ? nativeOnly ? "Native NEAR USDC destinations" : "Mixed or externally routed destinations" : "No comparable completed routes", comparisonAvailable },
     subscriptions: { confirmedInvoices: records.subscriptions.length, confirmedPaid: subscriptionPaid.toString(), observedRefunded: subscriptionRefunded.toString(), observedNet: (subscriptionPaid - subscriptionRefunded).toString(), heldForRefundReview: subscriptionHeld.toString() },
     discharge: { noncashSetoff: records.setoffs.reduce((sum, value) => sum + money(value.amount), 0n).toString(), fundedEscrow: records.fundedDischarges.reduce((sum, value) => sum + money(value.amount), 0n).toString(), noncashRecords: records.setoffs.length, fundedRecords: records.fundedDischarges.length },
+    credits: { acceptedAmount: (records.acceptedCredits ?? []).reduce((sum, value) => sum + money(value.amount), 0n).toString(), acceptedRecords: records.acceptedCredits?.length ?? 0 },
     coverage: { complete, truncated: records.truncated, paymentLimit: 5000, attemptLimit: 12000, eventLimit: 5000 },
     measurements: { sourceChainGas: null, nearGas: null, destinationFees: null, storageDeposits: null, fundingConversionCosts: null, totalAllInCost: null },
   };
