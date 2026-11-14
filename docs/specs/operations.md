@@ -10,9 +10,9 @@ node --max-old-space-size=512 --import tsx scripts/worker.ts
 node --max-old-space-size=512 --import tsx scripts/worker.ts --organization=company-id
 ```
 
-Use the same `DATABASE_PATH` and `DATA_ENCRYPTION_KEY` as the web application. The CLI processes up to 20 jobs serially per tick, then waits 15 seconds. HTTP `POST /organizations/:orgId/operations/tick` processes at most five jobs and requires `company:manage` plus `payments:read`. A separate process or scheduled task is required for continuous work; a web page alone does not run the scheduler.
+Use the same `DATABASE_PATH` and `DATA_ENCRYPTION_KEY` as the web application. The CLI processes up to 20 jobs, billing work, one queued invoice-channel event and five webhook deliveries serially per tick, then waits 15 seconds. Each service reports its own failure without skipping the remaining services. `--organization` scopes work and outbound event publication to that company. HTTP `POST /organizations/:orgId/operations/tick` processes at most five financial jobs and requires `company:manage` plus `payments:read`; it does not dispatch global webhooks. A separate process or scheduled task is required for continuous work; a web page alone does not run the scheduler.
 
-The daily retention job also deletes expired encrypted invoice-file originals and purges expired payroll-import source/corrections. Document retention follows `DOCUMENT_RETENTION_DAYS` (default 7, range 1-30); payroll-import sources expire after seven days. Completed bills, pay runs and their accounting history remain available. Access-triggered expiry remains active when the background worker is stopped.
+The daily retention job also deletes expired encrypted invoice-file originals and purges expired payroll-import source/corrections and channel metadata. Document and channel payload retention follows `DOCUMENT_RETENTION_DAYS` (default 7, range 1-30); payroll-import sources expire after seven days. Channel deduplication tombstones expire after 90 days. Completed bills, pay runs and their accounting history remain available. Access-triggered expiry remains active when the background worker is stopped.
 
 ## Recurring drafts
 
@@ -23,6 +23,8 @@ Each occurrence has one `(rule, due time)` identity, and its bill/payrun and pay
 Every generated obligation remains `draft` without an approver or signature. Source approval is not transferred to a future payment. Milestone requirements are preserved while acceptance evidence is cleared. Partial-installment invoice sources require a separate approved bill for the intended recurring amount or manual installment preparation; they are rejected rather than silently repeating the original full invoice liability.
 
 ## Execution and mandates
+
+Optional [native supplier standing authority](native-standing-authority.md) has separate reviewed grants, restricted worker credentials and a 24-hour supplier activation delay. It executes existing human-accepted native-USDC business bills inside permanent worst-case budgets. Cross-chain standing execution remains unavailable. The exact-route mode below remains supported independently.
 
 Without these optional server settings, due work stays labeled as requiring an owner wallet:
 

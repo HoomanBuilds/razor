@@ -9,6 +9,7 @@ import { purgePrivateEvidence } from "../reconciliation/evidence";
 import { purgeFinancePlans } from "../assistant/finance";
 import { purgeDocumentRetention } from "../document-intake/service";
 import { purgeExpiredPayrollImports } from "../payroll-import/service";
+import { purgeInvoiceChannelRetention } from "../invoice-channels/service";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import type {
   AgentMandate,
@@ -705,6 +706,7 @@ export function purgeRetention(access: AccessContext) {
   purgeFinancePlans();
   purgeDocumentRetention();
   purgeExpiredPayrollImports();
+  purgeInvoiceChannelRetention();
   return { purged: Number(result.changes) };
 }
 export function overview(access: AccessContext) {

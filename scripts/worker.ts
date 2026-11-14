@@ -1,5 +1,7 @@
 import { tickOperations } from "../src/server/operations/worker";
 import { tickBilling } from "../src/server/billing/worker";
+import { processPendingInvoiceEvents } from "../src/server/invoice-channels/service";
+import { dispatchIntegrationWebhooks } from "../src/server/integrations";
 
 const args = process.argv.slice(2);
 const organizationId = args.find((arg) => arg.startsWith("--organization="))?.slice("--organization=".length);
@@ -9,8 +11,18 @@ process.on("SIGTERM", () => { stopped = true; });
 process.on("SIGINT", () => { stopped = true; });
 
 do {
-  try { console.info(JSON.stringify({ at: new Date().toISOString(), ...await tickOperations({ organizationId, maxJobs: 20 }), billing: await tickBilling(organizationId) })); }
-  catch { console.error("Operations tick failed. Check database availability and worker configuration."); if (once) process.exitCode = 1; }
+  const result: Record<string, unknown> = { at: new Date().toISOString() };
+  const tasks = [
+    ["operations", () => tickOperations({ organizationId, maxJobs: 20 })],
+    ["billing", () => tickBilling(organizationId)],
+    ["invoiceIntake", () => processPendingInvoiceEvents({ organizationId, maxEvents: 1 })],
+    ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],
+  ] as const;
+  for (const [name, tick] of tasks) {
+    try { result[name] = await tick(); }
+    catch { result[name] = { error: "Tick failed. Check database availability and worker configuration." }; if (once) process.exitCode = 1; }
+  }
+  console.info(JSON.stringify(result));
   if (once || stopped) break;
   await new Promise((resolve) => setTimeout(resolve, 15_000));
 } while (!stopped);
