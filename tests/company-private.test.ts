@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
 import { COMPANY_REVIEW_MAX_BYTES, parseCompanyReview } from "../src/lib/company-private/schema";
 import { readCompanyInvoice } from "../src/server/company-private/processor";
-import { runCompanyPrivateCommand, writePrivateJson } from "../src/server/company-private/command";
+import { writePrivateJson } from "../src/server/company-private/command";
 import { importCompanyInvoice, reviewedCompanyInvoiceInput } from "../src/server/company-private/service";
 import { companyPrivateRoutes } from "../src/server/company-private";
 import { ApiError, type AppEnv } from "../src/server/context";
@@ -71,9 +71,10 @@ test("private JSON output is atomic, mode0600, bounded and never clobbers an exi
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { reviewed: true });
     await assert.rejects(writePrivateJson(join(directory, "too-large.json"), { text: "x".repeat(100) }, 10), hasCode("COMPANY_OUTPUT_TOO_LARGE"));
     assert.deepEqual(await readdir(directory), ["review.json"]);
-    let invoked = false;
-    await assert.rejects(runCompanyPrivateCommand(["--input", join(directory, "invoice.txt"), "--output", path], async () => { invoked = true; throw new Error(); }), hasCode("COMPANY_OUTPUT_EXISTS"));
-    assert.equal(invoked, false);
+    const blocked = spawnSync(process.execPath, ["--max-old-space-size=512", "--import", "tsx", "scripts/process-invoice-private.ts", "--input", join(directory, "invoice.txt"), "--output", path], { cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: "", NEAR_AI_API_KEY: "", NEAR_AI_MODEL: "" }, encoding: "utf8", timeout: 30_000 });
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /existing files are never overwritten/);
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { reviewed: true });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
