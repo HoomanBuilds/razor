@@ -10,10 +10,12 @@ import { liabilityPayments } from "../partial-settlement/model";
 import { assertNoActiveClearing } from "../clearing/locks";
 import { billCommitmentReview, consumeBillCommitment, resolveBillCommitment, type BillCommitmentInput } from "../vendor-commitments/service";
 import { assertOrdinaryExpenseSourceReview } from "../expenses/guard";
+import { fundedBillDischarges } from "../clearing/funded-accounting";
+import { liabilityTotals } from "../reconciliation/liability";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
-  amount: string; setoff_amount: string; max_fee: string; due_date: string | null; status: string;
+  amount: string; setoff_amount: string; funded_clearing_amount: string; max_fee: string; due_date: string | null; status: string;
   line_items: string; evidence: string | null; document_hash: string | null;
   payment_id: string | null; accepted_at: string | null; created_at: string; updated_at: string;
   requires_acceptance: number; milestone_accepted_at: string | null;
@@ -54,10 +56,11 @@ export function listBills(access: AccessContext) {
   requirePermission(access, "payments:read");
   return rows<Bill>("SELECT * FROM bills WHERE organization_id = ? ORDER BY created_at DESC", access.organizationId)
     .map(readableBill).map((bill) => {
-      const installments = rows<{ amount: string; status: string; delivered_amount: string }>("SELECT p.amount,p.status,p.delivered_amount FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=?", bill.id);
-      const delivered = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(bill.setoff_amount), remaining = BigInt(bill.amount) - delivered - setoff;
-      const status = bill.status === "disputed" ? "disputed" : remaining === 0n ? setoff > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : setoff > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : bill.status;
-      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), setoffAmount: setoff.toString(), remainingLiability: remaining.toString(), vendorCommitment: billCommitmentReview(access.organizationId, bill.id) };
+      const installments = rows<{ amount: string; status: string; delivered_amount: string }>("SELECT p.amount,p.status,p.delivered_amount FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND p.organization_id=?", bill.id, access.organizationId);
+      const delivered = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(bill.setoff_amount), funded = BigInt(bill.funded_clearing_amount), remaining = BigInt(bill.amount) - delivered - setoff - funded;
+      const discharged = setoff + funded;
+      const status = bill.status === "disputed" ? "disputed" : remaining === 0n ? discharged > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : discharged > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : bill.status;
+      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), setoffAmount: setoff.toString(), fundedClearingAmount: funded.toString(), fundedClearingDischarges: fundedBillDischarges(access.organizationId,bill.id), remainingLiability: remaining.toString(), vendorCommitment: billCommitmentReview(access.organizationId, bill.id) };
     });
 }
 
@@ -100,6 +103,7 @@ export function approveBill(access: AccessContext, id: string) {
   requirePermission(access, "payments:approve");
   const bill = row<Bill>("SELECT * FROM bills WHERE id = ? AND organization_id = ?", id, access.organizationId);
   if (!bill) throw new ApiError(404, "Bill not found", "NOT_FOUND");
+  if (BigInt(bill.funded_clearing_amount)>0n && liabilityTotals(bill.amount,rows<{amount:string;delivered_amount:string;total_spent:string;status:string}>("SELECT p.amount,p.delivered_amount,p.total_spent,p.status FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND p.organization_id=?",id,access.organizationId),bill.setoff_amount,bill.funded_clearing_amount).remaining===0n) throw new ApiError(409,"This invoice was discharged into separate funded escrow rights and cannot be paid again","CLEARED_LIABILITY");
   if (bill.status === "disputed") throw new ApiError(409, "Resolve the dispute before approval", "BILL_DISPUTED");
   if (bill.requires_acceptance && !bill.milestone_accepted_at) throw new ApiError(409, "Accept the milestone with evidence before approving release", "MILESTONE_ACCEPTANCE_REQUIRED");
   if (!bill.payment_id) throw new ApiError(409, "Ask the preparer to finish this bill's payment draft", "PAYMENT_DRAFT_REQUIRED");
