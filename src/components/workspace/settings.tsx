@@ -6,6 +6,7 @@ import { WalletButtons } from "@/components/auth/sign-in-panel";
 import { TeamAccessPanel } from "./team-access";
 import { TreasuryPolicyPanel } from "./treasury-policy";
 import { FinanceInsightsPanel } from "./finance-insights";
+import { IntegrationsPanel } from "./integrations";
 import { Reconciliation } from "./reconciliation";
 import { useIdentity } from "@/components/auth/identity-provider";
 import { api, RequestError } from "@/lib/api";
@@ -23,6 +24,7 @@ export function CompanySettings() {
     <Panel title="Connected wallets" description="Link proof of control before selecting a source wallet or NEAR treasury owner. Linking a wallet does not move funds."><div className="grid gap-4 lg:grid-cols-2"><div className="grid content-start gap-3">{session.wallets.length ? session.wallets.map((wallet) => <div key={wallet.id} className="rounded-lg border p-4"><div className="mb-2 flex items-center justify-between text-sm"><strong>{wallet.label || `${wallet.family.toUpperCase()} wallet`}</strong><span className="text-xs text-muted-foreground">{wallet.network}</span></div><Address value={wallet.address} network={wallet.network} /></div>) : <Empty>No wallets linked yet.</Empty>}</div><WalletButtons link onComplete={refreshIdentity} /></div><p className="mt-4 text-xs text-muted-foreground">Keep a second verified sign-in method for recovery. Company app access and NEAR signing authority are managed separately.</p></Panel>
     <TreasuryPolicyPanel />
     <TeamAccessPanel />
+    <IntegrationsPanel key={organization.id} />
     {error && <p role="alert" className="rounded-lg border bg-card p-4 text-sm text-destructive">{error}</p>}
   </div>;
 }

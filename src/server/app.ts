@@ -30,6 +30,7 @@ import { billingRoutes } from "./billing";
 import { documentRoutes } from "./document-intake";
 import { invoiceChannelRoutes, invoiceIngressRoutes } from "./invoice-channels";
 import { vendorCommitmentRoutes } from "./vendor-commitments";
+import { integrationMachineRoutes, integrationManagementRoutes } from "./integrations";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -82,6 +83,7 @@ app.onError((error, c) => {
   );
 });
 app.get("/health", (c) => c.json({ service: "razor", status: "ok" }));
+app.route("/integrations", integrationMachineRoutes);
 app.route("/", identityRoutes);
 app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
@@ -120,6 +122,7 @@ app.route("/organizations/:orgId/billing", billingRoutes);
 app.route("/organizations/:orgId/documents", documentRoutes);
 app.route("/organizations/:orgId/invoice-channels", invoiceChannelRoutes);
 app.route("/organizations/:orgId/vendor-commitments", vendorCommitmentRoutes);
+app.route("/organizations/:orgId/integrations", integrationManagementRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
