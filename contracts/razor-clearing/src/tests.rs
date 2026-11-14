@@ -396,3 +396,20 @@ fn native_reserve_recovers_only_excess_to_owner_even_when_paused() {
         (0, 0, 0, 0)
     );
 }
+
+
+#[test]
+fn native_recovery_requires_external_owner_and_dependency_accounts() {
+    testing_env!(context("operator.testnet").build());
+    for (owner, treasury, token) in [
+        ("clearing.testnet", "treasury.testnet", "usdc.testnet"),
+        ("operator.testnet", "clearing.testnet", "usdc.testnet"),
+        ("operator.testnet", "treasury.testnet", "clearing.testnet"),
+    ] {
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                Clearing::new(account(owner), account(treasury), account(token))
+            })).is_err()
+        );
+    }
+}

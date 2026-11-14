@@ -139,6 +139,11 @@ impl Clearing {
             owner_id != env::current_account_id(),
             "OWNER_MUST_BE_RECOVERABLE"
         );
+        require!(
+            token_contract != env::current_account_id()
+                && treasury_id != env::current_account_id(),
+            "INVALID_IDENTITY"
+        );
         Self {
             owner_id,
             treasury_id,
