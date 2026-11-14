@@ -236,12 +236,12 @@ export function saveAccountingMapping(access: AccessContext, id: string, data: u
  });
 }
 interface Source { kind: "bill" | "settlement"; sourceId: string; billId: string; recipientId: string; amount: string; reference: string; title: string; date: string; dueDate:string; sourceDueAt:string|null; companyTimezone:string; hash: string; evidence: string[]; externalBillId?: string }
-interface AccountingBill { id:string;reference:string;title:string;amount:string;recipient_id:string;accepted_at:string|null;status:string;setoff_amount:string;funded_clearing_amount:string;due_date:string|null }
+interface AccountingBill { id:string;reference:string;title:string;amount:string;recipient_id:string;accepted_at:string|null;status:string;setoff_amount:string;funded_clearing_amount:string;accepted_credit_amount:string;due_date:string|null }
 function sourceTerms(access: AccessContext, connection: Connection, kind: "bill" | "settlement", id: string, date: string, reviewedDueDate?:string): Source {
  const bill = kind === "bill" ? row<AccountingBill>("SELECT * FROM bills WHERE id=? AND organization_id=?", id, access.organizationId)
   : row<AccountingBill>("SELECT b.* FROM bills b JOIN bill_installments i ON i.bill_id=b.id JOIN payments p ON p.id=i.payment_id WHERE p.id=? AND p.organization_id=? AND b.organization_id=?", id, access.organizationId, access.organizationId);
  if (!bill) throw new ApiError(404, "The company invoice or settlement was not found", "ACCOUNTING_SOURCE_NOT_FOUND");
- if (!bill.accepted_at || bill.status === "disputed" || bill.setoff_amount !== "0" || bill.funded_clearing_amount !== "0") throw new ApiError(409, "Accept the invoice through ordinary company review first. Disputes, noncash setoff and escrow-backed discharge require separate accounting review", "ACCOUNTING_SOURCE_HELD");
+ if (!bill.accepted_at || bill.status === "disputed" || bill.setoff_amount !== "0" || bill.funded_clearing_amount !== "0" || bill.accepted_credit_amount !== "0") throw new ApiError(409, "Accept the invoice through ordinary company review first. Supplier credits, disputes, noncash setoff and escrow-backed discharge require separate accounting review", "ACCOUNTING_SOURCE_HELD");
  const terms = getBillTerms(access, bill.id), profile = row<{ version: number }>("SELECT version FROM recipients WHERE id=? AND organization_id=?", bill.recipient_id, access.organizationId);
  const snapshot = terms.installments[0]?.recipient_version;
  if (!profile || snapshot !== profile.version) throw new ApiError(409, "The historical payee profile changed. Resolve its original accounting contact before posting", "ACCOUNTING_HISTORICAL_CONTACT_REQUIRED");

@@ -19,7 +19,7 @@ export function buildPaymentSummary<T extends { available: string; reserveDefici
   const edges = rows<{ parent: string; child: string }>("SELECT original_payment_id AS parent,remainder_payment_id AS child FROM partial_remainders WHERE organization_id=? UNION SELECT old_payment_id AS parent,new_payment_id AS child FROM payment_replacements WHERE organization_id=?", organizationId, organizationId);
   const byId = new Map(payments.map(payment => [payment.id, payment]));
   const payrollPrincipal = new Map(rows<{ payment_id: string; amount: string }>("SELECT i.payment_id,i.amount FROM payroll_items i JOIN payroll_runs r ON r.id=i.run_id WHERE r.organization_id=? AND i.payment_id IS NOT NULL", organizationId).map(item => [item.payment_id, item.amount]));
-  const bills = rows<{ id: string; amount: string; setoff_amount: string; funded_clearing_amount:string; payment_id: string | null; status: string }>("SELECT id,amount,setoff_amount,funded_clearing_amount,payment_id,status FROM bills WHERE organization_id=? ORDER BY created_at,id", organizationId);
+  const bills = rows<{ id: string; amount: string; setoff_amount: string; funded_clearing_amount:string; accepted_credit_amount:string; payment_id: string | null; status: string }>("SELECT id,amount,setoff_amount,funded_clearing_amount,accepted_credit_amount,payment_id,status FROM bills WHERE organization_id=? ORDER BY created_at,id", organizationId);
   const invoicePayments = new Map(rows<{ bill_id: string; payment_id: string }>("SELECT i.bill_id,i.payment_id FROM bill_installments i JOIN bills b ON b.id=i.bill_id WHERE b.organization_id=?", organizationId).map(item => [item.payment_id, item.bill_id]));
   const adjacent = new Map<string, string[]>(), children = new Set<string>(), parents = new Set<string>();
   for (const edge of edges) {
@@ -72,7 +72,7 @@ export function buildPaymentSummary<T extends { available: string; reserveDefici
     const installments = payments.filter(payment => invoicePayments.get(payment.id) === bill.id);
     const delivered = installments.reduce((sum, payment) => sum + BigInt(payment.status === "paid" ? payment.amount : payment.delivered_amount), 0n);
     const committed = installments.reduce((sum, payment) => sum + BigInt(payment.status === "cancelled" ? "0" : payment.status === "partially_paid" ? payment.delivered_amount : payment.amount), 0n);
-    const remaining = BigInt(bill.amount) - BigInt(bill.setoff_amount) - BigInt(bill.funded_clearing_amount) - delivered, uncommitted = BigInt(bill.amount) - BigInt(bill.setoff_amount) - BigInt(bill.funded_clearing_amount) - committed;
+    const remaining = BigInt(bill.amount) - BigInt(bill.setoff_amount) - BigInt(bill.funded_clearing_amount) - BigInt(bill.accepted_credit_amount) - delivered, uncommitted = BigInt(bill.amount) - BigInt(bill.setoff_amount) - BigInt(bill.funded_clearing_amount) - BigInt(bill.accepted_credit_amount) - committed;
     if (uncommitted > 0n) uncommittedInvoicePrincipal += uncommitted;
     if (remaining <= 0n) continue;
     openPrincipal += remaining;

@@ -1,0 +1,15 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+export const digest=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const identifier=z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),key=z.string().uuid(),reason=z.string().trim().min(10).max(2000),version=z.number().int().positive();
+const amount=z.string().regex(/^[1-9]\d{0,30}$/).refine(value=>/^[1-9]\d{0,30}$/.test(value)&&BigInt(value)<=10n**30n,"Use a positive atomic USDC amount within the supported bound");
+export const proposalInput=z.object({billId:identifier,reference:z.string().trim().min(1).max(120),amount,unit:z.literal("USDC"),reason,idempotencyKey:key}).strict();
+export const revisionInput=proposalInput.omit({billId:true,reference:true}).extend({expectedVersion:version}).strict();
+export const decisionInput=z.object({expectedVersion:version,reason,idempotencyKey:key}).strict();
+export const acceptanceInput=z.object({expectedVersion:version,reviewHash:z.string().regex(/^[a-f0-9]{64}$/),acknowledgeDraftRetirement:z.literal(true),idempotencyKey:key}).strict();
+export const pageInput=z.object({page:z.coerce.number().int().min(1).max(100000).default(1),billId:identifier.optional()}).strict();
+export interface NoteRecord {id:string;organization_id:string;bill_id:string;recipient_id:string;supplier_user_id:string;supplier_version:number;reference_ciphertext:string;reference_hash:string;status:"proposed"|"accepted"|"rejected"|"withdrawn";current_version:number;accepted_version:number|null;accepted_by:string|null;accepted_at:string|null;accepted_review_hash:string|null;created_at:string;updated_at:string}
+export interface BillRecord {id:string;organization_id:string;recipient_id:string;reference:string;title:string;amount:string;setoff_amount:string;funded_clearing_amount:string;accepted_credit_amount:string;payment_id:string|null;status:string;accepted_at:string|null;updated_at:string}
+export interface CreditNote {id:string;billId:string;organizationId:string;reference:string;status:NoteRecord["status"];version:number;amount:string;unit:"USDC";reason:string;createdAt:string;updatedAt:string;acceptedAt:string|null;versions:Array<{version:number;amount:string;unit:"USDC";reason:string;createdAt:string}>;events:Array<{id:string;kind:string;version:number;actorRole:string;reason:string;createdAt:string}>}
+export interface SupplierBill {id:string;company:{id:string;name:string};reference:string;title:string;amount:string;deliveredAmount:string;setoffAmount:string;fundedClearingAmount:string;acceptedCreditAmount:string;remainingLiability:string;supplierVersion:number}
+export interface CreditReview {note:CreditNote;bill:SupplierBill;totals:{originalAmount:string;deliveredAmount:string;noncashSetoffAmount:string;fundedClearingAmount:string;acceptedCreditAmount:string;remainingLiability:string;uncommittedBefore:string;creditAmount:string;residualLiability:string};draftsToRetire:Array<{id:string;amount:string;maxFee:string;status:string;reference:string}>;locks:Array<{code:string;message:string;paymentId?:string}>;reviewHash:string}

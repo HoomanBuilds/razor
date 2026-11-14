@@ -14,6 +14,7 @@ import type {
 import { isDirectExecution } from "./direct";
 import { clientReserveExportRows } from "../client-reserves";
 import { fundingRefundExportRows } from "../funding-refunds/export";
+import { creditExportRows } from "../invoice-credits/accounting";
 import { clearingExportRows } from "../clearing/accounting";
 
 export function csvCell(value: unknown): string {
@@ -80,6 +81,7 @@ function accountingSnapshot(access:AccessContext):string {
     cost_center_reference: string | null;
     setoff_amount: string;
     funded_clearing_amount: string;
+    accepted_credit_amount:string;
   }>(
     "SELECT * FROM bills WHERE organization_id=? ORDER BY created_at,id",
     access.organizationId,
@@ -166,6 +168,7 @@ function accountingSnapshot(access:AccessContext):string {
       period_end: item?.period_end ?? run?.period_end,
     };
   };
+  const creditRetirements=new Map(rows<{payment_id:string;note_id:string;original_amount:string}>("SELECT payment_id,note_id,original_amount FROM invoice_credit_retirements WHERE organization_id=?",access.organizationId).map(item=>[item.payment_id,item]));
   const records: RecordRow[] = [];
   for (const payment of payments) {
     const netCost =
@@ -183,6 +186,8 @@ function accountingSnapshot(access:AccessContext):string {
       delivered_entitlement_usdc: usdc(payment.delivered_amount),
       remaining_entitlement_usdc: usdc((payment.status==="cancelled"||successor?0n:unpaid).toString()),
       unpaid_recorded_entitlement_usdc:usdc(unpaid.toString()),
+      credit_retirement_note_id:creditRetirements.get(payment.id)?.note_id,
+      retired_draft_micro_usdc:creditRetirements.get(payment.id)?.original_amount,
       successor_payment_id:successor,
       transferred_entitlement_usdc:successor?usdc(unpaid.toString()):"0",
       max_cost_usdc: usdc(payment.max_fee),
@@ -192,7 +197,7 @@ function accountingSnapshot(access:AccessContext):string {
       recorded_net_cost_usdc: usdc(netCost.toString()),
       recorded_net_cost_micro_usdc: netCost.toString(),
       verification:
-        payment.status === "paid"
+        creditRetirements.has(payment.id)?"unsigned_draft_retired_by_accepted_supplier_credit; original_face_history_only; see_invoice_residual; not_cash_or_refund":payment.status === "paid"
           ? "closed_by_NEAR_treasury_state; see_attempt_provenance"
           : payment.status === "cancelled"?"retired_payment; see_invoice_or_payroll_liability_and_successor":payment.status === "partially_paid" ? successor?"terminal_partial_NEAR_reporter_attestation; remaining_entitlement_transferred_to_successor":"terminal_partial_NEAR_reporter_attestation; remainder_requires_new_approval" : "unresolved_obligation",
     });
@@ -359,7 +364,7 @@ function accountingSnapshot(access:AccessContext):string {
     });
   }
   for (const bill of bills){
-    const related=installments.filter(item=>item.bill_id===bill.id).flatMap(item=>{const payment=paymentById.get(item.payment_id);return payment?[payment]:[];}),totals=liabilityTotals(bill.amount,related,bill.setoff_amount,bill.funded_clearing_amount);
+    const related=installments.filter(item=>item.bill_id===bill.id).flatMap(item=>{const payment=paymentById.get(item.payment_id);return payment?[payment]:[];}),totals=liabilityTotals(bill.amount,related,bill.setoff_amount,bill.funded_clearing_amount,bill.accepted_credit_amount);
     records.push({
       ...common(bill.payment_id ? paymentById.get(bill.payment_id) : undefined),
       record_type: "invoice",
@@ -379,6 +384,8 @@ function accountingSnapshot(access:AccessContext):string {
       setoff_micro_usdc: bill.setoff_amount,
       funded_discharge_usdc: usdc(bill.funded_clearing_amount),
       funded_discharge_micro_usdc: bill.funded_clearing_amount,
+      accepted_credit_usdc:usdc(bill.accepted_credit_amount),
+      accepted_credit_micro_usdc:bill.accepted_credit_amount,
       max_cost_usdc: usdc(bill.max_fee),
       max_cost_micro_usdc: bill.max_fee,
       delivered_entitlement_usdc:usdc(totals.delivered.toString()),
@@ -425,6 +432,7 @@ function accountingSnapshot(access:AccessContext):string {
       ...entry,
     });
   records.push(...clearingExportRows(access.organizationId));
+  records.push(...creditExportRows(access.organizationId));
   records.push(...fundingRefundExportRows(access).map(record => ({ record_type: "source_funding_refund", ...record })));
   for (const value of rows<{payment_id:string;attempt_id:string;actual_output:string;credited_usdc:string;source_spent_usdc:string;receipt_commitment:string;confirmed_at:string;remainder_payment_id:string|null}>("SELECT s.*,r.remainder_payment_id FROM partial_settlements s LEFT JOIN partial_remainders r ON r.original_payment_id=s.payment_id WHERE s.organization_id=? ORDER BY s.confirmed_at",access.organizationId)) records.push({...common(paymentById.get(value.payment_id)),record_type:"terminal_partial_settlement",record_id:value.payment_id,created_at:value.confirmed_at,attested_output_base_units:value.actual_output,attested_entitlement_credit_usdc:usdc(value.credited_usdc),recorded_source_spent_usdc:usdc(value.source_spent_usdc),settlement_receipt:value.receipt_commitment,residual_payment_id:value.remainder_payment_id,verification:"terminal_NEAR_reporter_attestation; explicit_entitlement_credit; no_automatic_cross_asset_conversion"});
   const headers = [
@@ -552,6 +560,13 @@ function accountingSnapshot(access:AccessContext):string {
     "withdrawal_nonce",
     "observed_block_height",
     "observed_block_hash",
+    "accepted_credit_usdc",
+    "accepted_credit_micro_usdc",
+    "credit_note_reference",
+    "credit_note_version",
+    "accepted_by",
+    "credit_retirement_note_id",
+    "retired_draft_micro_usdc",
   ];
   return [
     headers.map(csvCell).join(","),
