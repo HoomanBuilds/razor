@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { PublicDemo } from "@/components/demo/public-demo";
 import { getPublicDemoScenario } from "@/server/demo/scenario";
 import { publicDemoIdentity } from "@/server/demo/identity";
+import { demoBuildIdentity } from "@/server/demo/build";
 export const metadata: Metadata = {
   title: "Read-only product preview | Razor",
   description:
@@ -29,7 +30,7 @@ export default function PublicDemoPage() {
       <PublicDemo
         initial={{
           scenario: getPublicDemoScenario(),
-          identity: publicDemoIdentity(),
+          identity: publicDemoIdentity(demoBuildIdentity()),
         }}
       />
     </main>

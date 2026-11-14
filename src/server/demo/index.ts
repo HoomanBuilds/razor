@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../context";
 import { publicDemoInput, getPublicDemoScenario } from "./scenario";
 import { publicDemoIdentity } from "./identity";
+import { demoBuildIdentity } from "./build";
 export { getPublicDemoScenario, publicDemoInput } from "./scenario";
 export { publicDemoIdentity } from "./identity";
 export type { PublicDemoBuildIdentity, PublicDemoIdentity } from "./identity";
@@ -21,6 +22,6 @@ demoRoutes.get("/scenario", (c) => {
   c.header("Cache-Control", "no-store");
   return c.json({
     scenario: getPublicDemoScenario(parsed.data),
-    identity: publicDemoIdentity(),
+    identity: publicDemoIdentity(demoBuildIdentity()),
   });
 });

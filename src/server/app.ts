@@ -9,6 +9,7 @@ import { assistantRoutes } from "./assistant";
 import { onboardingRoutes } from "./treasury-onboarding";
 import { operationsRoutes } from "./operations";
 import { reconciliationRoutes } from "./reconciliation";
+import { settlementLinkRoutes } from "./reconciliation/settlement-links";
 import {
   companyInvoiceIntakeRoutes,
   recipientWorkspaceRoutes,
@@ -42,6 +43,8 @@ import { insightsRoutes } from "./insights";
 import { companyCreditRoutes, supplierCreditRoutes } from "./invoice-credits";
 import { companyPrivateAgreementRoutes, supplierPrivateAgreementRoutes } from "./private-agreements";
 import { financingRoutes, lenderFinancingRoutes } from "./financing";
+import { netsuiteRoutes, netsuiteOAuthRoutes } from "./netsuite";
+import { demoRoutes } from "./demo";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -96,6 +99,7 @@ app.onError((error, c) => {
 });
 app.get("/health", (c) => c.json({ service: "razor", status: "ok" }));
 app.route("/integrations", integrationMachineRoutes);
+app.route("/demo", demoRoutes);
 app.route("/", identityRoutes);
 app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
@@ -105,6 +109,7 @@ app.route("/personal-expenses", personalExpenseRoutes);
 app.route("/supplier-procurement", supplierProcurementRoutes);
 app.route("/recipient-distributions", recipientDistributionRoutes);
 app.route("/accounting-oauth", accountingOAuthRoutes);
+app.route("/netsuite-oauth", netsuiteOAuthRoutes);
 app.route("/support", supportRoutes);
 app.route("/supplier-invoice-credits", supplierCreditRoutes);
 app.route("/supplier-private-agreements", supplierPrivateAgreementRoutes);
@@ -124,6 +129,7 @@ app.route("/organizations/:orgId/assistant", assistantRoutes);
 app.route("/organizations/:orgId/onboarding", onboardingRoutes);
 app.route("/organizations/:orgId/operations", operationsRoutes);
 app.route("/organizations/:orgId/reconciliation", reconciliationRoutes);
+app.route("/organizations/:orgId/settlement-links", settlementLinkRoutes);
 app.route("/organizations/:orgId/intake", companyInvoiceIntakeRoutes);
 app.route("/organizations/:orgId/treasury-policy", treasuryPolicyRoutes);
 app.route("/organizations/:orgId/funding-requests", fundingRequestRoutes);
@@ -149,6 +155,7 @@ app.route("/organizations/:orgId/procurement", procurementRoutes);
 app.route("/organizations/:orgId/distributions", distributionRoutes);
 app.route("/organizations/:orgId/company-private", companyPrivateRoutes);
 app.route("/organizations/:orgId/accounting", accountingRoutes);
+app.route("/organizations/:orgId/netsuite", netsuiteRoutes);
 app.route("/organizations/:orgId/insights", insightsRoutes);
 app.route("/organizations/:orgId/invoice-credits", companyCreditRoutes);
 app.route("/organizations/:orgId/private-agreements", companyPrivateAgreementRoutes);

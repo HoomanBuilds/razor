@@ -4,6 +4,7 @@ import { processPendingInvoiceEvents } from "../src/server/invoice-channels/serv
 import { dispatchIntegrationWebhooks } from "../src/server/integrations";
 import { monitorDistributions } from "../src/server/distributions/service";
 import { dispatchAccountingJobs } from "../src/server/accounting";
+import { dispatchNetSuiteJobs } from "../src/server/netsuite/service";
 import { expireSupportCases } from "../src/server/support";
 import { monitorFundedRounds } from "../src/server/clearing/funded";
 
@@ -23,6 +24,7 @@ do {
     ["distributions", () => monitorDistributions({ organizationId, maxPools: 1 })],
     ["fundedClearing", () => monitorFundedRounds(2, organizationId)],
     ["accounting", () => dispatchAccountingJobs({ organizationId, maxJobs: 1 })],
+    ["netsuite", () => dispatchNetSuiteJobs({ organizationId, maxJobs: 1 })],
     ["supportRetention", () => organizationId ? { skipped: true, scope: "global_housekeeping" } : expireSupportCases()],
     ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],
   ] as const;
