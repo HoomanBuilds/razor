@@ -2,10 +2,13 @@ import { ApiError } from "../context";
 import { row, transaction } from "../db";
 import { assertCanStartDeposit, assertSameQuote, type QuoteResponse, type StatusResponse } from "../payments/intents";
 import type { FundingLeg } from "../payments/types";
+import { fundingInstructions, isDirectFunding } from "../payments/direct-funding";
 
-export function requireUnstartedDeposit(funding: FundingLeg, status: StatusResponse) {
+export function requireUnstartedDeposit(funding: FundingLeg, status?: StatusResponse) {
   if (funding.status !== "pending_deposit" || funding.source_tx_hash) throw new ApiError(409, "This source transfer is already started or uncertain. Reconcile its saved history before sending again", "FUNDING_TRANSFER_UNRESOLVED");
-  const quote = JSON.parse(funding.quote) as QuoteResponse;
+  const quote = fundingInstructions(funding);
+  if (isDirectFunding(quote)) { assertCanStartDeposit(quote); return; }
+  if (!status) throw new ApiError(409, "The original routing status is required before signing", "FUNDING_STATUS_REQUIRED");
   assertSameQuote(quote, status.quoteResponse);
   if (status.status !== "PENDING_DEPOSIT") throw new ApiError(409, "The provider has already observed source activity. Track the original transfer instead of sending again", "FUNDING_TRANSFER_UNRESOLVED");
   assertCanStartDeposit(quote);

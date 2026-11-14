@@ -6,6 +6,8 @@ import { mainnet, base, arbitrum, polygon, optimism, bsc, avalanche, gnosis, aur
 import { Copy, ExternalLink, Wallet } from "lucide-react";
 import { connectNearWallet, getNearConnector, walletErrorMessage } from "./wallets";
 import { AssetIdentity } from "@/components/assets/asset-identity";
+import { DIRECT_USDC_ASSET, isDirectFunding, validateDirectFunding } from "@/lib/direct-funding";
+import { NATIVE_USDC } from "@/lib/native-usdc";
 
 export interface FundingWalletActionProps {
   funding:{id:string;origin_asset:string;amount_in:string;deposit_address:string;deposit_memo:string|null;quote:string|object;status:string;source_tx_hash?:string|null};
@@ -27,6 +29,10 @@ export function validateFundingQuote(funding:FundingWalletActionProps["funding"]
   try {quote=typeof funding.quote==="string"?JSON.parse(funding.quote):funding.quote as BoundQuote;} catch {throw new Error("This funding quote cannot be read. Create a fresh funding request.");}
   if(token.assetId!==funding.origin_asset || quote?.quoteRequest?.originAsset!==funding.origin_asset || quote.quote?.amountIn!==funding.amount_in || quote.quote.depositAddress!==funding.deposit_address || (quote.quote.depositMemo || null)!==(funding.deposit_memo || null) || quote.quoteRequest.dry!==false || quote.quoteRequest.depositType!=="ORIGIN_CHAIN" || typeof quote.quoteRequest.refundTo!=="string" || !quote.quoteRequest.refundTo) throw new Error("The funding instructions do not match the quoted asset, amount and destination. Create a fresh funding request.");
   if(!/^[1-9]\d*$/.test(funding.amount_in) || !Number.isInteger(token.decimals) || token.decimals<0 || token.decimals>38) throw new Error("The funding amount or token decimals are invalid.");
+  if(isDirectFunding(quote)) {
+    validateDirectFunding(quote,funding);
+    if(token.assetId!==DIRECT_USDC_ASSET || token.blockchain!=="near" || token.contractAddress!==NATIVE_USDC.near || token.decimals!==6 || token.symbol!=="USDC") throw new Error("Direct funding requires the verified native USDC token on NEAR mainnet.");
+  }
   const deadline=Date.parse(quote.quote.deadline || quote.quoteRequest.deadline);
   const inactive=Date.parse(quote.quote.timeWhenInactive || "");
   if(Number.isFinite(inactive) && inactive<=Date.now())throw new Error("These deposit instructions need refreshing before a new transfer. Check any existing deposit first.");
@@ -111,7 +117,7 @@ async function transferNear(props:FundingWalletActionProps,quote:BoundQuote,onHa
     if(contract!=="wrap.near") throw new Error(`Your NEAR wallet has insufficient ${props.token.symbol} for this deposit.`);
     actions.push({type:"FunctionCall",params:{methodName:"near_deposit",args:{},gas:"30000000000000",deposit:(amount-balance).toString()}});
   }
-  actions.push({type:"FunctionCall",params:{methodName:"ft_transfer",args:{receiver_id:props.funding.deposit_address,amount:props.funding.amount_in},gas:"50000000000000",deposit:"1"}});
+  actions.push({type:"FunctionCall",params:isDirectFunding(quote)?{methodName:"ft_transfer_call",args:{receiver_id:props.funding.deposit_address,amount:props.funding.amount_in,msg:quote.quoteRequest.customRecipientMsg},gas:"120000000000000",deposit:"1"}:{methodName:"ft_transfer",args:{receiver_id:props.funding.deposit_address,amount:props.funding.amount_in},gas:"50000000000000",deposit:"1"}});
   validateFundingQuote(props.funding,props.token);
   await props.beforeSend?.();
   const result=await wallet.signAndSendTransaction({signerId:sender,receiverId:contract,network:"mainnet",actions});
@@ -207,10 +213,12 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   }
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
   const tracking=props.depositAllowed===false||!!hash;
+  const direct=quote&&isDirectFunding(quote)?quote:null;
   return <section className="space-y-4 rounded-lg border border-border bg-card p-4">
     <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><AssetIdentity symbol={token.symbol} network={token.blockchain} assetId={token.assetId} showAssetId className="my-3"/><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
     {props.depositAllowed===false&&<p role="status" className="text-sm">New deposits are blocked for this saved quote. Check wallet activity and track any submitted source transfer below.</p>}
     <dl className="grid gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Original deposit address</dt><dd className="mt-1 flex items-start gap-2"><code className="break-all">{funding.deposit_address}</code><button type="button" aria-label="Copy deposit address" className="shrink-0 p-1" onClick={async()=>{try{await navigator.clipboard.writeText(funding.deposit_address);setCopied(true);}catch{setError("Copy the deposit address manually from the instructions.");}}}><Copy size={14}/></button>{copied?<span className="text-xs">Copied</span>:null}</dd></div>{funding.deposit_memo?<div><dt className="text-xs text-muted-foreground">Required deposit memo</dt><dd><code className="break-all">{funding.deposit_memo}</code></dd></div>:null}</dl>
+    {direct&&<div className="space-y-2 rounded-lg bg-muted p-3 text-xs"><p className="font-semibold">Direct native USDC deposit on NEAR mainnet</p><p>Source account: <span className="break-all">{direct.quoteRequest.refundTo}</span></p><p>Company: <span className="break-all">{direct.companyId}</span></p><p>Token contract: <span className="break-all">{token.contractAddress}</span></p><p>This wallet action calls ft_transfer_call with this company's deposit message. A plain transfer to the shared address will not credit the company. No routing-provider swap or fee is included.</p><p>Your wallet shows the native NEAR network fee. Transfer gas limit: 120 Tgas; attached deposit: 1 yoctoNEAR. Any required token registration is a separate wallet action.</p><details><summary className="cursor-pointer">Exact company deposit message</summary><code className="mt-2 block break-all">{direct.quoteRequest.customRecipientMsg}</code></details></div>}
     {invalid&&!hash&&props.depositAllowed!==false?<p role="alert" className="text-sm text-destructive">{invalid}</p>:null}
     {props.depositAllowed!==false&&(!supported||funding.deposit_memo)?<p className="text-xs leading-5 text-muted-foreground">Use a wallet or exchange that supports {token.symbol} on {token.blockchain}. Send the exact amount to this deposit address{funding.deposit_memo?" and include the required memo":""} before the quote expires. Then record its source transaction hash below. A manual transfer is not automatically detected by your browser.</p>:null}
     {!hash&&supported&&!funding.deposit_memo&&props.depositAllowed!==false?<button type="button" disabled={!canSend} onClick={()=>void send()} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"><Wallet size={16}/>{phase==="signing"?"Confirm source transfer...":phase==="confirming"?"Waiting for source confirmation...":`Send ${amount} ${token.symbol}`}</button>:null}

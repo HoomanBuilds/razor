@@ -121,14 +121,14 @@ export async function requestQuote(request: QuoteRequest): Promise<QuoteResponse
   return result;
 }
 
-export function quoteDepositWindow(quote: QuoteResponse) {
+export function quoteDepositWindow(quote: Pick<QuoteResponse, "quote" | "quoteRequest">) {
   const refundDeadline = Date.parse(quote.quote.deadline ?? quote.quoteRequest.deadline);
   const inactiveAt = quote.quote.timeWhenInactive ? Date.parse(quote.quote.timeWhenInactive) : refundDeadline;
   if (!Number.isFinite(refundDeadline) || !Number.isFinite(inactiveAt)) throw new ApiError(502, "The signed quote has invalid deposit timing", "QUOTE_TIMING_INVALID");
   return { startBefore: Math.min(refundDeadline, inactiveAt), refundDeadline };
 }
 
-export function assertCanStartDeposit(quote: QuoteResponse, now = Date.now()): void {
+export function assertCanStartDeposit(quote: Pick<QuoteResponse, "quote" | "quoteRequest">, now = Date.now()): void {
   if (quoteDepositWindow(quote).startBefore <= now) throw new ApiError(409, "Refresh the quote before starting a new deposit. Existing transfers must still be reconciled", "QUOTE_DEPOSIT_WINDOW_CLOSED");
 }
 
