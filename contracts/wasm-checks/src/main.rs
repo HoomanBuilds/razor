@@ -136,6 +136,27 @@ struct CallMeasurement {
     rejected: bool,
     baseline: Execution,
     candidate: Execution,
+    baseline_error: Option<String>,
+    candidate_error: Option<String>,
+}
+
+fn comparable_error(error: &str) -> String {
+    let Some((prefix, rest)) = error.split_once("panicked at ") else {
+        return error.into();
+    };
+    let Some((location, message)) = rest.split_once(":\n") else {
+        return error.into();
+    };
+    let Some((file_line, column)) = location.rsplit_once(':') else {
+        return error.into();
+    };
+    let Some((file, line)) = file_line.rsplit_once(':') else {
+        return error.into();
+    };
+    if !file.ends_with(".rs") || line.parse::<u32>().is_err() || column.parse::<u32>().is_err() {
+        return error.into();
+    }
+    format!("{prefix}panicked at {file}:<line>:<column>:\n{message}")
 }
 
 impl CallMeasurement {
@@ -159,11 +180,14 @@ impl CallMeasurement {
             rejected: candidate.error.is_some(),
             baseline: baseline.execution,
             candidate: candidate.execution,
+            baseline_error: baseline.error.clone(),
+            candidate_error: candidate.error.clone(),
         }
     }
 
     fn report(&self, index: usize) -> Value {
         json!({"sequence":index+1,"caller":self.caller,"method":self.method,"rejected":self.rejected,
+            "baseline_error":self.baseline_error,"candidate_error":self.candidate_error,
             "baseline":self.baseline.report(),"candidate":self.candidate.report(),
             "delta_candidate_minus_baseline":{"burnt_gas":(self.candidate.burnt_gas as i128-self.baseline.burnt_gas as i128).to_string(),
                 "used_gas":(self.candidate.used_gas as i128-self.baseline.used_gas as i128).to_string(),
@@ -375,7 +399,8 @@ impl Instance {
         };
         if let Some(old) = baseline_result {
             assert_eq!(
-                old.error, result.error,
+                old.error.as_deref().map(comparable_error),
+                result.error.as_deref().map(comparable_error),
                 "{}::{method}: error changed",
                 self.account
             );
@@ -2273,4 +2298,30 @@ fn main() {
         "{}",
         json!({"runtime":"near-vm-runner 0.35.1 / Wasmtime","configuration":"mainnet runtime store requested at protocol88; latest available configuration before88 is84","actual_wasm":true,"differential_results":results})
     );
+}
+
+#[cfg(test)]
+mod comparison_tests {
+    use super::comparable_error;
+
+    #[test]
+    fn panic_comparison_changes_only_rust_source_coordinates() {
+        let original = "Smart contract panicked: panicked at src/lib.rs:342:50:\nSCOPED_DEPOSIT_MESSAGE_REQUIRED: Error(\"EOF\", line: 1, column: 0)";
+        let moved = original.replace(":342:50:", ":344:51:");
+        assert_eq!(comparable_error(original), comparable_error(&moved));
+        for changed in [
+            original.replace("SCOPED_DEPOSIT_MESSAGE_REQUIRED", "TOKEN_REQUIRED"),
+            original.replace("line: 1", "line: 2"),
+            original.replace("src/lib.rs", "src/core.rs"),
+        ] {
+            assert_ne!(comparable_error(original), comparable_error(&changed));
+        }
+        for plain in [
+            "TOKEN_REQUIRED",
+            "wasm trap: unreachable",
+            "panicked at incomplete",
+        ] {
+            assert_eq!(comparable_error(plain), plain);
+        }
+    }
 }
