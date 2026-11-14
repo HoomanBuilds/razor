@@ -4,6 +4,7 @@ import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { assertNoActiveClearing } from "../clearing/locks";
+import { assertProcurementRematch, consumeProcurementInvoice, procurementInvoiceReview } from "../procurement/matching";
 
 export const billCommitmentFields = {
   commitmentReference: z.string().trim().min(1).max(120).optional(),
@@ -182,9 +183,11 @@ export function billCommitmentReview(organizationId: string, billId: string) {
     if (!invoice.commitment_scope_confirmed) problems.push("Confirm that the invoice matches the approved scope and quantities");
     if (terms && used + BigInt(invoice.amount) > BigInt(terms.allowance)) problems.push("The complete invoice exceeds the remaining purchase allowance. Amend and approve the named commitment");
   }
+  const procurement = procurementInvoiceReview(organizationId, billId);
+  if (procurement) problems.push(...procurement.problems);
   return { id: value.id, reference: value.reference, state: value.state, version: terms?.version ?? null, currentVersion: value.current_version, allowance: currentTerms?.allowance ?? "0", agreedAllowance: terms?.allowance ?? "0", scope: terms ? decrypt(terms.scope_ciphertext) : null,
     supplierName: terms ? decrypt(terms.supplier_name_ciphertext) : null, supplierVersion: terms?.supplier_version ?? null, settlementUnit: "USDC", period, invoiceDate: invoice.commitment_date, scopeConfirmed: !!invoice.commitment_scope_confirmed, used: used.toString(), priorInvoiced: (used - BigInt(accepted?.amount ?? "0")).toString(), remaining: currentTerms ? (BigInt(currentTerms.allowance) - used).toString() : "0", invoiceValue: invoice.amount,
-    paid: useRows(value.id).reduce((sum, use) => sum + settlement(use.bill_id), 0n).toString(), accepted: accepted ?? null, problems, enforcement: "application_review_gate", timeBasis: "UTC invoice service date; calendar-month reset; no rollover" };
+    paid: useRows(value.id).reduce((sum, use) => sum + settlement(use.bill_id), 0n).toString(), accepted: accepted ?? null, procurement, problems, enforcement: "application_review_gate", timeBasis: "UTC invoice service date; calendar-month reset; no rollover" };
 }
 
 export function consumeBillCommitment(access: AccessContext, billId: string) {
@@ -193,6 +196,7 @@ export function consumeBillCommitment(access: AccessContext, billId: string) {
     if (!review) return null;
     requirePermission(access, "payments:approve");
     if (review.problems.length) throw new ApiError(409, review.problems.join(". "), "COMMITMENT_HOLD");
+    consumeProcurementInvoice(access, billId);
     if (review.accepted) return review.accepted;
     db.prepare("INSERT INTO vendor_commitment_uses(bill_id,commitment_id,version,period_key,amount,accepted_by,accepted_at) VALUES(?,?,?,?,?,?,?)").run(billId, review.id, review.version!, review.period!, review.invoiceValue, access.userId, now());
     audit(access, "commitment.invoice_accepted", review.id, { billId, amount: review.invoiceValue, period: review.period, version: review.version });
@@ -206,6 +210,7 @@ export function matchBillCommitment(access: AccessContext, billId: string, input
   return transaction(db => {
     const invoice = bill(access.organizationId, billId), resolved = resolveBillCommitment(access, input);
     if (!resolved.id) throw new ApiError(422, "Name the exact purchase commitment to match", "COMMITMENT_REFERENCE_REQUIRED");
+    assertProcurementRematch(access.organizationId, billId, resolved.id);
     if (invoice.vendor_commitment_id && invoice.vendor_commitment_id !== resolved.id) requirePermission(access, "payments:approve");
     if (invoice.payment_id) assertNoActiveClearing(access.organizationId, invoice.payment_id);
     if (invoice.accepted_at || invoice.setoff_amount !== "0" || row("SELECT bill_id FROM vendor_commitment_uses WHERE bill_id=?", billId) || row("SELECT p.id FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND (p.approved_at IS NOT NULL OR p.status NOT IN ('draft','cancelled') OR p.reserved_amount!='0' OR p.total_spent!='0' OR p.delivered_amount!='0' OR EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id))", billId)) throw new ApiError(409, "Only an invoice that has never been accepted or funded can change its purchase match", "COMMITMENT_MATCH_LOCKED");
