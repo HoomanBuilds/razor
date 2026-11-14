@@ -8,6 +8,16 @@ if [[ "${RAZOR_CONTRACT_BUILD_GUARDED:-}" != "1" ]]; then
   exec node "$project_root/scripts/next-with-memory-guard.mjs" contracts "$@"
 fi
 
+with_credit=0
+for option in "$@"; do
+  if [[ "$option" == "--with-credit" ]]; then
+    with_credit=1
+  else
+    printf 'Unknown contract build option: %s\n' "$option" >&2
+    exit 1
+  fi
+done
+
 optimizer="${WASM_OPT:-wasm-opt}"
 optimizer_version="$("$optimizer" --version)"
 if [[ ! "$optimizer_version" =~ ^wasm-opt\ version\ 130([[:space:]]|$) ]]; then
@@ -39,8 +49,14 @@ CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "
 optimize razor_clearing.wasm
 CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-billing/Cargo.toml" --target wasm32-unknown-unknown --release
 optimize razor_billing.wasm
+artifacts=(razor_treasury.wasm razor_clearing.wasm razor_billing.wasm)
+if [[ "$with_credit" == "1" ]]; then
+  CARGO_TARGET_DIR="$build_target" cargo build --locked --jobs 1 --manifest-path "$contracts_root/razor-credit/Cargo.toml" --target wasm32-unknown-unknown --release
+  optimize razor_credit.wasm
+  artifacts+=(razor_credit.wasm)
+fi
 WASM_OPT_BUILD_VERSION="$optimizer_version" WASM_OPT_BUILD_PASSES="-Oz; refine with -Oz --converge; keep smaller artifact" node "$project_root/scripts/contract-manifest.mjs" "$staging_dir"
-for file in razor_treasury.wasm razor_clearing.wasm razor_billing.wasm manifest.json; do
+for file in "${artifacts[@]}" manifest.json; do
   mv -- "$staging_dir/$file" "$artifact_dir/$file"
 done
-printf 'Built and optimized shared treasury, clearing and billing artifacts in %s\n' "$artifact_dir"
+printf 'Built and optimized %s shared contract artifacts in %s\n' "${#artifacts[@]}" "$artifact_dir"
