@@ -24,6 +24,13 @@ trait PoolToken {
 #[ext_contract(ext_self)]
 #[allow(dead_code)]
 trait Callbacks {
+    fn on_distribution_claim_result(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        claim_id: String,
+        nonce: U64,
+    ) -> bool;
     fn on_source_recovery_verified(
         &mut self,
         company_id: String,
@@ -735,6 +742,114 @@ impl Treasury {
         })
     }
 
+    pub fn get_distribution(
+        &self,
+        company_id: String,
+        distribution_id: String,
+    ) -> Option<Distribution> {
+        self.company(&company_id).get_distribution(distribution_id)
+    }
+
+    pub fn get_distribution_recipients(
+        &self,
+        company_id: String,
+        recipient_ids: Vec<String>,
+    ) -> Vec<Option<Recipient>> {
+        require!(recipient_ids.len() <= 64, "ALLOCATION_LIMIT");
+        recipient_ids
+            .into_iter()
+            .map(|id| self.company(&company_id).get_recipient(id))
+            .collect()
+    }
+
+    pub fn distribution_voided(&self, company_id: String, distribution_id: String) -> bool {
+        self.company(&company_id)
+            .distribution_voided(distribution_id)
+    }
+
+    #[payable]
+    pub fn void_distribution(&mut self, company_id: String, distribution_id: String) -> bool {
+        self.with_company_emergency(&company_id, |company| {
+            company.void_distribution(distribution_id)
+        })
+    }
+
+    #[payable]
+    pub fn create_distribution(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        reference: String,
+        network: String,
+        allocations: Vec<DistributionAllocation>,
+        expected_total: U128,
+        deadline_ms: U64,
+        expected_policy_version: U64,
+    ) -> Distribution {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.create_distribution(
+                distribution_id,
+                reference,
+                network,
+                allocations,
+                expected_total,
+                deadline_ms,
+                expected_policy_version,
+            )
+        })
+    }
+
+    #[payable]
+    pub fn approve_distribution(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        expected_terms_hash: String,
+    ) -> Distribution {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.approve_distribution(distribution_id, expected_terms_hash)
+        })
+    }
+
+    pub fn claim_distribution(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        claim_id: String,
+    ) -> Promise {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.claim_distribution(distribution_id, claim_id)
+        })
+    }
+
+    #[private]
+    pub fn on_distribution_claim_result(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        claim_id: String,
+        nonce: U64,
+    ) -> bool {
+        self.with_company_emergency(&company_id, |company| {
+            company.on_distribution_claim_result(distribution_id, claim_id, nonce)
+        })
+    }
+
+    #[payable]
+    pub fn reclaim_distribution(
+        &mut self,
+        company_id: String,
+        distribution_id: String,
+        expected_terms_hash: String,
+    ) -> Distribution {
+        self.with_company_emergency(&company_id, |company| {
+            company.reclaim_distribution(distribution_id, expected_terms_hash)
+        })
+    }
+
     pub fn get_standing_mandate(
         &self,
         company_id: String,
@@ -1310,5 +1425,7 @@ fn validate_deposit_id(deposit_id: &str) {
     );
 }
 
+#[cfg(test)]
+mod distribution_tests;
 #[cfg(test)]
 mod shared_tests;

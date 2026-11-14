@@ -7,6 +7,67 @@ use std::collections::BTreeSet;
 
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug)]
+pub struct DistributionAllocation {
+    pub claim_id: String,
+    pub recipient_id: String,
+    pub recipient_version: U64,
+    pub amount: U128,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimStatus {
+    Ready,
+    Pending,
+    Paid,
+    Reclaimed,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct DistributionClaim {
+    pub allocation: DistributionAllocation,
+    pub destination: AccountId,
+    pub status: ClaimStatus,
+    pub nonce: U64,
+    pub sent_day: U64,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DistributionStatus {
+    Proposed,
+    Active,
+    Complete,
+    Closed,
+    Cancelled,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct Distribution {
+    pub id: String,
+    pub reference: String,
+    pub network: String,
+    pub token_contract: AccountId,
+    pub deadline_ms: U64,
+    pub total: U128,
+    pub unclaimed: U128,
+    pub pending: U128,
+    pub paid: U128,
+    pub reclaimed: U128,
+    pub policy_version: U64,
+    pub terms_hash: String,
+    pub required_approvals: u8,
+    pub approvals: BTreeSet<AccountId>,
+    pub status: DistributionStatus,
+    pub claims: Vec<DistributionClaim>,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
 pub struct ApprovalTier {
     pub up_to: U128,
     pub required_approvals: u8,
