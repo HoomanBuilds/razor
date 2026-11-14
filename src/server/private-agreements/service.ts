@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -632,6 +633,7 @@ export function createTender(access: AccessContext, data: unknown) {
         "This tender reference already exists",
         "PRIVATE_REFERENCE_EXISTS",
       );
+    reserveOptionalCreation(live, "private_tender", id);
     db.prepare(
       "INSERT INTO private_tenders(id,organization_id,reference,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?)",
     ).run(id, live.organizationId, input.terms.reference, live.userId, at, at);

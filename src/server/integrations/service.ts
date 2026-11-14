@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
@@ -54,6 +55,7 @@ export function createIntegrationCredential(access: AccessContext, input: unknow
   for (const scope of parsed.scopes) for (const permission of scopePermissions[scope]) requirePermission(principal, permission);
   const secret = `rz_live_${newToken()}`, id = randomUUID();
   return transaction(db => {
+    reserveOptionalCreation(access, "integration_credential", id);
     db.prepare("INSERT INTO integration_credentials(id,organization_id,principal_user_id,name,token_hash,token_prefix,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
       .run(id, access.organizationId, parsed.principalUserId, parsed.name, hashToken(secret), secret.slice(0, 16), JSON.stringify(parsed.scopes), new Date(expiry).toISOString(), now());
     audit(access.userId, access.organizationId, "integration.credential.created", id, { scopes: parsed.scopes, principalUserId: parsed.principalUserId });

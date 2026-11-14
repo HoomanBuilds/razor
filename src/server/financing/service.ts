@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
@@ -568,6 +569,7 @@ export function createFinancingRequest(access: AccessContext, data: unknown) {
       claimFor(live.userId, input.receivableBillId, live.organizationId);
     const id = randomUUID(),
       at = now();
+    reserveOptionalCreation(live, "financing_request", id);
     db.prepare(
       "INSERT INTO financing_requests(id,organization_id,borrower_user_id,scope_id,scope_version,fund_by,request_key,input_hash,payload_ciphertext,scope_ciphertext,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(

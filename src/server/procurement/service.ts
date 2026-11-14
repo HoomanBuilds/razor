@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
@@ -85,6 +86,7 @@ export function createRequest(access: AccessContext, data: unknown) {
   return transaction(db => {
     if (row("SELECT id FROM procurement_requests WHERE organization_id=? AND reference=?", live.organizationId, input.reference)) throw new ApiError(409, "This purchase request reference already exists", "PROCUREMENT_REFERENCE_EXISTS");
     const id = randomUUID(), at = stamp();
+    reserveOptionalCreation(live, "procurement_rfq", id);
     db.prepare("INSERT INTO procurement_requests(id,organization_id,reference,specification_ciphertext,quantity,unit,budget,delivery_from,delivery_to,quote_deadline,evidence_ciphertext,approving_role_id,inventory_item_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .run(id, live.organizationId, input.reference, encrypt(input.specification), input.quantity, input.unit, input.budget, input.deliveryFrom, input.deliveryTo, input.quoteDeadline, encrypt(input.evidence), input.approvingRoleId, input.inventoryItemId ?? null, live.userId, at, at);
     for (const supplier of suppliers) db.prepare("INSERT INTO procurement_suppliers(request_id,recipient_id,invited_user_id) VALUES(?,?,?)").run(id, supplier.id, supplier.user_id);

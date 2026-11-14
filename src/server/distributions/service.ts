@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { randomUUID } from "node:crypto";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
@@ -55,6 +56,7 @@ export function createDistribution(access: AccessContext, input: unknown) {
     const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id=?", live.organizationId);
     const items: Allocation[] = normalized.items.map(item => { const profile = getRecipient(live.organizationId, item.recipientId); nativeProfile(profile, config?.token_contract); return { claimId: randomUUID(), recipientId: profile.id, recipientVersion: profile.version, boundUserId: profile.user_id!, name: profile.name, address: profile.primary_address, amount: item.amount }; });
     const id = randomUUID(), total = sumEntitlements(items), value: Payload = { reference: parsed.reference, deadline: parsed.deadline, items };
+    reserveOptionalCreation(live, "claim_pool", id);
     db.prepare("INSERT INTO claim_distributions(id,organization_id,reference,request_key,input_hash,payload_ciphertext,total_amount,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(id, live.organizationId, parsed.reference, parsed.requestKey, fingerprint, encrypt(JSON.stringify(value)), total, live.userId, now(), now());
     for (const item of items) db.prepare("INSERT INTO claim_distribution_allocations(id,distribution_id,organization_id,recipient_id,bound_user_id,payload_ciphertext) VALUES(?,?,?,?,?,?)").run(item.claimId, id, live.organizationId, item.recipientId, item.boundUserId, encrypt(JSON.stringify(item)));
     audit(live.userId, live.organizationId, "distribution.drafted", id, { total, mode: "independent_native_claim_pool" }); return summary(local(live, id));

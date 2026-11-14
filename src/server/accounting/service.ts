@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { companyDate } from "../../lib/company-time";
@@ -185,14 +186,8 @@ export function accountingOverview(access: AccessContext, page = 1) {
       bounded * 25,
     ),
     ledger: ledgerOverview(live),
-    unavailableProviders: [
-      {
-        provider: "netsuite",
-        available: false,
-        reason:
-          "NetSuite account-specific subsidiary, currency and SuiteTax schemas must be verified before a connector can safely write. No NetSuite write capability is advertised or emulated by another provider.",
-      },
-    ],
+    unavailableProviders: [] as { provider: string; available: false; reason: string }[],
+    additionalConnectors: [{ provider: "netsuite", path: "/netsuite", scope: "Separately configured non-tax native NEAR fee journals only. Actual supported metadata, legal entity, accounts, currency, consent and credentials are required." }],
     scope:
       "Reviewed original-face bills, accepted supplier credit drafts, verified full installments or terminal partial entitlement credits, observed final NEAR token-burn fees and separately approved crypto-clearing valuation differences. Partial payment entries use only their final recorded USDC entitlement credit, with original face and unpaid remainder unchanged. External provider records are imported for deterministic matching only and never prove Razor cash or delivery. No payroll salary rows, bank transfers, bank matching, invented route fees or automatic credit application/refunds. Xero manual-journal scope requires fresh consent.",
   };
@@ -1536,6 +1531,7 @@ export function createAccountingPlan(
       );
     const jobId = previous?.id ?? randomUUID(),
       marker = previous?.marker ?? `RZ${digest(jobId).slice(0, 19)}`;
+    if (!previous) reserveOptionalCreation(live, "accounting_plan", jobId);
     const reviewedRate =
       input.kind === "fee"
         ? input.valuation!

@@ -1,3 +1,4 @@
+import { reserveOptionalCreation } from "../billing/capabilities";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, type AccessContext } from "../context";
@@ -1092,6 +1093,7 @@ export function previewNetSuiteJournal(access: AccessContext, data: unknown) {
         mappingVersion: c.mapping_version,
         posting,
       });
+    if (!existing) reserveOptionalCreation(live, "accounting_plan", jobId);
     db.prepare(
       "INSERT INTO netsuite_jobs(id,organization_id,connection_id,connection_version,mapping_version,source_id,source_hash,external_id,payload_ciphertext,review_hash,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,source_id) DO UPDATE SET connection_version=excluded.connection_version,mapping_version=excluded.mapping_version,source_hash=excluded.source_hash,payload_ciphertext=excluded.payload_ciphertext,review_hash=excluded.review_hash,state='review',created_by=excluded.created_by,approved_by=NULL,approved_at=NULL,last_error=NULL,updated_at=excluded.updated_at",
     ).run(
