@@ -150,14 +150,14 @@ export function enqueueIntegrationEvent(organizationId: string, type: EventType,
   });
 }
 
-export function publishIntegrationPaymentEvents(limit = 100) {
+export function publishIntegrationPaymentEvents(limit = 100, organizationId?: string) {
   return transaction(db => {
-    const changes = rows<{ sequence: number; payment_id: string; organization_id: string; status: string; updated_at: string; delivered_amount: string }>("SELECT * FROM integration_payment_changes WHERE published_at IS NULL ORDER BY sequence LIMIT ?", Math.max(1, Math.min(limit, 500)));
+    const changes = rows<{ sequence: number; payment_id: string; organization_id: string; status: string; updated_at: string; delivered_amount: string }>("SELECT * FROM integration_payment_changes WHERE published_at IS NULL AND (? IS NULL OR organization_id=?) ORDER BY sequence LIMIT ?", organizationId ?? null, organizationId ?? null, Math.max(1, Math.min(limit, 500)));
     for (const change of changes) {
       enqueueIntegrationEvent(change.organization_id, "payment.status.changed", `payment-change:${change.sequence}`, { resourceId: change.payment_id, kind: "payment", status: change.status, deliveredAmount: change.delivered_amount, sourceUpdatedAt: change.updated_at }, change.updated_at);
       db.prepare("UPDATE integration_payment_changes SET published_at=? WHERE sequence=?").run(now(), change.sequence);
     }
-    const states = rows<{ sequence: number; resource_id: string; organization_id: string; kind: "funding" | "invoice" | "payroll"; status: string; credited_amount: string | null; updated_at: string }>("SELECT * FROM integration_state_changes WHERE published_at IS NULL ORDER BY sequence LIMIT ?", Math.max(1, Math.min(limit, 500)));
+    const states = rows<{ sequence: number; resource_id: string; organization_id: string; kind: "funding" | "invoice" | "payroll"; status: string; credited_amount: string | null; updated_at: string }>("SELECT * FROM integration_state_changes WHERE published_at IS NULL AND (? IS NULL OR organization_id=?) ORDER BY sequence LIMIT ?", organizationId ?? null, organizationId ?? null, Math.max(1, Math.min(limit, 500)));
     for (const change of states) {
       enqueueIntegrationEvent(change.organization_id, `${change.kind}.status.changed`, `state-change:${change.sequence}`, { resourceId: change.resource_id, kind: change.kind, status: change.status, ...(change.credited_amount === null ? {} : { creditedAmount: change.credited_amount }), sourceUpdatedAt: change.updated_at }, change.updated_at);
       db.prepare("UPDATE integration_state_changes SET published_at=? WHERE sequence=?").run(now(), change.sequence);
@@ -170,15 +170,15 @@ export function webhookSignature(secret: string, timestamp: string, body: string
   return `v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
 }
 
-export async function dispatchIntegrationWebhooks(options: { limit?: number; resolver?: WebhookResolver; transport?: WebhookTransport } = {}) {
-  const published = publishIntegrationPaymentEvents();
+export async function dispatchIntegrationWebhooks(options: { organizationId?: string; limit?: number; resolver?: WebhookResolver; transport?: WebhookTransport } = {}) {
+  const published = publishIntegrationPaymentEvents(100, options.organizationId);
   let delivered = 0, attempted = 0;
   const limit = Math.max(0, Math.min(options.limit ?? 5, 10));
   for (let index = 0; index < limit; index++) {
     const delivery = transaction(db => {
-      db.prepare("UPDATE integration_webhook_attempts SET completed_at=?,error='LEASE_EXPIRED' WHERE completed_at IS NULL AND delivery_id IN (SELECT id FROM integration_webhook_deliveries WHERE state='sending' AND lease_until<=?)").run(now(), now());
-      db.prepare("UPDATE integration_webhook_deliveries SET state='queued',lease_owner=NULL,lease_until=NULL WHERE state='sending' AND lease_until<=?").run(now());
-      const item = row<Delivery>("SELECT * FROM integration_webhook_deliveries WHERE state='queued' AND next_attempt_at<=? ORDER BY created_at,id LIMIT 1", now());
+      db.prepare("UPDATE integration_webhook_attempts SET completed_at=?,error='LEASE_EXPIRED' WHERE completed_at IS NULL AND delivery_id IN (SELECT d.id FROM integration_webhook_deliveries d JOIN integration_webhook_endpoints e ON e.id=d.endpoint_id WHERE d.state='sending' AND d.lease_until<=? AND (? IS NULL OR e.organization_id=?))").run(now(), now(), options.organizationId ?? null, options.organizationId ?? null);
+      db.prepare("UPDATE integration_webhook_deliveries SET state='queued',lease_owner=NULL,lease_until=NULL WHERE state='sending' AND lease_until<=? AND (? IS NULL OR endpoint_id IN (SELECT id FROM integration_webhook_endpoints WHERE organization_id=?))").run(now(), options.organizationId ?? null, options.organizationId ?? null);
+      const item = row<Delivery>("SELECT d.* FROM integration_webhook_deliveries d JOIN integration_webhook_endpoints e ON e.id=d.endpoint_id WHERE d.state='queued' AND d.next_attempt_at<=? AND (? IS NULL OR e.organization_id=?) ORDER BY d.created_at,d.id LIMIT 1", now(), options.organizationId ?? null, options.organizationId ?? null);
       if (!item) return null;
       item.lease_owner = randomUUID(); item.attempts++; item.cycle_attempts++;
       db.prepare("UPDATE integration_webhook_deliveries SET state='sending',attempts=attempts+1,cycle_attempts=cycle_attempts+1,lease_owner=?,lease_until=?,updated_at=? WHERE id=? AND state='queued'").run(item.lease_owner, new Date(Date.now() + 30000).toISOString(), now(), item.id);

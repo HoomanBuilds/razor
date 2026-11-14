@@ -235,3 +235,38 @@ test("existing cookie routes retain origin checks and cannot accept integration 
   const mutation = await app.request("http://localhost/api/organizations/company/integrations/credentials", { method: "POST", headers, body: "{}" });
   assert.equal(mutation.status, 403); assert.equal((await mutation.json()).code, "ORIGIN_REJECTED");
 });
+
+test("organization-scoped webhook ticks publish, recover and deliver only that company's work", async () => {
+  const other: AccessContext = { userId: "other", organizationId: "other-company", permissions };
+  const firstEndpoint = await createWebhookEndpoint(owner, { url: "https://first-company.example.com/events" }, publicDns);
+  const otherEndpoint = await createWebhookEndpoint(other, { url: "https://second-company.example.com/events" }, publicDns);
+  const firstPrincipal = principal(), firstPayment = createIntegrationDraft(firstPrincipal.principal, "payment", `scope-${next()}`, draft());
+  const otherKey = createIntegrationCredential(other, { name: "Scoped worker", principalUserId: "other", scopes: ["payments:draft"], expiresAt: new Date(Date.now() + 60000).toISOString() });
+  const otherPayment = createIntegrationDraft(authenticateIntegration(`Bearer ${otherKey.secret}`), "payment", `scope-${next()}`, { ...draft(), recipientId: "other-payee" });
+  const now = timestamp(), firstRun = `scoped-payroll-${next()}`, otherRun = `scoped-payroll-${next()}`;
+  for (const [id, company, user] of [[firstRun, "company", "owner"], [otherRun, "other-company", "other"]]) getDb().prepare("INSERT INTO payroll_runs(id,organization_id,reference,period_start,period_end,created_by,created_at,updated_at) VALUES(?,?,?,'2026-11-01','2026-11-30',?,?,?)").run(id, company, id, user, now, now);
+  const otherDelivery = row<{ id: string }>("SELECT id FROM integration_webhook_deliveries WHERE endpoint_id=?", otherEndpoint.endpoint.id)!;
+  const expired = new Date(Date.now() - 1000).toISOString();
+  getDb().prepare("UPDATE integration_webhook_deliveries SET state='sending',attempts=1,cycle_attempts=1,lease_owner='other-company-worker',lease_until=? WHERE id=?").run(expired, otherDelivery.id);
+  getDb().prepare("INSERT INTO integration_webhook_attempts(id,delivery_id,attempt,started_at) VALUES('other-company-worker',?,1,?)").run(otherDelivery.id, now);
+  const sends: Array<{ organizationId: string; data: { resourceId: string } }> = [];
+  const transport = async (request: WebhookSend) => { sends.push(JSON.parse(request.body)); return 204; };
+  const result = await dispatchIntegrationWebhooks({ organizationId: "company", limit: 10, resolver: publicDns, transport });
+  assert.ok(result.published >= 2); assert.ok(result.delivered >= 3);
+  assert.ok(sends.every(event => event.organizationId === "company"));
+  assert.ok(sends.some(event => event.data.resourceId === firstPayment.resourceId));
+  assert.ok(sends.some(event => event.data.resourceId === firstRun));
+  assert.equal(row<{ published_at: string | null }>("SELECT published_at FROM integration_payment_changes WHERE payment_id=?", otherPayment.resourceId)?.published_at, null);
+  assert.equal(row<{ published_at: string | null }>("SELECT published_at FROM integration_state_changes WHERE resource_id=?", otherRun)?.published_at, null);
+  assert.equal(row<{ state: string }>("SELECT state FROM integration_webhook_deliveries WHERE id=?", otherDelivery.id)?.state, "sending");
+  assert.equal(row<{ completed_at: string | null }>("SELECT completed_at FROM integration_webhook_attempts WHERE id='other-company-worker'")?.completed_at, null);
+  sends.length = 0;
+  await dispatchIntegrationWebhooks({ organizationId: "other-company", limit: 10, resolver: publicDns, transport });
+  assert.ok(sends.length >= 3); assert.ok(sends.every(event => event.organizationId === "other-company"));
+  assert.ok(sends.some(event => event.data.resourceId === otherPayment.resourceId));
+  assert.ok(sends.some(event => event.data.resourceId === otherRun));
+  assert.equal(row<{ state: string }>("SELECT state FROM integration_webhook_deliveries WHERE id=?", otherDelivery.id)?.state, "delivered");
+  assert.equal(row<{ error: string }>("SELECT error FROM integration_webhook_attempts WHERE id='other-company-worker'")?.error, "LEASE_EXPIRED");
+  setWebhookEnabled(owner, firstEndpoint.endpoint.id, false);
+  setWebhookEnabled(other, otherEndpoint.endpoint.id, false);
+});
