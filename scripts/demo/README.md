@@ -1,6 +1,6 @@
 # Local recording workspace
 
-This is an isolated recording fixture for Razor's actual interface. It is not a production payment adapter. Company records, people, prices and transfers are fictional. Ordinary operator views carry a simulation marker; recording mode uses the normal interface without that overlay. Transaction hashes are not fabricated.
+This is an isolated recording fixture for Razor's actual interface. It is not a production payment adapter. Company records, people, prices and transfers are fictional. Ordinary operator views carry a simulation marker; recording mode uses the normal interface without that overlay. Transaction hashes are not fabricated. Recording mode frames the funding amount and resulting credit without displaying external-wallet controls or a deposit address; the default operator view retains its nonsendable fixture address. Receiver recordings also omit the production attribution to final NEAR settlement evidence, since that attribution does not apply to the local fixture.
 
 Use Node.js 24.22.1 or later. Keep the existing Next.js UI running on port 3000, then run from the repository root:
 

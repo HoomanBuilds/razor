@@ -90,3 +90,22 @@ Use the actual comparison and plan sections, including their limitations. Rechec
 Show the local outcomes with the real UI, not a counterfeit blockchain explorer or browser wallet. The sandbox is a recording fixture and must remain outside the production application routes and auth configuration. It may simulate external adapters, but every depicted click must cause the shown local state change.
 
 Deliver the script, resettable localhost environment, separate cut files, Sarah audio per cut, and one assembled MP4 only after the footage and narration are reviewed. Preserve source footage and render metadata. Verify final duration, dimensions, frame rate, audio and transitions with focused checks; no broad application rebuild or full test run is needed for recording-only tooling.
+
+## Recorded edition
+
+The first company walkthrough is `razor-company-demo-v1-sarah.mp4`, 226.67 seconds at 1920 by 1080 and 30 fps, with Sarah narration. Generated media stays outside Git in `.data/demo-film/`. The source kit is in `scripts/demo-film/`; the recording workspace is in `scripts/demo/`.
+
+| Starts | Cut |
+| --- | --- |
+| 0:00 | Run your company's money. Beyond borders. |
+| 0:15 | Fund your business. Across chains. |
+| 0:41 | Their money. Their destination. |
+| 1:04 | Review. Approve. Pay. |
+| 1:33 | Follow the money. To your people. |
+| 1:57 | Move less money. Settle more business. |
+| 2:28 | Keep control. Protect the details. |
+| 2:52 | Clear fees. Clear differences. |
+| 3:12 | Pay for the workspace. Keep your principal. |
+| 3:32 | Company money. Beyond borders. |
+
+Each UI capture keeps its original frames, action times, browser-error report and separate Sarah audio. The assembly retains the raw action speed, removes selected idle intervals and adds short sentence pauses to match approvals and results. The recording uses only local fixture balances and does not establish live settlement or private-inference evidence.
