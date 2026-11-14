@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
-import { ApiError, type AccessContext } from "../src/server/context";
+import { Hono } from "hono";
+import { ApiError, type AccessContext, type AppEnv } from "../src/server/context";
 import { getDb, row } from "../src/server/db";
-import { decrypt, encrypt } from "../src/server/identity/crypto";
+import { decrypt, encrypt, hashToken, newToken } from "../src/server/identity/crypto";
+import { createAccountingOAuthRoutes, accountingRoutes } from "../src/server/accounting";
 import { createBill, approveBill } from "../src/server/business/service";
 import { functionalAmount, type Connection, type Job } from "../src/server/accounting/model";
 import { providerConfig, type AccountingTransport, type TransportRequest } from "../src/server/accounting/providers";
@@ -20,13 +22,14 @@ process.env.XERO_CLIENT_SECRET = "private-xero-secret";
 const permissions = ["company:read", "company:manage", "payments:read", "payments:prepare", "payments:approve", "reports:read", "documents:manage", "recipients:read"];
 const code = (expected: string) => (error: unknown) => error instanceof ApiError && error.code === expected;
 function fixture() {
- const id = randomUUID(), recipientId = randomUUID(), at = new Date().toISOString(), db = getDb();
+ const id = randomUUID(), recipientId = randomUUID(), sessionId = randomUUID(), sessionToken = newToken(), browserNonce = newToken(), at = new Date().toISOString(), db = getDb();
  db.prepare("INSERT INTO users(id,name,created_at) VALUES(?,?,?)").run(id, "Finance manager", at);
  db.prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(id, "Books company", id, at, at);
  db.prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,?,?,1,?)").run(id, id, "Owner", JSON.stringify(permissions), at);
  db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)").run(id, id, id, at);
+ db.prepare("INSERT INTO sessions(id,user_id,organization_id,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)").run(sessionId,id,id,hashToken(sessionToken),at,new Date(Date.now()+3600000).toISOString());
  db.prepare("INSERT INTO recipients(id,organization_id,user_id,name,kind,primary_asset,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,?,?,'business','USDC','near','supplier.near','confirmed',?,?,?)").run(recipientId, id, id, encrypt("Original supplier"), at, at, at);
- return { access: { userId: id, organizationId: id, permissions } as AccessContext, recipientId };
+ return { access: { userId: id, organizationId: id, permissions } as AccessContext, recipientId, sessionId, sessionToken, browserNonce };
 }
 function provider() {
  const calls: TransportRequest[] = [], bills = new Map<string, Record<string, unknown>>(), settlements = new Map<string, Record<string, unknown>>();
@@ -61,8 +64,8 @@ function provider() {
  return { transport, calls, bills, settlements, loseNextWrite: () => { loseWrite = true; } };
 }
 async function connected() {
- const f = fixture(), p = provider(), started = beginAccountingConnection(f.access, "quickbooks"), state = new URL(started.authorizationUrl).searchParams.get("state")!;
- await finishAccountingConnection("quickbooks", { state, code: "ephemeral-provider-code", realmId: "101" }, p.transport);
+ const f = fixture(), p = provider(), started = beginAccountingConnection(f.access, "quickbooks", f.browserNonce, f.sessionId), state = new URL(started.authorizationUrl).searchParams.get("state")!;
+ await finishAccountingConnection("quickbooks", { state, code: "ephemeral-provider-code", realmId: "101" }, f.browserNonce, p.transport);
  await selectAccountingEntity(f.access, started.connectionId, "101", p.transport);
  await refreshAccountingCatalog(f.access, started.connectionId, 1, p.transport);
  const mapping = { expectedVersion: 0, expenseAccountId: "expense", bankAccountId: "bank", taxCodeId: "zero", contacts: [{ recipientId: f.recipientId, externalId: "vendor" }], fxNumerator: "1", fxDenominator: "1", fxSource: "Company finance approved nominal rate", fxDate: new Date().toISOString().slice(0, 10), closedThrough: null, acknowledgement: true as const };
@@ -82,11 +85,11 @@ test("exact manual FX never assumes a peg or rounds fractional cents", () => {
 });
 
 test("OAuth state is one-use, actor/company scoped and secrets never appear in ordinary settings", async () => {
- const f = fixture(), other = fixture(), p = provider(), started = beginAccountingConnection(f.access, "quickbooks"), state = new URL(started.authorizationUrl).searchParams.get("state")!;
+ const f = fixture(), other = fixture(), p = provider(), started = beginAccountingConnection(f.access, "quickbooks", f.browserNonce, f.sessionId), state = new URL(started.authorizationUrl).searchParams.get("state")!;
  assert.ok(!started.authorizationUrl.includes("private-client-secret"));
  assert.equal(row("SELECT state_hash FROM accounting_oauth_states WHERE state_hash=?", state), undefined);
- await finishAccountingConnection("quickbooks", { state, code: "authorization-code", realmId: "101" }, p.transport);
- await assert.rejects(() => finishAccountingConnection("quickbooks", { state, code: "replay", realmId: "101" }, p.transport), code("ACCOUNTING_STATE_INVALID"));
+ await finishAccountingConnection("quickbooks", { state, code: "authorization-code", realmId: "101" }, f.browserNonce, p.transport);
+ await assert.rejects(() => finishAccountingConnection("quickbooks", { state, code: "replay", realmId: "101" }, f.browserNonce, p.transport), code("ACCOUNTING_STATE_INVALID"));
  const safe = JSON.stringify(accountingOverview(f.access)); assert.ok(!safe.includes("access-secret")); assert.ok(!safe.includes("refresh-secret"));
  assert.notEqual(row<Connection>("SELECT * FROM accounting_connections WHERE id=?", started.connectionId)!.token_ciphertext, "access-secret-1");
  await assert.rejects(() => selectAccountingEntity(other.access, started.connectionId, "101", p.transport), code("ACCOUNTING_NOT_FOUND"));
@@ -95,10 +98,49 @@ test("OAuth state is one-use, actor/company scoped and secrets never appear in o
 
 test("missing setup, stale consent and removed finance access fail without provider requests", async () => {
  const f = fixture(), p = provider(), secret = process.env.QUICKBOOKS_CLIENT_SECRET; delete process.env.QUICKBOOKS_CLIENT_SECRET;
- try { assert.throws(() => beginAccountingConnection(f.access, "quickbooks"), code("ACCOUNTING_SETUP_REQUIRED")); } finally { process.env.QUICKBOOKS_CLIENT_SECRET = secret; }
- const started = beginAccountingConnection(f.access, "quickbooks"), state = new URL(started.authorizationUrl).searchParams.get("state")!;
+ try { assert.throws(() => beginAccountingConnection(f.access, "quickbooks", f.browserNonce, f.sessionId), code("ACCOUNTING_SETUP_REQUIRED")); } finally { process.env.QUICKBOOKS_CLIENT_SECRET = secret; }
+ const started = beginAccountingConnection(f.access, "quickbooks", f.browserNonce, f.sessionId), state = new URL(started.authorizationUrl).searchParams.get("state")!;
  getDb().prepare("UPDATE memberships SET status='removed' WHERE organization_id=?").run(f.access.organizationId);
- await assert.rejects(() => finishAccountingConnection("quickbooks", { state, code: "code", realmId: "101" }, p.transport)); assert.equal(p.calls.length, 0);
+ await assert.rejects(() => finishAccountingConnection("quickbooks", { state, code: "code", realmId: "101" }, f.browserNonce, p.transport)); assert.equal(p.calls.length, 0);
+});
+
+test("OAuth callback rejects a copied authorization URL in another browser before exchanging or storing a token", async () => {
+ const f = fixture(), other = fixture(), p = provider(), started = beginAccountingConnection(f.access,"quickbooks",f.browserNonce,f.sessionId);
+ const callback = {state:new URL(started.authorizationUrl).searchParams.get("state")!,code:"victim-provider-code",realmId:"101"};
+ await assert.rejects(()=>finishAccountingConnection("quickbooks",callback,undefined,p.transport),code("ACCOUNTING_BROWSER_REQUIRED"));
+ await assert.rejects(()=>finishAccountingConnection("quickbooks",callback,other.browserNonce,p.transport),code("ACCOUNTING_STATE_INVALID"));
+ assert.equal(p.calls.length,0); assert.equal(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",started.connectionId)!.token_ciphertext,null);
+ assert.equal(row<{consumed_at:string|null}>("SELECT consumed_at FROM accounting_oauth_states WHERE state_hash=?",hashToken(callback.state))!.consumed_at,null);
+ await finishAccountingConnection("quickbooks",callback,f.browserNonce,p.transport);
+ assert.ok(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",started.connectionId)!.token_ciphertext);
+});
+
+test("OAuth callback requires its original live session even when a shared browser retains its nonce", async () => {
+ const f = fixture(), p = provider(), started = beginAccountingConnection(f.access,"quickbooks",f.browserNonce,f.sessionId);
+ getDb().prepare("DELETE FROM sessions WHERE id=?").run(f.sessionId); fixture();
+ await assert.rejects(()=>finishAccountingConnection("quickbooks",{state:new URL(started.authorizationUrl).searchParams.get("state")!,code:"new-browser-user-provider-code",realmId:"101"},f.browserNonce,p.transport),code("ACCOUNTING_SESSION_EXPIRED"));
+ assert.equal(p.calls.length,0); assert.equal(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",started.connectionId)!.token_ciphertext,null);
+ assert.throws(()=>beginAccountingConnection(f.access,"quickbooks",f.browserNonce,f.sessionId),code("ACCOUNTING_SESSION_EXPIRED"));
+});
+
+test("the actual OAuth routes bind a secure Lax cookie and accept a top-level provider return without a Strict session cookie", async () => {
+ const f = fixture(), p = provider(), appOrigin = process.env.APP_URL; process.env.APP_URL = "https://razor.example";
+ try {
+  const app = new Hono<AppEnv>();
+  app.onError((error,c)=>error instanceof ApiError?c.json({code:error.code},error.status as 400):c.json({code:"INTERNAL_ERROR"},500));
+  app.use("/company/*",async(c,next)=>{c.set("access",f.access);await next();});
+  app.route("/company/accounting",accountingRoutes); app.route("/api/accounting-oauth",createAccountingOAuthRoutes(p.transport));
+  const start = await app.request("https://razor.example/company/accounting/connect/quickbooks",{method:"POST",headers:{cookie:`razor_session=${f.sessionToken}`,origin:"https://razor.example"}});
+  assert.equal(start.status,200); const payload = await start.json() as {authorizationUrl:string;connectionId:string}, cookie = start.headers.get("set-cookie")!;
+  for (const flag of ["__Host-razor_accounting_oauth_quickbooks=","HttpOnly","Secure","SameSite=Lax","Path=/","Max-Age=600"]) assert.ok(cookie.includes(flag));
+  assert.ok(!cookie.includes("Domain=")); const cookiePair = cookie.split(";")[0]; assert.ok(!JSON.stringify(payload).includes(cookiePair.split("=")[1]));
+  const callback = `https://razor.example/api/accounting-oauth/quickbooks/callback?${new URLSearchParams({state:new URL(payload.authorizationUrl).searchParams.get("state")!,code:"provider-code",realmId:"101"})}`;
+  const copied = await app.request(callback,{headers:{"sec-fetch-site":"cross-site","sec-fetch-mode":"navigate"}});
+  assert.equal(copied.status,409); assert.equal(p.calls.length,0);
+  const completed = await app.request(callback,{headers:{cookie:cookiePair,"sec-fetch-site":"cross-site","sec-fetch-mode":"navigate"}});
+  assert.equal(completed.status,303); assert.ok(completed.headers.get("set-cookie")!.includes("Max-Age=0"));
+  assert.equal(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",payload.connectionId)!.status,"select_entity");
+ } finally { process.env.APP_URL = appOrigin; }
 });
 
 test("catalog-backed mappings require exact company contacts, active accounts and zero tax", async () => {
@@ -177,7 +219,7 @@ test("refresh rotates encrypted tokens and disconnect stops queued work before p
 });
 
 test("Xero uses granular scopes, verifies its tenant and never selects the first connection implicitly", async () => {
- const f = fixture(), started = beginAccountingConnection(f.access, "xero"), url = new URL(started.authorizationUrl), tenantId = randomUUID(), connectionId = randomUUID();
+ const f = fixture(), started = beginAccountingConnection(f.access, "xero", f.browserNonce, f.sessionId), url = new URL(started.authorizationUrl), tenantId = randomUUID(), connectionId = randomUUID();
  assert.ok(url.searchParams.get("scope")!.includes("accounting.invoices")); assert.ok(!url.searchParams.get("scope")!.includes("accounting.transactions"));
  const transport: AccountingTransport = async request => {
   if (request.url.endsWith("/connect/token")) return { status:200,body:{access_token:"xero-access",refresh_token:"xero-refresh",expires_in:1800} };
@@ -185,13 +227,13 @@ test("Xero uses granular scopes, verifies its tenant and never selects the first
   if (request.url.endsWith("/Organisation")) { assert.equal(request.headers["xero-tenant-id"],tenantId);return{status:200,body:{Organisations:[{OrganisationID:tenantId,Name:"Chosen Xero company",BaseCurrency:"GBP"}]}}; }
   throw new Error("Unexpected Xero request");
  };
- await finishAccountingConnection("xero",{state:url.searchParams.get("state")!,code:"xero-code"},transport);
+ await finishAccountingConnection("xero",{state:url.searchParams.get("state")!,code:"xero-code"},f.browserNonce,transport);
  assert.equal(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",started.connectionId)!.entity_id,null);
  await selectAccountingEntity(f.access,started.connectionId,tenantId,transport);assert.equal(row<Connection>("SELECT * FROM accounting_connections WHERE id=?",started.connectionId)!.currency,"GBP");
 });
 
 test("Xero posts an exact reviewed draft and fences its lost response with a read-only match", async () => {
- const f = fixture(), started = beginAccountingConnection(f.access, "xero"), tenant = randomUUID(), connection = randomUUID(), invoice = randomUUID();
+ const f = fixture(), started = beginAccountingConnection(f.access, "xero", f.browserNonce, f.sessionId), tenant = randomUUID(), connection = randomUUID(), invoice = randomUUID();
  const calls:TransportRequest[] = []; let stored:Record<string, unknown>|null = null;
  const transport:AccountingTransport = async request => {
   calls.push(request); const url = new URL(request.url), path = url.pathname;
@@ -212,7 +254,7 @@ test("Xero posts an exact reviewed draft and fences its lost response with a rea
   }
   throw new Error("Unexpected Xero test path");
  };
- await finishAccountingConnection("xero",{state:new URL(started.authorizationUrl).searchParams.get("state")!,code:"code"},transport);
+ await finishAccountingConnection("xero",{state:new URL(started.authorizationUrl).searchParams.get("state")!,code:"code"},f.browserNonce,transport);
  await selectAccountingEntity(f.access,started.connectionId,tenant,transport); await refreshAccountingCatalog(f.access,started.connectionId,1,transport);
  saveAccountingMapping(f.access,started.connectionId,{expectedVersion:0,expenseAccountId:"expense",bankAccountId:"bank",taxCodeId:"NONE",contacts:[{recipientId:f.recipientId,externalId:"vendor"}],fxNumerator:"4",fxDenominator:"5",fxSource:"Reviewed test FX source",fxDate:new Date().toISOString().slice(0,10),closedThrough:null,acknowledgement:true});
  const bill = createBill(f.access,{recipientId:f.recipientId,reference:randomUUID(),title:"Actual company bill",amount:"20000000",maxFee:"0"}); approveBill(f.access,bill.id);

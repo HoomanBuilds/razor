@@ -43,30 +43,37 @@ export function accountingOverview(access: AccessContext, page = 1) {
   page: bounded, hasMore: !!row("SELECT id FROM accounting_jobs WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1 OFFSET ?", live.organizationId, bounded * 25),
   scope: "Reviewed bill drafts and verified full-principal settlement records only. No payroll rows, bank transfers, automatic bank matching, tax calculations, fee/FX journals, credit-note posting or NetSuite sync. External accounting state never creates Razor cash or delivery evidence." };
 }
-export function beginAccountingConnection(access: AccessContext, provider: Provider) {
+function requireInitiatingSession(userId: string, sessionId: string | null) {
+ if (!sessionId || !row("SELECT id FROM sessions WHERE id=? AND user_id=? AND expires_at>?", sessionId, userId, now())) throw new ApiError(401, "Sign in again and start a new accounting connection", "ACCOUNTING_SESSION_EXPIRED");
+}
+export function beginAccountingConnection(access: AccessContext, provider: Provider, browserNonce: string, initiatingSessionId: string) {
  const live = accountingAccess(access), config = providerConfig(provider);
  if (!config.configured) throw new ApiError(503, "The operator must configure this provider's confidential web application first", "ACCOUNTING_SETUP_REQUIRED");
+ if (!/^[A-Za-z0-9_-]{43}$/.test(browserNonce)) throw new ApiError(422, "Start a new connection from this browser", "ACCOUNTING_BROWSER_REQUIRED");
+ requireInitiatingSession(live.userId, initiatingSessionId);
  const state = newToken();
  const id = transaction(db => {
   const previous = row<Connection>("SELECT * FROM accounting_connections WHERE organization_id=? AND provider=?", live.organizationId, provider), id = previous?.id ?? randomUUID();
   if (previous && previous.environment !== config.environment && previous.token_ciphertext) throw new ApiError(409, "Disconnect this grant before switching the provider environment", "ACCOUNTING_ENVIRONMENT_CHANGED");
   db.prepare("INSERT INTO accounting_connections(id,organization_id,provider,created_by,status,environment,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?,?) ON CONFLICT(organization_id,provider) DO UPDATE SET created_by=excluded.created_by,status='pending',environment=excluded.environment,version=version+1,last_error=NULL,updated_at=excluded.updated_at").run(id, live.organizationId, provider, live.userId, config.environment, now(), now());
   db.prepare("UPDATE accounting_oauth_states SET consumed_at=? WHERE connection_id=? AND consumed_at IS NULL").run(now(), id);
-  db.prepare("INSERT INTO accounting_oauth_states(state_hash,connection_id,user_id,expires_at) VALUES(?,?,?,?)").run(hashToken(state), id, live.userId, new Date(Date.now() + 600000).toISOString());
+  db.prepare("INSERT INTO accounting_oauth_states(state_hash,connection_id,user_id,expires_at,browser_nonce_hash,initiating_session_id) VALUES(?,?,?,?,?,?)").run(hashToken(state), id, live.userId, new Date(Date.now() + 600000).toISOString(), hashToken(browserNonce), initiatingSessionId);
   audit(live.userId, live.organizationId, "accounting.connect_requested", id, { provider }); return id;
  });
  const url = new URL(config.authorize); url.search = new URLSearchParams({ response_type: "code", client_id: config.clientId, redirect_uri: config.redirectUri, scope: config.scopes, state }).toString();
  return { connectionId: id, authorizationUrl: url.toString(), redirectUri: config.redirectUri, expiresInSeconds: 600, appType: "confidential_web_authorization_code" };
 }
-export async function finishAccountingConnection(provider: Provider, input: { state: string; code?: string; realmId?: string; error?: string }, transport: AccountingTransport = accountingTransport) {
+export async function finishAccountingConnection(provider: Provider, input: { state: string; code?: string; realmId?: string; error?: string }, browserNonce: string | undefined, transport: AccountingTransport = accountingTransport) {
  if (!input.state || input.state.length > 200) throw new ApiError(422, "The connection state is invalid or expired", "ACCOUNTING_STATE_INVALID");
+ if (!browserNonce || !/^[A-Za-z0-9_-]{43}$/.test(browserNonce)) throw new ApiError(409, "Return to the browser where this connection was requested and start again", "ACCOUNTING_BROWSER_REQUIRED");
  const held = transaction(db => {
-  const state = row<{ connection_id: string; user_id: string }>("SELECT * FROM accounting_oauth_states WHERE state_hash=? AND expires_at>? AND consumed_at IS NULL", hashToken(input.state), now());
+  const state = row<{ connection_id: string; user_id: string; initiating_session_id: string | null }>("SELECT * FROM accounting_oauth_states WHERE state_hash=? AND browser_nonce_hash=? AND expires_at>? AND consumed_at IS NULL", hashToken(input.state), hashToken(browserNonce), now());
   if (!state) throw new ApiError(409, "This connection response expired or was already used", "ACCOUNTING_STATE_INVALID");
   const connection = row<Connection>("SELECT * FROM accounting_connections WHERE id=? AND provider=?", state.connection_id, provider);
   if (!connection || connection.status !== "pending" || connection.created_by !== state.user_id) throw new ApiError(409, "This connection request changed", "ACCOUNTING_STATE_INVALID");
+  requireInitiatingSession(state.user_id, state.initiating_session_id);
   accountingAccess({ userId: state.user_id, organizationId: connection.organization_id, permissions: [] });
-  db.prepare("UPDATE accounting_oauth_states SET consumed_at=? WHERE state_hash=? AND consumed_at IS NULL").run(now(), hashToken(input.state)); return connection;
+  db.prepare("UPDATE accounting_oauth_states SET consumed_at=? WHERE state_hash=? AND consumed_at IS NULL").run(now(), hashToken(input.state)); return { ...connection, initiatingSessionId: state.initiating_session_id };
  });
  if (input.error || !input.code || input.code.length > 4096) {
   getDb().prepare("UPDATE accounting_connections SET status='reauthorize',last_error='CONSENT_NOT_COMPLETED',updated_at=? WHERE id=? AND version=?").run(now(), held.id, held.version);
@@ -78,6 +85,7 @@ export async function finishAccountingConnection(provider: Provider, input: { st
   const parsed = parseTokens(response.body), entities = await providerEntities(provider, parsed.tokens.accessToken, input.realmId, transport);
   if (!entities.length) throw new Error("NO_COMPANY_CONNECTION");
   transaction(db => {
+   requireInitiatingSession(held.created_by, held.initiatingSessionId);
    accountingAccess({ userId: held.created_by, organizationId: held.organization_id, permissions: [] });
    const changed = db.prepare("UPDATE accounting_connections SET token_ciphertext=?,access_expires_at=?,entities_ciphertext=?,status='select_entity',entity_id=NULL,entity_name=NULL,currency=NULL,last_error=NULL,updated_at=? WHERE id=? AND version=? AND status='pending'")
     .run(encrypt(JSON.stringify(parsed.tokens)), parsed.expiresAt, encrypt(JSON.stringify(entities)), now(), held.id, held.version);
