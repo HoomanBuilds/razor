@@ -16,7 +16,7 @@ function toolResult(action: () => unknown) {
 }
 
 export function createIntegrationMcpServer(principal: IntegrationPrincipal) {
-  const server = new McpServer({ name: "razor-company-integrations", version: "1.0.0" });
+  const server = new McpServer({ name: "razor-company-integrations", version: "1.0.0" }, { capabilities: { tools: { listChanged: false } } });
   for (const kind of ["payment", "invoice", "recipient"] as const) {
     server.registerTool(`request_${kind}_draft`, {
       description: `Create a company ${kind} draft. Requires ${kind === "invoice" ? "invoices" : `${kind}s`}:draft. No approval, execution or receiving-profile mutation. Reuse the same idempotency key only for identical terms.`,
@@ -53,6 +53,7 @@ export function createIntegrationMcpServer(principal: IntegrationPrincipal) {
 }
 
 export function handleIntegrationMcp(request: Request, principal: IntegrationPrincipal) {
-  const handler = createMcpHandler(() => createIntegrationMcpServer(principal), { legacy: "stateless" });
+  if (request.method !== "POST") return Response.json({ error: "Use POST for MCP tool requests", code: "METHOD_NOT_ALLOWED" }, { status: 405, headers: { Allow: "POST" } });
+  const handler = createMcpHandler(() => createIntegrationMcpServer(principal), { legacy: "stateless", maxSubscriptions: 0, keepAliveMs: 0 });
   return handler.fetch(request);
 }

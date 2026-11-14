@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
+import { CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { app } from "../src/server/app";
 import { ApiError, type AccessContext } from "../src/server/context";
 import { getDb, row, rows, transaction } from "../src/server/db";
@@ -7,6 +8,7 @@ import { hashToken } from "../src/server/identity/crypto";
 import { acquireIntegrationRequest, authenticateIntegration, canonicalTerms, createIntegrationCredential, createIntegrationDraft, integrationAccess, integrationEvidence, integrationFinancialStatus, integrationRequestStatus, integrationResource, integrationResourcePage, integrationSettings, revokeIntegrationCredential, rotateIntegrationCredential } from "../src/server/integrations/service";
 import { createWebhookEndpoint, dispatchIntegrationWebhooks, enqueueIntegrationEvent, inspectWebhookDelivery, publicWebhookAddress, replayWebhookDelivery, setWebhookEnabled, validateWebhookDestination, webhookSettings, webhookSignature, type WebhookSend } from "../src/server/integrations/webhooks";
 import { draftReceiptOutput, integrationScopes, resourceOutputs, type IntegrationScope } from "../src/server/integrations/schemas";
+import { createIntegrationMcpServer } from "../src/server/integrations/mcp";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "b2".repeat(32);
@@ -269,4 +271,31 @@ test("organization-scoped webhook ticks publish, recover and deliver only that c
   assert.equal(row<{ error: string }>("SELECT error FROM integration_webhook_attempts WHERE id='other-company-worker'")?.error, "LEASE_EXPIRED");
   setWebhookEnabled(owner, firstEndpoint.endpoint.id, false);
   setWebhookEnabled(other, otherEndpoint.endpoint.id, false);
+});
+
+test("static MCP tools disable event subscriptions and return finite bodies without retaining request leases", async () => {
+  const issued = principal(), authorization = `Bearer ${issued.secret}`;
+  const server = createIntegrationMcpServer(issued.principal);
+  assert.equal(server.server.getCapabilities().tools?.listChanged, false);
+  assert.notEqual(server.server.getCapabilities().resources?.subscribe, true);
+  await server.close();
+  const get = await app.request("http://localhost/api/integrations/mcp", { headers: { authorization, accept: "text/event-stream" } });
+  assert.equal(get.status, 405); assert.equal(get.headers.get("Allow"), "POST");
+  assert.equal((await get.json()).code, "METHOD_NOT_ALLOWED");
+  const response = await app.request("http://localhost/api/integrations/mcp", { method: "POST", headers: {
+    authorization, "content-type": "application/json", accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "subscriptions/listen",
+  }, body: JSON.stringify({ jsonrpc: "2.0", id: "subscription", method: "subscriptions/listen", params: { notifications: { toolsListChanged: true, resourceSubscriptions: ["razor://company/events"] }, _meta: {
+    [PROTOCOL_VERSION_META_KEY]: "2026-07-28", [CLIENT_INFO_META_KEY]: { name: "subscription-test", version: "1" }, [CLIENT_CAPABILITIES_META_KEY]: {},
+  } } }) });
+  assert.equal(response.status, 200); assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const body = await Promise.race([response.text(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("MCP response did not finish")), 1000); })]);
+    const packet = JSON.parse(body);
+    assert.equal(packet.id, "subscription"); assert.equal(packet.error.code, -32603); assert.equal(packet.error.message, "Subscription limit reached");
+  } finally { if (timer) clearTimeout(timer); await response.body?.cancel().catch(() => {}); }
+  assert.equal(row<{ total: number }>("SELECT COUNT(*) AS total FROM integration_request_leases WHERE credential_id=?", issued.credential.id)?.total, 0);
+  revokeIntegrationCredential(owner, issued.credential.id);
+  const revoked = await app.request("http://localhost/api/integrations/mcp", { headers: { authorization, accept: "text/event-stream" } });
+  assert.equal(revoked.status, 401);
 });
