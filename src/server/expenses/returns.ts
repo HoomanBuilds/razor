@@ -9,6 +9,7 @@ import { audit, getAccess } from "../identity/session";
 import { getRecipient, getRecipientVersion } from "../identity/recipients";
 import { verifiedOwnerWallet } from "../account-recovery/near";
 import { reviewedArtifactHash } from "../near-artifacts";
+import { describeContractUpgradePolicy } from "../near-upgrade-policy";
 import {
   createDirectFunding,
   DIRECT_USDC_ASSET,
@@ -532,6 +533,9 @@ function projection(value: Correction, personal = false) {
             sourceAccount: leg.source_account,
             reviewToken: leg.review_token,
             reviewExpiresAt: leg.review_expires_at,
+            upgradePolicy: describeContractUpgradePolicy(
+              (JSON.parse(decrypt(leg.target_ciphertext)) as TreasuryConfig).near_account_id,
+            ),
             funding: {
               id: `expense-return:${leg.id}`,
               origin_asset: DIRECT_USDC_ASSET,

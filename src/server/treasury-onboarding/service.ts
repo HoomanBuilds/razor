@@ -9,6 +9,7 @@ import { atomic } from "../../lib/money";
 import { reviewedArtifactHash } from "../near-artifacts";
 import type { WalletTransaction } from "../payments/types";
 import { ownerWalletProviders } from "../account-recovery/providers";
+import { describeContractUpgradePolicy } from "../near-upgrade-policy";
 
 const Account = z.string().refine(validNearAccount, "Enter a valid NEAR account");
 const Amount = z.string().refine(value => { try { atomic(value); return true; } catch { return false; } }, "Use a positive microUSDC amount within the supported range");
@@ -51,7 +52,7 @@ async function verifiedPlatform() {
   const parsed = Platform.safeParse(response);
   if (!parsed.success) throw new ApiError(502, "The contract does not expose the reviewed shared treasury architecture", "TREASURY_RESPONSE_INVALID");
   if (config.network === "mainnet" && parsed.data.token_contract !== NATIVE_USDC.near) throw new ApiError(503, "Mainnet registration requires verified native USDC on NEAR", "SETTLEMENT_TOKEN_MISMATCH");
-  return { config, platform: parsed.data };
+  return { config, platform: parsed.data, upgradePolicy: describeContractUpgradePolicy(config.treasuryId) };
 }
 
 function verifiedOwner(access: AccessContext, owner: string, network: Network) {
@@ -85,10 +86,10 @@ async function companyRecord(config: Settings, companyId: string, ownerAccount: 
 export async function getOnboardingConfig(access: AccessContext) {
   requirePermission(access, "company:manage");
   const network = process.env.NEAR_NETWORK || "testnet", verifiedWallets = rows<{ address: string; network: string }>("SELECT address,network FROM linked_wallets WHERE user_id=? AND family='near' AND network=?", access.userId, network);
-  const common = { architecture: "shared_v1", companyId: row<{company_id: string | null}>("SELECT company_id FROM treasury_config WHERE organization_id=?", access.organizationId)?.company_id ?? null, network, verifiedWallets, ownerWalletSetup: { ...ownerWalletProviders(network), needsWallet: !verifiedWallets.length, mode: "native_near_signer" } };
+  const common = { upgradePolicy: null as ReturnType<typeof describeContractUpgradePolicy> | null, architecture: "shared_v1", companyId: row<{company_id: string | null}>("SELECT company_id FROM treasury_config WHERE organization_id=?", access.organizationId)?.company_id ?? null, network, verifiedWallets, ownerWalletSetup: { ...ownerWalletProviders(network), needsWallet: !verifiedWallets.length, mode: "native_near_signer" } };
   try {
-    const { config, platform } = await verifiedPlatform();
-    return { ...common, ready: !platform.paused, treasuryId: config.treasuryId, factoryId: config.treasuryId, settlementEnabled: network === "mainnet", factory: { ...platform, treasury_wasm_hash: config.treasuryCodeHash, treasury_funding: "0", factory_storage_fee: "0", minimum_deposit: "0" }, reason: platform.paused ? "New company registration is paused. Existing treasury records remain available." : null };
+    const { config, platform, upgradePolicy } = await verifiedPlatform();
+    return { ...common, ready: !platform.paused, treasuryId: config.treasuryId, factoryId: config.treasuryId, settlementEnabled: network === "mainnet", upgradePolicy, factory: { ...platform, treasury_wasm_hash: config.treasuryCodeHash, treasury_funding: "0", factory_storage_fee: "0", minimum_deposit: "0" }, reason: platform.paused ? "New company registration is paused. Existing treasury records remain available." : null };
   } catch (error) {
     if (!(error instanceof ApiError)) throw error;
     return { ...common, ready: false, treasuryId: process.env.NEAR_TREASURY_ID || null, factoryId: process.env.NEAR_TREASURY_ID || null, settlementEnabled: false, reason: error.message, code: error.code };
@@ -97,7 +98,7 @@ export async function getOnboardingConfig(access: AccessContext) {
 
 export async function quoteTreasury(access: AccessContext, input: CreationInput) {
   requirePermission(access, "company:manage");
-  const parsed = creationInput.parse(input), { config, platform } = await verifiedPlatform();
+  const parsed = creationInput.parse(input), { config, platform, upgradePolicy } = await verifiedPlatform();
   verifiedOwner(access, parsed.ownerAccount, config.network);
   if (platform.paused) throw new ApiError(409, "New company registration is paused", "TREASURY_PAUSED");
   const companyId = companyIdFor(access, parsed.ownerAccount);
@@ -106,7 +107,7 @@ export async function quoteTreasury(access: AccessContext, input: CreationInput)
   const [response, creation] = await Promise.all([view(config, "quote_registration", { company_id: companyId }), companyRecord(config, companyId, parsed.ownerAccount, parsed.slug)]);
   const quoted = Quote.parse(response);
   if (quoted.company_id !== companyId || quoted.token_contract !== platform.token_contract) throw new ApiError(502, "The registration quote does not match this company and settlement token", "REGISTRATION_TERMS_MISMATCH");
-  const quote = { architecture: "shared_v1", companyId, accountId: config.treasuryId, ownerAccount: parsed.ownerAccount, slug: parsed.slug, tokenContract: platform.token_contract, treasuryCodeHash: config.treasuryCodeHash, factoryCodeHash: config.treasuryCodeHash, minimumDeposit: quoted.minimum_deposit, treasuryFunding: "0", factoryStorageFee: quoted.minimum_deposit, storageBytes: String(quoted.storage_bytes), perPaymentLimit: parsed.perPaymentLimit, dailyLimit: parsed.dailyLimit, network: config.network, treasuryId: config.treasuryId, factoryId: config.treasuryId };
+  const quote = { architecture: "shared_v1", companyId, accountId: config.treasuryId, ownerAccount: parsed.ownerAccount, slug: parsed.slug, tokenContract: platform.token_contract, treasuryCodeHash: config.treasuryCodeHash, factoryCodeHash: config.treasuryCodeHash, minimumDeposit: quoted.minimum_deposit, treasuryFunding: "0", factoryStorageFee: quoted.minimum_deposit, storageBytes: String(quoted.storage_bytes), perPaymentLimit: parsed.perPaymentLimit, dailyLimit: parsed.dailyLimit, network: config.network, treasuryId: config.treasuryId, factoryId: config.treasuryId, upgradePolicy };
   return { quote: { ...quote, hash: createHash("sha256").update(JSON.stringify(quote)).digest("hex") }, creation };
 }
 

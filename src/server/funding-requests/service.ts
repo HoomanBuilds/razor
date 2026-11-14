@@ -1,6 +1,7 @@
 import { pageWindow } from "../pagination";
 import { sharedFundingMessage } from "../payments/near";
 import { randomUUID } from "node:crypto";
+import { describeContractUpgradePolicy } from "../near-upgrade-policy";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt, hashToken, newToken } from "../identity/crypto";
@@ -87,7 +88,7 @@ function publicLegStatus(request: FundingRequestRecord, leg: FundingLeg) {
 function publicView(request: FundingRequestRecord): PublicFundingRequest {
   const { confirmed, remaining } = progress(request), active = activeQuote(request.id);
   const company = row<{ name: string }>("SELECT name FROM organizations WHERE id=?", request.organization_id);
-  return { id: request.id, companyName: company?.name ?? "Company", amount: request.amount, purpose: decrypt(request.purpose_ciphertext), expiresAt: request.expires_at,
+  return { id: request.id, companyName: company?.name ?? "Company", amount: request.amount, purpose: decrypt(request.purpose_ciphertext), expiresAt: request.expires_at, upgradePolicy: describeContractUpgradePolicy(request.treasury_account_id),
     confirmedAmount: confirmed.toString(), remainingAmount: remaining.toString(), status: state(request, confirmed), activeFunding: active ? { id: active.funding_id, status: active.funding_id ? publicLegStatus(request, legForQuote(active)) : "quoting" } : null };
 }
 function assertOpen(request: FundingRequestRecord) {

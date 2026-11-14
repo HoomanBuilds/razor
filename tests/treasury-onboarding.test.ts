@@ -5,8 +5,8 @@ import { getDb, row } from "../src/server/db";
 import { ApiError, type AccessContext } from "../src/server/context";
 import { NATIVE_USDC } from "../src/server/payments/policy";
 import { deriveSharedCompanyId } from "../src/server/payments/near";
-import { configureTreasury } from "../src/server/payments/service";
-import { creationInput, prepareTreasury, quoteTreasury, reconcileTreasury } from "../src/server/treasury-onboarding/service";
+import { configureTreasury, getTreasury } from "../src/server/payments/service";
+import { creationInput, getOnboardingConfig, prepareTreasury, quoteTreasury, reconcileTreasury } from "../src/server/treasury-onboarding/service";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.NEAR_NETWORK = "mainnet";
@@ -111,4 +111,40 @@ test("legacy isolated rows cannot silently become shared treasuries", async () =
   getDb().prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,created_at) VALUES(?,?,'mainnet',?,?)").run(legacy.organizationId, "legacy.near", NATIVE_USDC.near, savedAt);
   await assert.rejects(() => configureTreasury(legacy, { nearAccountId: "shared.near", network: "mainnet", tokenContract: NATIVE_USDC.near }), (error: ApiError) => error.code === "TREASURY_CHANGE_REQUIRES_MIGRATION");
   assert.equal(row<{architecture:string}>("SELECT architecture FROM treasury_config WHERE organization_id=?", legacy.organizationId)?.architecture, "isolated_v1");
+});
+
+test("registration reviews configured upgrade authority and invalidates quotes when the policy changes", async () => {
+  const originalMode = process.env.NEAR_CONTRACT_UPGRADE_POLICY;
+  const originalKeys = process.env.NEAR_CONTRACT_UPGRADE_KEYS;
+  const restore = mockRpc();
+  const reviewAccess = { ...access, organizationId: "upgrade-review-company" };
+  getDb().prepare("INSERT INTO organizations(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)").run(reviewAccess.organizationId, "Upgrade review", access.userId, savedAt, savedAt);
+  try {
+    process.env.NEAR_CONTRACT_UPGRADE_POLICY = "immutable";
+    const immutable = await quoteTreasury(reviewAccess, terms);
+    assert.equal(immutable.quote.upgradePolicy.mode, "immutable");
+    assert.equal(immutable.quote.upgradePolicy.upgradable, false);
+    process.env.NEAR_CONTRACT_UPGRADE_POLICY = "owner_controlled";
+    const publicKey = `ed25519:${base58.encode(new Uint8Array(32).fill(9))}`;
+    process.env.NEAR_CONTRACT_UPGRADE_KEYS = JSON.stringify({ "shared.near": [publicKey] });
+    const configured = await getOnboardingConfig(reviewAccess);
+    assert.equal(configured.ready, true);
+    assert.equal(configured.upgradePolicy?.mode, "owner_controlled");
+    assert.match(configured.upgradePolicy!.disclosure, /cannot prevent a malicious contract upgrade/);
+    assert.equal("keysVerified" in configured.upgradePolicy!, false);
+    const controlled = await quoteTreasury(reviewAccess, terms);
+    assert.equal(controlled.quote.upgradePolicy.upgradable, true);
+    assert.deepEqual(controlled.quote.upgradePolicy.publicKeys, [publicKey]);
+    assert.notEqual(controlled.quote.hash, immutable.quote.hash);
+    await assert.rejects(() => prepareTreasury(reviewAccess, terms, immutable.quote.hash), (error: ApiError) => error.code === "CREATION_QUOTE_CHANGED");
+    process.env.NEAR_CONTRACT_UPGRADE_KEYS = JSON.stringify({ "shared.near": [`ed25519:${base58.encode(new Uint8Array(32).fill(10))}`] });
+    await assert.rejects(() => prepareTreasury(reviewAccess, terms, controlled.quote.hash), (error: ApiError) => error.code === "CREATION_QUOTE_CHANGED");
+    assert.equal(getTreasury(access).upgradePolicy?.mode, "owner_controlled");
+  } finally {
+    if (originalMode === undefined) delete process.env.NEAR_CONTRACT_UPGRADE_POLICY;
+    else process.env.NEAR_CONTRACT_UPGRADE_POLICY = originalMode;
+    if (originalKeys === undefined) delete process.env.NEAR_CONTRACT_UPGRADE_KEYS;
+    else process.env.NEAR_CONTRACT_UPGRADE_KEYS = originalKeys;
+    restore();
+  }
 });

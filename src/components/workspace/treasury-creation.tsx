@@ -1,5 +1,7 @@
 "use client";
 
+import { ContractUpgradeDisclosure } from "@/components/contract-upgrade-disclosure";
+import type { ContractUpgradePolicy } from "@/lib/contract-upgrade-policy";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, RequestError } from "@/lib/api";
 import { formatUnits, parseUnits } from "@/lib/money";
@@ -11,9 +13,9 @@ import { OwnerWalletOnboarding } from "@/components/account/owner-wallet-onboard
 import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Field, Panel, Status } from "./shared";
 
-interface RegistrationState {ready:boolean;network:"mainnet"|"testnet";treasuryId:string|null;reason?:string|null;verifiedWallets:Array<{address:string;network:string}>}
+interface RegistrationState {upgradePolicy?:ContractUpgradePolicy;ready:boolean;network:"mainnet"|"testnet";treasuryId:string|null;reason?:string|null;verifiedWallets:Array<{address:string;network:string}>}
 interface CompanyRegistration {account_id:string;owner_id:string;status:"ready"}
-interface RegistrationQuote {architecture:"shared_v1";companyId:string;accountId:string;ownerAccount:string;slug:string;tokenContract:string;treasuryCodeHash:string;minimumDeposit:string;storageBytes:string;perPaymentLimit:string;dailyLimit:string;network:"mainnet"|"testnet";hash:string}
+interface RegistrationQuote {upgradePolicy:ContractUpgradePolicy;architecture:"shared_v1";companyId:string;accountId:string;ownerAccount:string;slug:string;tokenContract:string;treasuryCodeHash:string;minimumDeposit:string;storageBytes:string;perPaymentLimit:string;dailyLimit:string;network:"mainnet"|"testnet";hash:string}
 interface QuoteResult {quote:RegistrationQuote;creation:CompanyRegistration|null}
 interface RegistrationResult {status:string;creation:CompanyRegistration|null;configured:boolean}
 const near=(amount:string)=>`${formatUnits(amount,24)} NEAR`;
@@ -64,6 +66,7 @@ export function TreasuryCreation() {
     {config&&!config.ready?<p role="status" className="rounded-lg bg-muted p-4 text-sm">{config.reason}</p>:null}
     {config?.network==="testnet"?<p className="text-sm text-muted-foreground">Testnet registration supports development. Live NEAR Intents funding requires mainnet.</p>:null}
     {config?.treasuryId?<div className="text-sm"><span className="mr-2 text-muted-foreground">Shared treasury on {config.network}</span><Address value={config.treasuryId} network={config.network}/></div>:null}
+    {config?.upgradePolicy&&!quoted?<ContractUpgradeDisclosure policy={config.upgradePolicy}/>:null}
     <form onSubmit={event=>{event.preventDefault();void run("quote",async()=>{const quote=await api<QuoteResult>(`${base}/onboarding/quote`,input());setQuoted(quote);setResult(quote.creation?{status:quote.creation.status,creation:quote.creation,configured:false}:null);setAcknowledged(false);});}}>
       <fieldset disabled={!!busy||pending} className="grid min-w-0 gap-4 border-0 p-0 md:grid-cols-2">
         <Field label="Verified NEAR owner wallet"><select required className={control} value={ownerAccount} onChange={event=>setOwner(event.target.value)}><option value="">Choose owner wallet</option>{config?.verifiedWallets.map(wallet=><option key={wallet.address} value={wallet.address}>{wallet.address}</option>)}</select></Field>
@@ -74,10 +77,11 @@ export function TreasuryCreation() {
     </form>
     <Action type="button" busy={busy==="check"||busy==="poll"} disabled={!ownerAccount||!!busy} onClick={()=>void run("check",async()=>{pollCount.current=0;await refreshRegistration(ownerAccount);})}>Check registration status</Action>
     {quoted?<section className="space-y-4 rounded-lg border bg-muted/40 p-4">
+      <ContractUpgradeDisclosure policy={quoted.quote.upgradePolicy}/>
       <div className="grid gap-4 sm:grid-cols-2"><div><p className="text-xs text-muted-foreground">Shared treasury account</p><div className="mt-2"><Address value={quoted.quote.accountId} network={quoted.quote.network}/></div></div><div><p className="text-xs text-muted-foreground">Company owner</p><div className="mt-2"><Address value={quoted.quote.ownerAccount} network={quoted.quote.network}/></div></div><div><p className="text-xs text-muted-foreground">Company storage allowance</p><p className="mt-1 text-xl font-semibold">{near(quoted.quote.minimumDeposit)}</p></div><div><p className="text-xs text-muted-foreground">Payment policy</p><p className="mt-1 text-sm">{usd(quoted.quote.perPaymentLimit)} per payment</p><p className="text-sm">{usd(quoted.quote.dailyLimit)} per day</p></div></div>
       <p className="text-xs leading-5 text-muted-foreground">This deposit funds your company's {quoted.quote.storageBytes} bytes of shared-state allowance. It does not pay for another contract deployment, and is not a Razor subscription fee or a USDC deposit. Wallet gas is additional. More history can require a storage top-up.</p>
       <details className="text-xs"><summary className="cursor-pointer">Verified registration details</summary><p className="mt-2 break-all">Company ID: {quoted.quote.companyId}</p><p className="mt-1 break-all">USDC contract: {quoted.quote.tokenContract}</p><p className="mt-1 break-all">Treasury code hash: {quoted.quote.treasuryCodeHash}</p></details>
-      <label className="flex items-start gap-2 text-sm leading-6"><input type="checkbox" checked={acknowledged} disabled={!!busy||pending} onChange={event=>setAcknowledged(event.target.checked)} className="mt-1.5"/>I reviewed the company owner, shared account, storage deposit and USDC policy limits.</label>
+      <label className="flex items-start gap-2 text-sm leading-6"><input type="checkbox" checked={acknowledged} disabled={!!busy||pending} onChange={event=>setAcknowledged(event.target.checked)} className="mt-1.5"/>I reviewed the company owner, shared account, storage deposit, USDC policy limits and contract upgrade authority.</label>
       <Action busy={busy==="register"||pending} disabled={!canRegister||!!busy} onClick={()=>void run("register",register)}>{pending?"Verifying registration":"Activate in my wallet"}</Action>
     </section>:null}
     {recorded?<section className="space-y-3 rounded-lg border p-4"><div className="flex flex-wrap items-center gap-3"><h3 className="text-sm font-medium">Company registration</h3><Status value={recorded.status}/></div><Address value={recorded.account_id} network={config?.network}/><p className="text-sm text-muted-foreground">This company is registered. Check registration status to verify its owner and connect its isolated company balance.</p></section>:result?.status==="not_requested"?<p role="status" className="text-sm text-muted-foreground">No final registration was found for this company. A submitted transaction may still be confirming.</p>:null}
