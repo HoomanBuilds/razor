@@ -1,6 +1,6 @@
 # Crypto release software coverage
 
-Source review dated 14 November 2026, through committed application `9643ae8`. This is the requested mapping of every baseline and competitive acceptance ID to its implementation and remaining dependencies. It is not a runtime verification report or permission to deploy, sign, spend, contact providers or publish a service.
+Source review dated 14 November 2026, through committed application `9643ae8`. This is the requested mapping of every baseline and competitive acceptance ID to its implementation and remaining dependencies. It is a source-coverage report; runtime and live operating evidence are recorded separately.
 
 The baseline contains **134 checks, 15 historically verified**. The competitive checklist contains **167 historical checks: 146 active and 21 deferred**. Its 42 historically checked items are all active, so the active verification count is **42 of 146**, with 21 deferred unchecked items kept separately. These counts do not change from source review. The original 97 feature requirements comprise 89 core and 8 optional requirements; journeys and track evidence add verification gates rather than extra product features.
 
@@ -31,6 +31,22 @@ The final consumers were inspected through `9643ae8`, including the sources belo
 | G08-08, G15-01, GATE-05 | `contracts/razor-evidence/src/lib.rs`, `contracts/build.sh`, `scripts/contract-manifest.mjs`, `src/server/setup/deployment.ts`, `src/server/demo/build.ts` and `src/components/workspace/settlement-proof.tsx`: optional stateless recorder source/build/planning, truthful demo identity, and lazy settlement-proof controls in payment history/reconciliation are integrated. An unsigned plan or recorder log alone proves no private execution or token delivery. |
 
 The integrator recorded a passing memory-capped TypeScript compilation through `66f9029` in ignored `.data/crypto-final-integration-typecheck.log`; that precedes the final sharing/verifier integration and is not a full execution review of `9643ae8`. This documentation audit performed no tests, compiler, browser, provider, wallet or transfer actions. New execution and live evidence remain separate gates. Future absent consumers must be recorded as I or M with their exact IDs and revision.
+
+## Development completion record
+
+The final memory-capped production build launched from `42040ac` passed compilation, TypeScript, static generation and build tracing. Application source is `9643ae8`; subsequent checklist commits change documentation only. The build includes the public scenario and shared-evidence viewer routes. Ignored evidence: `.data/crypto-final-release-build.log`. The preceding standalone TypeScript pass is `.data/crypto-final-integration-typecheck.log`.
+
+All five optimized Rust artifacts compiled using the serialized one-job build, including credit and stateless evidence. Sizes in bytes: treasury 663385, clearing 332296, billing 181298, credit 232016, evidence 110756. Existing shared-contract and credit hashes are unchanged. Ignored evidence: `.data/crypto-final-contract-build.log` and `.tools/wasm/manifest.json`. This pass ran no test suites, browser journeys, deployments, inference or transfers, and measured no new mainnet gas.
+
+The following checks describe development delivery only, not the original acceptance checkboxes:
+
+- [x] Every baseline and historical competitive ID is mapped, including all 146 active and 21 explicitly deferred competitive IDs.
+- [x] No absent in-scope software consumer remains identified by the source audit; conditional cross-chain standing authority and claim routing remain disabled under their original enablement rules.
+- [x] Final company/public routes, worker tasks, quota consumers and user controls are integrated and included in the production build.
+- [x] Required and optional contract sources compile through the capped optimization pipeline; no new per-company contract deployment is introduced.
+- [x] Reviewed feature branches are integrated in main and all feature worktrees are removed.
+
+Remaining unchecked acceptance concerns configured credentials, actual owner/provider authorization, deployments and authoritative receipts; operating evidence includes real lenders and eligibility publication, cost observations, staffing acknowledgment and demonstrations. These are not represented as completed by source or compiler success. No new deployment-dependent capability is advertised as live. The default support mode remains asynchronous without a staffing promise, and existing plan versions retain their original terms until an authorized new version is published.
 
 ## Baseline ID map
 
