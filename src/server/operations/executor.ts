@@ -18,6 +18,7 @@ interface ChainConfig { paused: boolean; owner_id: string; token_contract: strin
 type RoutePayment = Omit<ChainPayment, "attempts"> & { policy_version: string; recipient_version: string; attempts: (ChainPayment["attempts"][number] & { destination: { asset_id: string; network: string; address: string } })[] };
 
 export async function executeApprovedAttempt(job: OperationJob, access: AccessContext) {
+  if (row("SELECT payment_id FROM standing_executions WHERE attempt_id=? AND organization_id=?", job.entity_id, job.organization_id)) return { status: "completed" as const, detail: { authority: "native_standing", monitoredByNativeFlow: true } };
   const blocked = (reason: string) => {
     notify(job.organization_id, `execute-attention:${job.entity_id}:${reason}`, "Payment requires attention", reason, job.entity_id);
     return { status: "blocked" as const, delayMs: 300_000, detail: { mode: "manual", reason, attemptId: job.entity_id } };
@@ -66,7 +67,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
     || exact.destination.asset_id !== attempt.destination_asset || exact.destination.network !== attempt.destination_network || exact.destination.address !== attempt.destination_address
     || exact.use_backup !== (attempt.route === "backup")) return blocked("The stored payment and the exact onchain route disagree. Reconcile them before signing.");
   const { Account, JsonRpcProvider, KeyPairSigner, SignedTransaction, actions } = await import("near-api-js");
-  const provider = new JsonRpcProvider({ url: config.network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org" }, { retries: 0 });
+  const provider = new JsonRpcProvider({ url: config.network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org" }, { retries: 1 });
   const signer = KeyPairSigner.fromSecretKey(process.env.RAZOR_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`);
   const publicKey = await signer.getPublicKey();
   const key = await provider.viewAccessKey({ accountId: worker.accountId, publicKey, finalityQuery: { finality: "final" } });

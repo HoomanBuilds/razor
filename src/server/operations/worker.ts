@@ -158,7 +158,7 @@ export function leaseOperation(
       .run(now, now, organizationId ?? null, organizationId ?? null);
     const job = row<OperationJob>(
       `SELECT * FROM operation_jobs j WHERE status IN ('queued','blocked') AND run_at<=? AND (? IS NULL OR organization_id=?)
-      AND (kind!='execute_approved' OR NOT EXISTS(SELECT 1 FROM operation_jobs x WHERE x.kind='execute_approved' AND x.status='running' AND x.lease_expires_at>?))
+      AND (kind NOT IN ('execute_approved','due_payment') OR NOT EXISTS(SELECT 1 FROM operation_jobs x WHERE x.kind IN ('execute_approved','due_payment') AND x.status='running' AND x.lease_expires_at>?))
       ORDER BY CASE kind WHEN 'recurring' THEN 0 WHEN 'reconcile_payment' THEN 1 WHEN 'reconcile_funding' THEN 2 WHEN 'due_payment' THEN 3 WHEN 'execute_approved' THEN 4 ELSE 5 END,run_at,id LIMIT 1`,
       now,
       organizationId ?? null,
@@ -377,6 +377,9 @@ async function processJob(job: OperationJob): Promise<JobResult> {
   if (job.kind === "recurring") return recurringJob(job);
   const access = ownerAccess(job.organization_id);
   if (job.kind === "due_payment") {
+    const { tryExecuteStandingPayment } = await import("../standing-mandates/executor");
+    const automatic = await tryExecuteStandingPayment(job, access);
+    if (automatic) return automatic;
     const payment = row<{ status: string; reference: string }>(
       "SELECT status,reference FROM payments WHERE id=? AND organization_id=?",
       job.entity_id,

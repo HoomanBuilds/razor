@@ -946,3 +946,97 @@ fn retained_token_ledgers_and_callbacks_are_company_scoped() {
         U128(100)
     );
 }
+
+#[test]
+fn shared_standing_authority_keeps_company_cash_and_pending_pool_liability_isolated() {
+    let (mut treasury, a, b) = setup();
+    deposit(&mut treasury, &a, "standing-funds", 500);
+    call("alice.testnet", 1);
+    treasury.set_role(a.clone(), account("agent.testnet"), "executor".into(), true);
+    treasury.set_recipient(
+        a.clone(),
+        "vendor".into(),
+        Destination {
+            network: "near".into(),
+            asset_id: "nep141:usdc.testnet".into(),
+            address: "vendor.testnet".into(),
+        },
+        None,
+        false,
+        true,
+    );
+    let grant = treasury.grant_standing_mandate(
+        a.clone(),
+        StandingMandateTerms {
+            id: "native-vendor".into(),
+            recipient_id: "vendor".into(),
+            recipient_version: U64(1),
+            supplier_profile_hash: "a".repeat(64),
+            actor_id: account("agent.testnet"),
+            actor_public_key: env::signer_account_pk(),
+            per_payment_max_input: U128(200),
+            period_max_input: U128(300),
+            lifetime_max_input: U128(400),
+            period_ms: U64(86_400_000),
+            valid_from_ms: U64(NOW),
+            expires_at_ms: U64(NOW + 10 * 86_400_000),
+            invoice_condition: "accepted_vendor_bill_application_gate".into(),
+        },
+    );
+    assert!(
+        treasury
+            .get_standing_mandate(b.clone(), "native-vendor".into())
+            .is_none()
+    );
+    let mut builder = context("agent.testnet", 0);
+    builder.block_timestamp((NOW + 86_400_000) * 1_000_000);
+    testing_env!(builder.build());
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.execute_standing_payment(
+            b.clone(),
+            "native-vendor".into(),
+            "payment".into(),
+            "attempt".into(),
+            U128(100),
+            U128(10),
+            "bill".into(),
+            grant.terms_hash.clone(),
+            "b".repeat(64)
+        )))
+        .is_err()
+    );
+    drop(treasury.execute_standing_payment(
+        a.clone(),
+        "native-vendor".into(),
+        "payment".into(),
+        "attempt".into(),
+        U128(100),
+        U128(10),
+        "bill".into(),
+        grant.terms_hash,
+        "b".repeat(64),
+    ));
+    assert_eq!(treasury.get_balance(a.clone()).balance, U128(400));
+    assert_eq!(treasury.get_balance(a.clone()).in_flight, U128(100));
+    assert_eq!(treasury.get_balance(b).balance, U128(0));
+    assert_eq!(
+        treasury.get_pool_liability(account("usdc.testnet")),
+        U128(500)
+    );
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result(a.clone(), "payment".into(), "attempt".into()));
+    assert_eq!(
+        treasury.get_pool_liability(account("usdc.testnet")),
+        U128(400)
+    );
+    assert!(!treasury.on_transfer_result(a.clone(), "payment".into(), "attempt".into()));
+    assert_eq!(
+        treasury.get_pool_liability(account("usdc.testnet")),
+        U128(400)
+    );
+    let usage = treasury
+        .get_standing_mandate(a, "native-vendor".into())
+        .unwrap();
+    assert_eq!(usage.pending_input, U128(0));
+    assert_eq!(usage.lifetime_used_input, U128(110));
+}

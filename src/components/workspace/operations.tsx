@@ -11,6 +11,7 @@ import type {
   Notice,
   RecurringRuleView,
 } from "@/server/operations/types";
+import { StandingMandatesPanel } from "./standing-mandates";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import {
@@ -99,6 +100,7 @@ export function OperationsPanel() {
   if(!canRead)return null;
   return (
     <div className="grid gap-6">
+      <StandingMandatesPanel />
       <Panel
         title="Company operations"
         description="Keep due payments, recurring drafts and delivery checks moving without losing their approval history."

@@ -177,3 +177,38 @@ pub struct BalanceView {
     pub in_flight: U128,
     pub confirmed_at_ms: U64,
 }
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct StandingMandateTerms {
+    pub id: String,
+    pub recipient_id: String,
+    pub recipient_version: U64,
+    pub supplier_profile_hash: String,
+    pub actor_id: AccountId,
+    pub actor_public_key: near_sdk::PublicKey,
+    pub per_payment_max_input: U128,
+    pub period_max_input: U128,
+    pub lifetime_max_input: U128,
+    pub period_ms: U64,
+    pub valid_from_ms: U64,
+    pub expires_at_ms: U64,
+    pub invoice_condition: String,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct StandingMandate {
+    pub terms: StandingMandateTerms,
+    pub destination: Destination,
+    pub policy_version: U64,
+    pub terms_hash: String,
+    pub approvals: BTreeSet<AccountId>,
+    pub required_approvals: u8,
+    pub paused: bool,
+    pub revoked: bool,
+    pub period_index: U64,
+    pub period_used_input: U128,
+    pub lifetime_used_input: U128,
+    pub pending_input: U128,
+}

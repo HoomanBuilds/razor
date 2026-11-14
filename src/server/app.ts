@@ -31,6 +31,7 @@ import { documentRoutes } from "./document-intake";
 import { invoiceChannelRoutes, invoiceIngressRoutes } from "./invoice-channels";
 import { vendorCommitmentRoutes } from "./vendor-commitments";
 import { integrationMachineRoutes, integrationManagementRoutes } from "./integrations";
+import { standingMandateRoutes } from "./standing-mandates";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -123,6 +124,7 @@ app.route("/organizations/:orgId/documents", documentRoutes);
 app.route("/organizations/:orgId/invoice-channels", invoiceChannelRoutes);
 app.route("/organizations/:orgId/vendor-commitments", vendorCommitmentRoutes);
 app.route("/organizations/:orgId/integrations", integrationManagementRoutes);
+app.route("/organizations/:orgId/standing-mandates", standingMandateRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
