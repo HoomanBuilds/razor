@@ -60,6 +60,7 @@ export function publishPlanVersion(input: unknown, actorId = "local_operator"): 
 }
 
 export function retirePlanVersion(id: string, actorId = "local_operator"): BillingPlan {
+  requireCommercialOperator(actorId);
   return transaction(db => {
     const plan = getPlanVersion(id);
     if (plan.available && !rows("SELECT id FROM billing_plan_versions WHERE code=? AND id!=? AND available=1", plan.code, id).length) throw new ApiError(409, "Publish a replacement before retiring this plan's last available version", "BILLING_LAST_PLAN_VERSION");

@@ -149,6 +149,8 @@ async function run() {
           };
     }
     case "retire-plan": {
+      const actor = values["operator-user"] ?? "";
+      requireCommercialOperator(actor);
       const id = required("id");
       if (!values.apply)
         return {
@@ -157,7 +159,7 @@ async function run() {
           nextStep:
             "Publish a replacement before retiring a plan. Rerun with --apply to retire this version for new purchases.",
         };
-      return { applied: true, plan: retirePlanVersion(id) };
+      return { applied: true, plan: retirePlanVersion(id, actor) };
     }
     case "status":
       return getSubscriptionState(required("company"));
