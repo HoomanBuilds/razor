@@ -3,7 +3,7 @@ import { completeAiUsage, reserveAiUsage } from "../billing/usage";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
-import { extractPrivateInvoice } from "./client";
+import { extractPrivateInvoice, type InvoiceImage } from "./client";
 import { getAssistantConfig, requirePrivateAiConfig } from "./config";
 import { privateHistoryQuery, privateHistoryWindow } from "../private-history";
 import type { ExtractedInvoice } from "./extraction";
@@ -33,7 +33,7 @@ export function assistantConfiguration(access: AccessContext) {
   return getAssistantConfig();
 }
 
-export async function analyzeInvoice(access: AccessContext, text: string) {
+export async function analyzeInvoice(access: AccessContext, text: string, images: InvoiceImage[] = [], sourceHash?: string) {
   requirePermission(access, "documents:manage");
   if (typeof text !== "string" || !text.trim() || text.length > 20_000) throw new ApiError(422, "Paste invoice text from 1 to 20,000 characters", "INVOICE_TEXT_INVALID");
   const config = requirePrivateAiConfig();
@@ -45,7 +45,7 @@ export async function analyzeInvoice(access: AccessContext, text: string) {
   const usage = reserveAiUsage(access);
   activeAnalyses.add(access.organizationId);
   try {
-    const result = await extractPrivateInvoice(text.trim());
+    const result = await extractPrivateInvoice(text.trim(), images, sourceHash);
     transaction(() => {
       purgeExpired();
       if (draftId && expiresAt) getDb().prepare("INSERT INTO assistant_drafts(id,organization_id,created_by,input_ciphertext,draft_ciphertext,evidence_ciphertext,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)").run(draftId, access.organizationId, access.userId, encrypt(text.trim()), encrypt(JSON.stringify(result.draft)), encrypt(JSON.stringify({ verification: result.verification, ...result.evidence })), createdAt.toISOString(), expiresAt);

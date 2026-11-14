@@ -27,6 +27,7 @@ import { paymentFundingRoutes } from "./payment-funding";
 import { fundingRefundRoutes } from "./funding-refunds";
 import { partialSettlementRoutes } from "./partial-settlement";
 import { billingRoutes } from "./billing";
+import { documentRoutes } from "./document-intake";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -35,9 +36,7 @@ app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
   await next();
 });
-app.use(
-  "*",
-  bodyLimit({
+const defaultBodyLimit = bodyLimit({
     maxSize: 1_048_576,
     onError: (c) =>
       c.json(
@@ -47,8 +46,11 @@ app.use(
         },
         413,
       ),
-  }),
-);
+});
+app.use("*", async (c, next) => {
+  if (c.req.method === "POST" && /^\/api\/organizations\/[^/]+\/documents\/upload$/.test(c.req.path)) return next();
+  return defaultBodyLimit(c, next);
+});
 app.onError((error, c) => {
   if (error instanceof ApiError)
     return c.json(
@@ -111,6 +113,7 @@ app.route("/organizations/:orgId/payment-funding", paymentFundingRoutes);
 app.route("/organizations/:orgId/funding-refunds", fundingRefundRoutes);
 app.route("/organizations/:orgId/partial-settlements", partialSettlementRoutes);
 app.route("/organizations/:orgId/billing", billingRoutes);
+app.route("/organizations/:orgId/documents", documentRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
