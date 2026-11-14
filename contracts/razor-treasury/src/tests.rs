@@ -1209,3 +1209,324 @@ fn observed_partial_output_cannot_be_turned_into_full_refund_recovery() {
         PaymentStatus::PartiallyPaid
     );
 }
+
+fn standing_time(caller: &str, deposit: u128, time: u64) {
+    let mut builder = context(caller, deposit);
+    builder.block_timestamp(time * 1_000_000);
+    testing_env!(builder.build());
+}
+
+fn standing_grant(treasury: &mut CompanyTreasury) -> StandingMandate {
+    call("owner.testnet", 1);
+    treasury.grant_standing_mandate(StandingMandateTerms {
+        id: "vendor-grant".into(),
+        recipient_id: "recipient".into(),
+        recipient_version: U64(1),
+        supplier_profile_hash: "a".repeat(64),
+        actor_id: account("agent.testnet"),
+        actor_public_key: env::signer_account_pk(),
+        per_payment_max_input: U128(200),
+        period_max_input: U128(300),
+        lifetime_max_input: U128(450),
+        period_ms: U64(DAY_MS),
+        valid_from_ms: U64(NOW),
+        expires_at_ms: U64(NOW + 10 * DAY_MS),
+        invoice_condition: "accepted_vendor_bill_application_gate".into(),
+    })
+}
+
+fn standing_pay(treasury: &mut CompanyTreasury, grant: &StandingMandate, id: &str, amount: u128) {
+    drop(treasury.execute_standing_payment(
+        grant.terms.id.clone(),
+        id.into(),
+        format!("attempt-{id}"),
+        U128(amount),
+        U128(10),
+        format!("bill-{id}"),
+        grant.terms_hash.clone(),
+        "b".repeat(64),
+    ));
+}
+
+#[test]
+fn standing_native_routes_are_constructed_and_worst_case_budget_is_atomic() {
+    let mut treasury = setup(true);
+    let grant = standing_grant(&mut treasury);
+    call("agent.testnet", 0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "too-soon",
+            100
+        )))
+        .is_err()
+    );
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    standing_pay(&mut treasury, &grant, "first", 180);
+    let payment = treasury.get_payment("first".into()).unwrap();
+    assert_eq!(payment.approvals.len(), 0);
+    assert_eq!(
+        payment.attempts[0].route.source_receiver,
+        account("employee.testnet")
+    );
+    assert_eq!(payment.attempts[0].route.input_amount, U128(180));
+    assert_eq!(payment.attempts[0].route.output_amount, U128(180));
+    assert_eq!(payment.attempts[0].destination, grant.destination);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "second",
+            110
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "first",
+            1
+        )))
+        .is_err()
+    );
+    let usage = treasury.get_standing_mandate(grant.terms.id).unwrap();
+    assert_eq!(usage.period_used_input, U128(190));
+    assert_eq!(usage.lifetime_used_input, U128(190));
+    assert_eq!(usage.pending_input, U128(190));
+}
+
+#[test]
+fn standing_failed_and_duplicate_callbacks_never_reopen_period_or_lifetime_usage() {
+    let mut treasury = setup(true);
+    let grant = standing_grant(&mut treasury);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    standing_pay(&mut treasury, &grant, "old", 180);
+    standing_time("agent.testnet", 0, NOW + 2 * DAY_MS);
+    standing_pay(&mut treasury, &grant, "new", 180);
+    callback(PromiseResult::Failed);
+    assert!(!treasury.on_transfer_result("old".into(), "attempt-old".into()));
+    let balance = treasury.get_balance().balance;
+    assert!(!treasury.on_transfer_result("old".into(), "attempt-old".into()));
+    assert_eq!(treasury.get_balance().balance, balance);
+    let usage = treasury
+        .get_standing_mandate(grant.terms.id.clone())
+        .unwrap();
+    assert_eq!(usage.period_used_input, U128(190));
+    assert_eq!(usage.lifetime_used_input, U128(380));
+    assert_eq!(usage.pending_input, U128(190));
+    assert_eq!(
+        treasury.get_payment("old".into()).unwrap().status,
+        PaymentStatus::Held
+    );
+    standing_time("agent.testnet", 0, NOW + 3 * DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "lifetime",
+            80
+        )))
+        .is_err()
+    );
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result("new".into(), "attempt-new".into()));
+    assert!(!treasury.on_transfer_result("new".into(), "attempt-new".into()));
+    assert_eq!(
+        treasury
+            .get_standing_mandate(grant.terms.id)
+            .unwrap()
+            .pending_input,
+        U128(0)
+    );
+}
+
+#[test]
+fn standing_owner_grant_requires_highest_company_quorum_and_current_versions() {
+    let mut treasury = setup(true);
+    call("owner.testnet", 1);
+    treasury.set_role(account("finance.testnet"), "approver".into(), true);
+    treasury.set_approval_policy(
+        vec![
+            ApprovalTier {
+                up_to: U128(100),
+                required_approvals: 1,
+            },
+            ApprovalTier {
+                up_to: U128(1000),
+                required_approvals: 2,
+            },
+        ],
+        U64(treasury.policy_version),
+    );
+    let grant = standing_grant(&mut treasury);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "small",
+            10
+        )))
+        .is_err()
+    );
+    standing_time("finance.testnet", 1, NOW + DAY_MS);
+    treasury.approve_standing_mandate(grant.terms.id.clone(), grant.terms_hash.clone());
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    standing_pay(&mut treasury, &grant, "quorum", 10);
+    standing_time("owner.testnet", 1, NOW + DAY_MS);
+    treasury.set_policy(U128(500), U128(1000));
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "stale",
+            10
+        )))
+        .is_err()
+    );
+}
+
+#[test]
+fn standing_pause_revoke_recipient_changes_and_actual_key_fail_closed() {
+    let mut treasury = setup(true);
+    let grant = standing_grant(&mut treasury);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    let mut wrong_key = context("agent.testnet", 0);
+    wrong_key
+        .block_timestamp((NOW + DAY_MS) * 1_000_000)
+        .signer_account_pk(
+            near_sdk::PublicKey::from_parts(near_sdk::CurveType::ED25519, vec![7; 32]).unwrap(),
+        );
+    testing_env!(wrong_key.build());
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "key",
+            10
+        )))
+        .is_err()
+    );
+    standing_time("owner.testnet", 1, NOW + DAY_MS);
+    treasury.set_standing_mandate_status(grant.terms.id.clone(), true, false);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "paused",
+            10
+        )))
+        .is_err()
+    );
+    standing_time("owner.testnet", 1, NOW + DAY_MS);
+    treasury.set_standing_mandate_status(grant.terms.id.clone(), false, false);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    standing_pay(&mut treasury, &grant, "pending", 10);
+    standing_time("owner.testnet", 1, NOW + DAY_MS);
+    treasury.set_standing_mandate_status(grant.terms.id.clone(), true, true);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| treasury.set_standing_mandate_status(
+            grant.terms.id.clone(),
+            false,
+            false
+        )))
+        .is_err()
+    );
+    callback(PromiseResult::Successful(vec![]));
+    assert!(treasury.on_transfer_result("pending".into(), "attempt-pending".into()));
+    assert_eq!(
+        treasury
+            .get_standing_mandate(grant.terms.id.clone())
+            .unwrap()
+            .pending_input,
+        U128(0)
+    );
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "revoked",
+            10
+        )))
+        .is_err()
+    );
+}
+
+#[test]
+fn standing_recipient_replacement_and_expiry_cannot_reuse_authority() {
+    let mut treasury = setup(true);
+    let grant = standing_grant(&mut treasury);
+    standing_time("owner.testnet", 1, NOW + DAY_MS);
+    treasury.set_recipient(
+        "recipient".into(),
+        grant.destination.clone(),
+        None,
+        false,
+        true,
+    );
+    standing_time("agent.testnet", 0, NOW + 3 * DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "changed",
+            10
+        )))
+        .is_err()
+    );
+    let mut terms = grant.terms.clone();
+    terms.id = "replacement".into();
+    terms.recipient_version = U64(2);
+    standing_time("owner.testnet", 1, NOW + 3 * DAY_MS);
+    let replacement = treasury.grant_standing_mandate(terms);
+    standing_time("agent.testnet", 0, replacement.terms.expires_at_ms.0);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &replacement,
+            "expired",
+            10
+        )))
+        .is_err()
+    );
+}
+
+#[test]
+fn standing_limits_reject_overflow_cross_chain_and_executor_self_grants() {
+    let mut treasury = setup(true);
+    let grant = standing_grant(&mut treasury);
+    standing_time("agent.testnet", 0, NOW + DAY_MS);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| standing_pay(
+            &mut treasury,
+            &grant,
+            "overflow",
+            u128::MAX
+        )))
+        .is_err()
+    );
+    assert!(treasury.get_payment("overflow".into()).is_none());
+    assert_eq!(
+        treasury
+            .get_standing_mandate(grant.terms.id.clone())
+            .unwrap()
+            .lifetime_used_input,
+        U128(0)
+    );
+    standing_time("agent.testnet", 1, NOW + DAY_MS);
+    let mut self_terms = grant.terms;
+    self_terms.id = "self-grant".into();
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || treasury.grant_standing_mandate(self_terms)
+        ))
+        .is_err()
+    );
+    let mut cross_chain = setup(false);
+    assert!(catch_unwind(AssertUnwindSafe(|| standing_grant(&mut cross_chain))).is_err());
+}

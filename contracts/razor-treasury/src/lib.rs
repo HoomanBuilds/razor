@@ -735,6 +735,90 @@ impl Treasury {
         })
     }
 
+    pub fn get_standing_mandate(
+        &self,
+        company_id: String,
+        mandate_id: String,
+    ) -> Option<StandingMandate> {
+        self.company(&company_id).get_standing_mandate(mandate_id)
+    }
+
+    pub fn get_recipient_activation(
+        &self,
+        company_id: String,
+        recipient_id: String,
+    ) -> Option<U64> {
+        self.company(&company_id)
+            .get_recipient_activation(recipient_id)
+    }
+
+    pub fn get_standing_payment(&self, company_id: String, payment_id: String) -> Option<String> {
+        self.company(&company_id).get_standing_payment(payment_id)
+    }
+
+    #[payable]
+    pub fn grant_standing_mandate(
+        &mut self,
+        company_id: String,
+        terms: StandingMandateTerms,
+    ) -> StandingMandate {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| company.grant_standing_mandate(terms))
+    }
+
+    #[payable]
+    pub fn approve_standing_mandate(
+        &mut self,
+        company_id: String,
+        mandate_id: String,
+        expected_terms_hash: String,
+    ) -> StandingMandate {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.approve_standing_mandate(mandate_id, expected_terms_hash)
+        })
+    }
+
+    #[payable]
+    pub fn set_standing_mandate_status(
+        &mut self,
+        company_id: String,
+        mandate_id: String,
+        paused: bool,
+        revoke: bool,
+    ) -> StandingMandate {
+        self.with_company_emergency(&company_id, |company| {
+            company.set_standing_mandate_status(mandate_id, paused, revoke)
+        })
+    }
+
+    pub fn execute_standing_payment(
+        &mut self,
+        company_id: String,
+        mandate_id: String,
+        payment_id: String,
+        attempt_id: String,
+        amount: U128,
+        max_fee: U128,
+        reference: String,
+        expected_terms_hash: String,
+        execution_hash: String,
+    ) -> Promise {
+        require!(!self.paused, "PLATFORM_PAUSED");
+        self.with_company(&company_id, |company| {
+            company.execute_standing_payment(
+                mandate_id,
+                payment_id,
+                attempt_id,
+                amount,
+                max_fee,
+                reference,
+                expected_terms_hash,
+                execution_hash,
+            )
+        })
+    }
+
     pub fn propose_payment(
         &mut self,
         company_id: String,

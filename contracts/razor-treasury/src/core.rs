@@ -2,6 +2,8 @@
 mod partial;
 #[path = "retained.rs"]
 mod retained;
+#[path = "standing.rs"]
+mod standing;
 use crate::{ext_self, types::*};
 pub use retained::{RetainedAsset, RetainedWithdrawal, RetainedWithdrawalStatus};
 
@@ -61,6 +63,9 @@ pub(crate) struct CompanyTreasury {
     pub(crate) payments: IterableMap<String, Payment>,
     pub(crate) obligations: IterableMap<String, String>,
     pub(crate) spent_by_day: IterableMap<u64, u128>,
+    pub(crate) standing_mandates: IterableMap<String, StandingMandate>,
+    pub(crate) standing_payments: IterableMap<String, String>,
+    pub(crate) recipient_activation: IterableMap<String, U64>,
     pub(crate) partial_receipts: IterableMap<String, String>,
 }
 
@@ -120,6 +125,9 @@ impl CompanyTreasury {
             payments: IterableMap::new(prefix(b'p')),
             obligations: IterableMap::new(prefix(b'o')),
             spent_by_day: IterableMap::new(prefix(b'd')),
+            standing_mandates: IterableMap::new(prefix(b'm')),
+            standing_payments: IterableMap::new(prefix(b'n')),
+            recipient_activation: IterableMap::new(prefix(b'c')),
             partial_receipts: IterableMap::new(prefix(b't')),
         }
     }
@@ -432,11 +440,14 @@ impl CompanyTreasury {
             active,
             version: U64(version),
         };
+        let activates_at = U64(now_ms().checked_add(DAY_MS).expect("TIME_OVERFLOW"));
+        self.recipient_activation
+            .insert(recipient_id.clone(), activates_at);
         self.recipients
             .insert(recipient_id.clone(), recipient.clone());
         self.emit(
             "recipient_changed",
-            json!({"recipient_id": recipient_id, "version": U64(version)}),
+            json!({"recipient_id": recipient_id, "version": U64(version), "standing_activates_at_ms": activates_at}),
         );
         recipient
     }
@@ -945,6 +956,20 @@ impl CompanyTreasury {
             return false;
         }
         let amount = attempt.route.input_amount.0;
+        let standing = self.standing_payments.get(&payment_id).cloned();
+        if let Some(id) = &standing {
+            let mandate = self
+                .standing_mandates
+                .get_mut(id)
+                .expect("MANDATE_NOT_FOUND");
+            mandate.pending_input = U128(
+                mandate
+                    .pending_input
+                    .0
+                    .checked_sub(add(payment.amount.0, payment.max_fee.0))
+                    .expect("MANDATE_PENDING_UNDERFLOW"),
+            );
+        }
         self.in_flight = self
             .in_flight
             .checked_sub(amount)
@@ -977,6 +1002,9 @@ impl CompanyTreasury {
             } else {
                 payment.status = PaymentStatus::Held;
             }
+        }
+        if standing.is_some() && !success {
+            payment.status = PaymentStatus::Held;
         }
         let status = payment.status.clone();
         self.payments.insert(payment_id.clone(), payment);
@@ -1307,6 +1335,9 @@ impl CompanyTreasury {
         self.obligations.flush();
         self.spent_by_day.flush();
         self.partial_receipts.flush();
+        self.standing_mandates.flush();
+        self.standing_payments.flush();
+        self.recipient_activation.flush();
         self.withdrawals.flush();
     }
 
