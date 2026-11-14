@@ -1,3 +1,4 @@
+import { paymentActivity } from "../../lib/payment-activity";
 import { rows } from "../db";
 import { reservePositions } from "../client-reserves/accounting";
 import { fundingPositions } from "../payment-funding/accounting";
@@ -82,5 +83,5 @@ export function buildPaymentSummary<T extends { available: string; reserveDefici
   }
   const shortage = unreservedBudget - protectedCash - BigInt(treasury.available), deficit = BigInt(treasury.reserveDeficit);
   attention.sort((left, right) => left.payment.created_at.localeCompare(right.payment.created_at) || left.payment.id.localeCompare(right.payment.id));
-  return { openPrincipal: openPrincipal.toString(), uncommittedInvoicePrincipal: uncommittedInvoicePrincipal.toString(), unreservedBudget: unreservedBudget.toString(), fundingGap: (shortage > deficit ? shortage : deficit).toString(), openCount, paidCount, paymentCount: payments.length, attention: attention.slice(0, 8), treasury };
+  return { activity: paymentActivity(payments), openPrincipal: openPrincipal.toString(), uncommittedInvoicePrincipal: uncommittedInvoicePrincipal.toString(), unreservedBudget: unreservedBudget.toString(), fundingGap: (shortage > deficit ? shortage : deficit).toString(), openCount, paidCount, paymentCount: payments.length, attention: attention.slice(0, 8), treasury };
 }

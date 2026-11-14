@@ -6,7 +6,7 @@ import { requireOrganization, requireUser } from "../identity";
 import { getRecipient, PreferenceInput, saveVersion, validateProfile } from "../identity/recipients";
 import { audit } from "../identity/session";
 import { BACKUP_NETWORKS } from "../payments/policy";
-import { companyRequestPage, invoiceInput, ownPayment, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
+import { companyRequestPage, invoiceInput, ownPayment, ownPaymentActivity, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
 
 export const recipientWorkspaceRoutes=new Hono<AppEnv>();
 recipientWorkspaceRoutes.use("*",requireUser);
@@ -15,6 +15,7 @@ recipientWorkspaceRoutes.get("/",c=>{
   const userId=c.get("userId"),payments=ownPaymentPage(userId,1,50),requests=ownRequestPage(userId,1,50);
   return c.json({profiles:ownProfiles(userId),payments:payments.payments,requests:requests.requests,paymentPage:{total:payments.total,page:payments.page,pageSize:payments.pageSize,hasMore:payments.hasMore},requestPage:{total:requests.total,page:requests.page,pageSize:requests.pageSize,hasMore:requests.hasMore}});
 });
+recipientWorkspaceRoutes.get("/summary",c=>c.json(ownPaymentActivity(c.get("userId"),c.req.query("recipientId"))));
 recipientWorkspaceRoutes.get("/payments",c=>{
   const page=Page.parse(c.req.query());
   return c.json(ownPaymentPage(c.get("userId"),page.page,page.pageSize,c.req.query("recipientId")));
