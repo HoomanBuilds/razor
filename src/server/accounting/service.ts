@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { companyDate } from "../../lib/company-time";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt, hashToken, newToken } from "../identity/crypto";
@@ -34,11 +35,12 @@ function jobFor(access: AccessContext, id: string) {
 }
 export function accountingOverview(access: AccessContext, page = 1) {
  const live = accountingAccess(access), bounded = Math.max(1, Math.min(100000, page));
+ const timezone = row<{timezone:string}>("SELECT timezone FROM organizations WHERE id=?",live.organizationId)!.timezone;
  return { providers: (["quickbooks", "xero"] as const).map(provider => ({ provider, configured: providerConfig(provider).configured, environment: providerConfig(provider).environment })),
   connections: rows<Connection>("SELECT * FROM accounting_connections WHERE organization_id=? ORDER BY provider", live.organizationId).map(value => ({ ...safeConnection(value), mapping: currentMapping(value) })),
   jobs: rows<Job>("SELECT * FROM accounting_jobs WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT 25 OFFSET ?", live.organizationId, (bounded - 1) * 25).map(({ payload_ciphertext, ...item }) => ({ ...item, posting: JSON.parse(decrypt(payload_ciphertext)) })),
   observations: rows<{ kind: string; external_id: string; revision: string; state: string; matching_job_id: string | null; observed_at: string }>("SELECT o.kind,o.external_id,o.revision,o.state,o.matching_job_id,o.observed_at FROM accounting_observations o JOIN accounting_connections c ON c.id=o.connection_id WHERE c.organization_id=? ORDER BY o.observed_at DESC LIMIT 25", live.organizationId),
-  bills: rows<{ id: string; reference: string; amount: string; title: string; accepted_at: string | null; status: string }>("SELECT id,reference,amount,title,accepted_at,status FROM bills WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", live.organizationId).map(value => ({ ...value, title: decrypt(value.title) })),
+  bills: rows<{ id: string; reference: string; amount: string; title: string; due_date:string|null; accepted_at: string | null; status: string }>("SELECT id,reference,amount,title,due_date,accepted_at,status FROM bills WHERE organization_id=? ORDER BY created_at DESC LIMIT 100", live.organizationId).map(value => ({ ...value, title: decrypt(value.title), dueDate:value.due_date?companyDate(value.due_date,timezone):null })),
   settlements: rows<{id:string;reference:string;amount:string}>("SELECT p.id,b.reference,p.amount FROM payments p JOIN bill_installments i ON i.payment_id=p.id JOIN bills b ON b.id=i.bill_id WHERE p.organization_id=? AND b.organization_id=? AND p.status='paid' AND p.delivered_amount=p.amount ORDER BY p.updated_at DESC LIMIT 100", live.organizationId, live.organizationId),
   page: bounded, hasMore: !!row("SELECT id FROM accounting_jobs WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1 OFFSET ?", live.organizationId, bounded * 25),
   scope: "Reviewed bill drafts and verified full-principal settlement records only. No payroll rows, bank transfers, automatic bank matching, tax calculations, fee/FX journals, credit-note posting or NetSuite sync. External accounting state never creates Razor cash or delivery evidence." };
@@ -232,16 +234,20 @@ export function saveAccountingMapping(access: AccessContext, id: string, data: u
   audit(live.userId, live.organizationId, "accounting.mapping_reviewed", id, { version, entityId: connection.entity_id }); return { version, value };
  });
 }
-interface Source { kind: "bill" | "settlement"; sourceId: string; billId: string; recipientId: string; amount: string; reference: string; title: string; date: string; hash: string; evidence: string[]; externalBillId?: string }
-function sourceTerms(access: AccessContext, connection: Connection, kind: "bill" | "settlement", id: string, date: string): Source {
- const bill = kind === "bill" ? row<{ id: string; reference: string; title: string; amount: string; recipient_id: string; accepted_at: string | null; status: string; setoff_amount: string }>("SELECT * FROM bills WHERE id=? AND organization_id=?", id, access.organizationId)
-  : row<{ id: string; reference: string; title: string; amount: string; recipient_id: string; accepted_at: string | null; status: string; setoff_amount: string }>("SELECT b.* FROM bills b JOIN bill_installments i ON i.bill_id=b.id JOIN payments p ON p.id=i.payment_id WHERE p.id=? AND p.organization_id=? AND b.organization_id=?", id, access.organizationId, access.organizationId);
+interface Source { kind: "bill" | "settlement"; sourceId: string; billId: string; recipientId: string; amount: string; reference: string; title: string; date: string; dueDate:string; sourceDueAt:string|null; companyTimezone:string; hash: string; evidence: string[]; externalBillId?: string }
+interface AccountingBill { id:string;reference:string;title:string;amount:string;recipient_id:string;accepted_at:string|null;status:string;setoff_amount:string;due_date:string|null }
+function sourceTerms(access: AccessContext, connection: Connection, kind: "bill" | "settlement", id: string, date: string, reviewedDueDate?:string): Source {
+ const bill = kind === "bill" ? row<AccountingBill>("SELECT * FROM bills WHERE id=? AND organization_id=?", id, access.organizationId)
+  : row<AccountingBill>("SELECT b.* FROM bills b JOIN bill_installments i ON i.bill_id=b.id JOIN payments p ON p.id=i.payment_id WHERE p.id=? AND p.organization_id=? AND b.organization_id=?", id, access.organizationId, access.organizationId);
  if (!bill) throw new ApiError(404, "The company invoice or settlement was not found", "ACCOUNTING_SOURCE_NOT_FOUND");
  if (!bill.accepted_at || bill.status === "disputed" || bill.setoff_amount !== "0") throw new ApiError(409, "Accept the invoice through ordinary company review first. Disputes and noncash setoff require separate accounting review", "ACCOUNTING_SOURCE_HELD");
  const terms = getBillTerms(access, bill.id), profile = row<{ version: number }>("SELECT version FROM recipients WHERE id=? AND organization_id=?", bill.recipient_id, access.organizationId);
  const snapshot = terms.installments[0]?.recipient_version;
  if (!profile || snapshot !== profile.version) throw new ApiError(409, "The historical payee profile changed. Resolve its original accounting contact before posting", "ACCOUNTING_HISTORICAL_CONTACT_REQUIRED");
- let amount = bill.amount; const evidence: string[] = []; let externalBillId: string | undefined;
+ const companyTimezone = row<{timezone:string}>("SELECT timezone FROM organizations WHERE id=?",access.organizationId)!.timezone;
+ const sourceDueDate = bill.due_date ? companyDate(bill.due_date,companyTimezone) : null;
+ if (sourceDueDate && reviewedDueDate && sourceDueDate !== reviewedDueDate) throw new ApiError(409,"The reviewed maturity differs from the original invoice. Resolve the original bill terms before posting","ACCOUNTING_DUE_DATE_CHANGED");
+ let dueDate = sourceDueDate ?? reviewedDueDate, amount = bill.amount; const evidence: string[] = []; let externalBillId: string | undefined;
  if (kind === "settlement") {
   const payment = terms.installments.find(item => item.id === id);
   if (!payment || payment.status !== "paid" || payment.delivered_amount !== payment.amount || payment.amount === "0") throw new ApiError(409, "Only a fully satisfied installment with recorded delivery can become a settlement entry. Partial/provider-only states remain held", "ACCOUNTING_SETTLEMENT_UNVERIFIED");
@@ -251,19 +257,23 @@ function sourceTerms(access: AccessContext, connection: Connection, kind: "bill"
   const posted = row<Job>("SELECT * FROM accounting_jobs WHERE connection_id=? AND entity_id=? AND kind='bill' AND source_id=? AND state='done'", connection.id, connection.entity_id, bill.id);
   if (!posted?.external_id) throw new ApiError(409, "Post and reconcile this bill before its payment", "ACCOUNTING_BILL_NOT_POSTED");
   if (posted.mapping_version !== currentMapping(connection)?.version) throw new ApiError(409, "The original bill uses another mapping or FX version. Reconcile the accounting change before posting payment", "ACCOUNTING_FX_REVIEW_REQUIRED");
+  const original = JSON.parse(decrypt(posted.payload_ciphertext)) as {source:{dueDate?:string}};
+  if (!original.source.dueDate || dueDate && dueDate !== original.source.dueDate) throw new ApiError(409,"The original bill maturity needs accounting review before its payment","ACCOUNTING_DUE_DATE_CHANGED");
+  dueDate = original.source.dueDate;
   externalBillId = posted.external_id; amount = payment.amount;
  }
- const source = { kind, sourceId: id, billId: bill.id, recipientId: bill.recipient_id, amount, reference: bill.reference, title: decrypt(bill.title), date, evidence, ...(externalBillId ? { externalBillId } : {}) };
+ if (!dueDate || !z.iso.date().safeParse(dueDate).success) throw new ApiError(409,"This invoice has no maturity date. Explicitly review a provider due date before preparing its accounting plan","ACCOUNTING_DUE_DATE_REQUIRED");
+ const source = { kind, sourceId: id, billId: bill.id, recipientId: bill.recipient_id, amount, reference: bill.reference, title: decrypt(bill.title), date, dueDate, sourceDueAt:bill.due_date, companyTimezone, evidence, ...(externalBillId ? { externalBillId } : {}) };
  return { ...source, hash: digest({ source, acceptedAt: bill.accepted_at, recipientVersion: snapshot, installment: kind === "settlement" ? terms.installments.find(item => item.id === id) : null }) };
 }
 export function createAccountingPlan(access: AccessContext, id: string, data: unknown) {
- const live = accountingAccess(access), connection = connectionFor(live, id), input = z.object({ kind: z.enum(["bill", "settlement"]), sourceId: safeId, postingDate: z.iso.date() }).strict().parse(data);
+ const live = accountingAccess(access), connection = connectionFor(live, id), input = z.object({ kind: z.enum(["bill", "settlement"]), sourceId: safeId, postingDate: z.iso.date(), dueDate:z.iso.date().optional() }).strict().parse(data);
  if (connection.status !== "active" || !connection.entity_id || !connection.currency) throw new ApiError(409, "Select an active accounting company", "ACCOUNTING_CONNECTION_REQUIRED");
  return transaction(db => {
   const mapping = currentMapping(connection);
   if (!mapping) throw new ApiError(409, "Review account, zero-tax and FX mappings first", "ACCOUNTING_MAPPING_REQUIRED");
   if (input.postingDate > now().slice(0, 10) || mapping.value.closedThrough && input.postingDate <= mapping.value.closedThrough) throw new ApiError(409, "The posting date is in the future or a company-declared closed period", "ACCOUNTING_PERIOD_CLOSED");
-  const source = sourceTerms(live, connection, input.kind, input.sourceId, input.postingDate), contact = mapping.value.contacts.find(item => item.recipientId === source.recipientId);
+  const source = sourceTerms(live, connection, input.kind, input.sourceId, input.postingDate,input.dueDate), contact = mapping.value.contacts.find(item => item.recipientId === source.recipientId);
   if (!contact) throw new ApiError(409, "Map this original company payee to its accounting contact", "ACCOUNTING_CONTACT_REQUIRED");
   const expense = chosenItem(connection, "account", mapping.value.expenseAccountId), amount = functionalAmount(source.amount, mapping.value.fxNumerator, mapping.value.fxDenominator);
   const previous = row<Job>("SELECT * FROM accounting_jobs WHERE connection_id=? AND entity_id=? AND kind=? AND source_id=?", id, connection.entity_id, input.kind, input.sourceId);
@@ -271,7 +281,7 @@ export function createAccountingPlan(access: AccessContext, id: string, data: un
   if (previous?.attempts) throw new ApiError(409, "An attempted posting needs provider reconciliation. It cannot become a new request automatically", "ACCOUNTING_REQUEST_HELD");
   const jobId = previous?.id ?? randomUUID(), marker = previous?.marker ?? `RZ${digest(jobId).slice(0, 19)}`;
   const reference = `Razor ${source.kind} ${source.sourceId}; ${source.amount} microUSDC; FX ${mapping.value.fxNumerator}/${mapping.value.fxDenominator} ${connection.currency}/USDC; ${mapping.value.fxDate}; ${mapping.value.fxSource}; ${source.evidence.join(",")}`.slice(0, connection.provider === "xero" ? 255 : 1000);
-  const payload = postingPayload(connection.provider, input.kind, { amount: amount.value, date: input.postingDate, marker, title: source.title, contactId: contact.externalId, expenseAccountId: connection.provider === "xero" ? expense.code! : expense.id, bankAccountId: mapping.value.bankAccountId, taxCodeId: mapping.value.taxCodeId, currency: connection.currency, externalBillId: source.externalBillId, reference });
+  const payload = postingPayload(connection.provider, input.kind, { amount: amount.value, date: input.postingDate, dueDate:source.dueDate, marker, title: source.title, contactId: contact.externalId, expenseAccountId: connection.provider === "xero" ? expense.code! : expense.id, bankAccountId: mapping.value.bankAccountId, taxCodeId: mapping.value.taxCodeId, currency: connection.currency, externalBillId: source.externalBillId, reference });
   const posting = { payload, source, amount, functionalCurrency: connection.currency, fx: { numerator: mapping.value.fxNumerator, denominator: mapping.value.fxDenominator, source: mapping.value.fxSource, date: mapping.value.fxDate }, bankSettlementClaimed: false, payrollRowsIncluded: false };
   const reviewHash = digest({ jobId, connectionVersion: connection.version, entity: connection.entity_id, mappingVersion: mapping.version, posting });
   db.prepare("INSERT INTO accounting_jobs(id,organization_id,connection_id,entity_id,connection_version,mapping_version,kind,source_id,source_hash,marker,payload_ciphertext,review_hash,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,entity_id,kind,source_id) DO UPDATE SET connection_version=excluded.connection_version,mapping_version=excluded.mapping_version,source_hash=excluded.source_hash,payload_ciphertext=excluded.payload_ciphertext,review_hash=excluded.review_hash,state='review',created_by=excluded.created_by,approved_by=NULL,approved_at=NULL,last_error=NULL,updated_at=excluded.updated_at")
@@ -283,7 +293,7 @@ export function approveAccountingPlan(access: AccessContext, id: string, reviewH
  const live = accountingAccess(access, true);
  return transaction(db => {
   const job = jobFor(live, id), connection = connectionFor(live, job.connection_id), posting = JSON.parse(decrypt(job.payload_ciphertext)) as { source: Source };
-  if (job.state !== "review" || job.review_hash !== reviewHash || connection.status !== "active" || connection.version !== job.connection_version || currentMapping(connection)?.version !== job.mapping_version || sourceTerms(live, connection, job.kind, job.source_id, posting.source.date).hash !== job.source_hash) throw new ApiError(409, "The source, mapping or company connection changed. Review a new posting plan", "ACCOUNTING_REVIEW_CHANGED");
+  if (job.state !== "review" || job.review_hash !== reviewHash || connection.status !== "active" || connection.version !== job.connection_version || currentMapping(connection)?.version !== job.mapping_version || sourceTerms(live, connection, job.kind, job.source_id, posting.source.date,posting.source.dueDate).hash !== job.source_hash) throw new ApiError(409, "The source, mapping or company connection changed. Review a new posting plan", "ACCOUNTING_REVIEW_CHANGED");
   db.prepare("UPDATE accounting_jobs SET state='queued',approved_by=?,approved_at=?,updated_at=? WHERE id=? AND state='review'").run(live.userId, now(), now(), id);
   audit(live.userId, live.organizationId, "accounting.plan_approved", id, { reviewHash }); return { queued: true };
  });
@@ -312,13 +322,13 @@ function responseMatches(connection: Connection, job: Job, item: Record<string, 
    && (item.CurrencyRef as { value?: string })?.value === posting.functionalCurrency && providerDate(item.TxnDate) === posting.source.date;
   if (!common || !Array.isArray(lines) || lines.length !== 1 || lines[0].Amount !== posting.amount.value) return false;
   if (job.kind === "settlement") return item.PayType === "Check" && (item.CheckPayment as {BankAccountRef?:{value?:string}})?.BankAccountRef?.value === payload.CheckPayment?.BankAccountRef?.value && lines[0].LinkedTxn?.length === 1 && lines[0].LinkedTxn[0].TxnId === posting.source.externalBillId && lines[0].LinkedTxn[0].TxnType === "Bill";
-  return lines[0].DetailType === "AccountBasedExpenseLineDetail" && lines[0].AccountBasedExpenseLineDetail?.AccountRef?.value === payload.Line[0].AccountBasedExpenseLineDetail?.AccountRef?.value && lines[0].AccountBasedExpenseLineDetail?.TaxCodeRef?.value === payload.Line[0].AccountBasedExpenseLineDetail?.TaxCodeRef?.value;
+  return providerDate(item.DueDate) === posting.source.dueDate && lines[0].DetailType === "AccountBasedExpenseLineDetail" && lines[0].AccountBasedExpenseLineDetail?.AccountRef?.value === payload.Line[0].AccountBasedExpenseLineDetail?.AccountRef?.value && lines[0].AccountBasedExpenseLineDetail?.TaxCodeRef?.value === payload.Line[0].AccountBasedExpenseLineDetail?.TaxCodeRef?.value;
  }
  if (job.kind === "bill") {
   type Line = { Quantity?:number; UnitAmount?:number; AccountCode?:string; TaxType?:string; TaxAmount?:number };
   const expected = (posting.payload as { Invoices: { Contact: { ContactID: string }; LineItems:Line[] }[] }).Invoices[0], lines = item.LineItems as Line[] | undefined;
   return item.InvoiceNumber === job.marker && item.Type === "ACCPAY" && !["DELETED", "VOIDED"].includes(String(item.Status)) && item.Total === posting.amount.value && item.CurrencyCode === posting.functionalCurrency && (item.Contact as { ContactID?: string })?.ContactID === expected.Contact.ContactID
-   && providerDate(item.DateString ?? item.Date) === posting.source.date && providerDate(item.DueDateString ?? item.DueDate) === posting.source.date && item.LineAmountTypes === "Exclusive" && Array.isArray(lines) && lines.length === 1 && lines[0].Quantity === 1 && lines[0].UnitAmount === posting.amount.value && lines[0].AccountCode === expected.LineItems[0].AccountCode && lines[0].TaxType === expected.LineItems[0].TaxType && (lines[0].TaxAmount ?? 0) === 0;
+   && providerDate(item.DateString ?? item.Date) === posting.source.date && providerDate(item.DueDateString ?? item.DueDate) === posting.source.dueDate && item.LineAmountTypes === "Exclusive" && Array.isArray(lines) && lines.length === 1 && lines[0].Quantity === 1 && lines[0].UnitAmount === posting.amount.value && lines[0].AccountCode === expected.LineItems[0].AccountCode && lines[0].TaxType === expected.LineItems[0].TaxType && (lines[0].TaxAmount ?? 0) === 0;
  }
  const expected = (posting.payload as { Payments: { Account: { AccountID: string } }[] }).Payments[0];
  return item.Reference === job.marker && item.Status !== "DELETED" && providerDate(item.Date) === posting.source.date && item.Amount === posting.amount.value && (item.Invoice as { InvoiceID?: string })?.InvoiceID === posting.source.externalBillId && (item.Account as { AccountID?: string })?.AccountID === expected.Account.AccountID;
@@ -400,7 +410,7 @@ export async function dispatchAccountingJobs(options: { organizationId?: string;
    if (!job.approved_by) throw new Error("NO_POSTING_APPROVAL");
    accountingAccess({ userId: job.approved_by, organizationId: job.organization_id, permissions: [] }, true);
    const connection = connectionFor(creator, job.connection_id), mapping = currentMapping(connection), posting = JSON.parse(decrypt(job.payload_ciphertext)) as Posting;
-   if (!mapping || connection.status !== "active" || connection.version !== job.connection_version || connection.entity_id !== job.entity_id || mapping.version !== job.mapping_version || sourceTerms(creator, connection, job.kind, job.source_id, posting.source.date).hash !== job.source_hash) throw new ApiError(409, "Review changed source, mapping or connection before posting", "ACCOUNTING_REVIEW_CHANGED");
+   if (!mapping || connection.status !== "active" || connection.version !== job.connection_version || connection.entity_id !== job.entity_id || mapping.version !== job.mapping_version || sourceTerms(creator, connection, job.kind, job.source_id, posting.source.date,posting.source.dueDate).hash !== job.source_hash) throw new ApiError(409, "Review changed source, mapping or connection before posting", "ACCOUNTING_REVIEW_CHANGED");
    const previous = await lookupJob(connection, job, transport);
    if (previous.length) {
     if (previous.length !== 1) throw new ApiError(409, "Multiple provider records use this request marker", "ACCOUNTING_PROVIDER_CONFLICT");
@@ -419,7 +429,7 @@ export async function dispatchAccountingJobs(options: { organizationId?: string;
    transaction(db => {
     accountingAccess(creator); accountingAccess({ userId: job.approved_by!, organizationId: job.organization_id, permissions: [] }, true);
     const current = connectionFor(creator, connection.id);
-    if (current.status !== "active" || current.version !== job.connection_version || currentMapping(current)?.version !== job.mapping_version || sourceTerms(creator, current, job.kind, job.source_id, posting.source.date).hash !== job.source_hash) throw new ApiError(409, "Posting terms changed during provider checks", "ACCOUNTING_REVIEW_CHANGED");
+    if (current.status !== "active" || current.version !== job.connection_version || currentMapping(current)?.version !== job.mapping_version || sourceTerms(creator, current, job.kind, job.source_id, posting.source.date,posting.source.dueDate).hash !== job.source_hash) throw new ApiError(409, "Posting terms changed during provider checks", "ACCOUNTING_REVIEW_CHANGED");
     const changed = db.prepare("UPDATE accounting_jobs SET state='dispatching',attempts=attempts+1,write_started_at=?,updated_at=? WHERE id=? AND lease_owner=? AND state='preflight' AND lease_until>?").run(now(), now(), job.id, job.lease_owner, now());
     if (!changed.changes) throw new ApiError(409, "The posting worker lease expired", "ACCOUNTING_REQUEST_BUSY");
    });

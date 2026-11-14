@@ -70,7 +70,7 @@ async function connected() {
  await refreshAccountingCatalog(f.access, started.connectionId, 1, p.transport);
  const mapping = { expectedVersion: 0, expenseAccountId: "expense", bankAccountId: "bank", taxCodeId: "zero", contacts: [{ recipientId: f.recipientId, externalId: "vendor" }], fxNumerator: "1", fxDenominator: "1", fxSource: "Company finance approved nominal rate", fxDate: new Date().toISOString().slice(0, 10), closedThrough: null, acknowledgement: true as const };
  saveAccountingMapping(f.access, started.connectionId, mapping);
- const bill = createBill(f.access, { recipientId: f.recipientId, reference: randomUUID(), title: "Reviewed business invoice", amount: "20000000", maxFee: "0" }); approveBill(f.access, bill.id);
+ const bill = createBill(f.access, { recipientId: f.recipientId, reference: randomUUID(), title: "Reviewed business invoice", amount: "20000000", maxFee: "0",dueDate:"2027-01-15T00:00:00.000Z" }); approveBill(f.access, bill.id);
  const plan = createAccountingPlan(f.access, started.connectionId, { kind: "bill", sourceId: bill.id, postingDate: new Date().toISOString().slice(0, 10) });
  return { ...f, ...p, connectionId: started.connectionId, mapping, bill, plan };
 }
@@ -150,6 +150,41 @@ test("catalog-backed mappings require exact company contacts, active accounts an
  assert.equal(writes(f.calls).length, 0);
  assert.equal(f.plan.posting.bankSettlementClaimed, false);
  assert.ok(JSON.stringify(f.plan.posting).includes("microUSDC"));
+});
+
+test("invoice maturity is distinct from posting date and preserves future, past-due and company-timezone dates", async () => {
+ const f = await connected(), input = {kind:"bill",sourceId:f.bill.id,postingDate:new Date().toISOString().slice(0,10)};
+ assert.equal((f.plan.posting.payload as {DueDate:string}).DueDate,"2027-01-15");
+ assert.equal(f.plan.posting.source.dueDate,"2027-01-15"); assert.equal(f.plan.posting.source.sourceDueAt,"2027-01-15T00:00:00.000Z");
+ getDb().prepare("UPDATE organizations SET timezone='America/Los_Angeles' WHERE id=?").run(f.access.organizationId);
+ getDb().prepare("UPDATE bills SET due_date='2027-01-15T00:30:00.000Z' WHERE id=?").run(f.bill.id);
+ const boundary = createAccountingPlan(f.access,f.connectionId,input);
+ assert.equal((boundary.posting.payload as {DueDate:string}).DueDate,"2027-01-14"); assert.equal(boundary.posting.source.companyTimezone,"America/Los_Angeles");
+ assert.throws(()=>createAccountingPlan(f.access,f.connectionId,{...input,dueDate:"2027-01-15"}),code("ACCOUNTING_DUE_DATE_CHANGED"));
+ getDb().prepare("UPDATE bills SET due_date='2020-01-02T00:30:00.000Z' WHERE id=?").run(f.bill.id);
+ const overdue = createAccountingPlan(f.access,f.connectionId,input);
+ assert.equal((overdue.posting.payload as {DueDate:string}).DueDate,"2020-01-01"); assert.equal(writes(f.calls).length,0);
+});
+
+test("an unscheduled invoice needs an explicit reviewed provider maturity and changed dates invalidate approval", async () => {
+ const f = await connected(), bill = createBill(f.access,{recipientId:f.recipientId,reference:randomUUID(),title:"Unscheduled invoice",amount:"20000000",maxFee:"0"}); approveBill(f.access,bill.id);
+ const input = {kind:"bill",sourceId:bill.id,postingDate:new Date().toISOString().slice(0,10)};
+ assert.throws(()=>createAccountingPlan(f.access,f.connectionId,input),code("ACCOUNTING_DUE_DATE_REQUIRED"));
+ const first = createAccountingPlan(f.access,f.connectionId,{...input,dueDate:"2027-01-20"}), second = createAccountingPlan(f.access,f.connectionId,{...input,dueDate:"2027-01-21"});
+ assert.notEqual(first.job.review_hash,second.job.review_hash); assert.equal(second.posting.source.sourceDueAt,null);
+ assert.equal(row<{due_date:string|null}>("SELECT due_date FROM bills WHERE id=?",bill.id)!.due_date,null);
+ assert.throws(()=>approveAccountingPlan(f.access,first.job.id,first.job.review_hash),code("ACCOUNTING_REVIEW_CHANGED"));
+ assert.equal(writes(f.calls).length,0);
+});
+
+test("changed source and provider maturity dates are held without rewriting original bill terms", async () => {
+ const f = await connected(); approve(f); getDb().prepare("UPDATE bills SET due_date='2027-01-16T00:00:00.000Z' WHERE id=?").run(f.bill.id);
+ assert.equal((await dispatchAccountingJobs({organizationId:f.access.organizationId,transport:f.transport})).jobs[0].state,"held"); assert.equal(writes(f.calls).length,0);
+ const next = await connected(); approve(next); await dispatchAccountingJobs({organizationId:next.access.organizationId,transport:next.transport});
+ const invoice = [...next.bills.values()][0]; invoice.DueDate = "2027-01-16";
+ assert.equal((await reconcileAccountingJob(next.access,next.plan.job.id,false,next.transport)).matched,false);
+ assert.equal(row<{due_date:string}>("SELECT due_date FROM bills WHERE id=?",next.bill.id)!.due_date,"2027-01-15T00:00:00.000Z");
+ assert.equal(writes(next.calls).length,1);
 });
 
 test("reviewed accounting writes are idempotent, scoped and do not mutate treasury cash", async () => {
@@ -250,6 +285,7 @@ test("Xero posts an exact reviewed draft and fences its lost response with a rea
   if (path.endsWith("/Invoices") && request.method === "GET") return {status:200,body:{Invoices:stored?[stored]:[]}};
   if (path.endsWith("/Invoices") && request.method === "POST") {
    assert.ok(request.headers["Idempotency-Key"]); const payload = JSON.parse(request.body!).Invoices[0];
+   assert.equal(payload.DueDate,"2027-01-15"); assert.equal(payload.Date,new Date().toISOString().slice(0,10));
    stored = {...payload,InvoiceID:invoice,Total:16,UpdatedDateUTC:"/Date(1700000000000+0000)/"}; throw new Error("response lost after actual fake write");
   }
   throw new Error("Unexpected Xero test path");
@@ -257,7 +293,7 @@ test("Xero posts an exact reviewed draft and fences its lost response with a rea
  await finishAccountingConnection("xero",{state:new URL(started.authorizationUrl).searchParams.get("state")!,code:"code"},f.browserNonce,transport);
  await selectAccountingEntity(f.access,started.connectionId,tenant,transport); await refreshAccountingCatalog(f.access,started.connectionId,1,transport);
  saveAccountingMapping(f.access,started.connectionId,{expectedVersion:0,expenseAccountId:"expense",bankAccountId:"bank",taxCodeId:"NONE",contacts:[{recipientId:f.recipientId,externalId:"vendor"}],fxNumerator:"4",fxDenominator:"5",fxSource:"Reviewed test FX source",fxDate:new Date().toISOString().slice(0,10),closedThrough:null,acknowledgement:true});
- const bill = createBill(f.access,{recipientId:f.recipientId,reference:randomUUID(),title:"Actual company bill",amount:"20000000",maxFee:"0"}); approveBill(f.access,bill.id);
+ const bill = createBill(f.access,{recipientId:f.recipientId,reference:randomUUID(),title:"Actual company bill",amount:"20000000",maxFee:"0",dueDate:"2027-01-15T00:00:00.000Z"}); approveBill(f.access,bill.id);
  const plan = createAccountingPlan(f.access,started.connectionId,{kind:"bill",sourceId:bill.id,postingDate:new Date().toISOString().slice(0,10)});
  approveAccountingPlan(f.access,plan.job.id,plan.job.review_hash);
  assert.equal((await dispatchAccountingJobs({organizationId:f.access.organizationId,transport})).jobs[0].state,"unknown");
