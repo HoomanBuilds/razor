@@ -11,7 +11,7 @@ import { getDb, row, rows } from "../src/server/db";
 import { encrypt } from "../src/server/identity/crypto";
 import { createBill, approveBill } from "../src/server/business/service";
 import { createCommitment, reviewCommitment, approveCommitment, matchBillCommitment, amendCommitment, getCommitment } from "../src/server/vendor-commitments/service";
-import { adjustStock, awardQuote, cancelRequest, createInventory, createRequest, inspectRequest, matchInvoice, overview, publishRequest, recordReceipt, requestInput, submitQuote, supplierRequests, updateInventory } from "../src/server/procurement/service";
+import { adjustStock, awardQuote, cancelRequest, createInventory, createRequest, inspectRequest, inventoryInput, matchInvoice, overview, publishRequest, quoteInput, recordReceipt, requestInput, submitQuote, supplierRequests, updateInventory } from "../src/server/procurement/service";
 import { procurementInvoiceReview, receivingTotals } from "../src/server/procurement/matching";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -77,7 +77,9 @@ test("suppliers see only their invitations and own immutable quote versions", ()
   for (let version = 2; version < 20; version++) submitQuote(f.supplierUser, f.id, { recipientId: f.suppliers[0], expectedVersion: version, unitPrice: "4000000", deliveryDate: dateAfter(4), validUntil: isoAfter(4), terms: "Bounded supplier revision history" });
   assert.throws(() => submitQuote(f.supplierUser, f.id, { recipientId: f.suppliers[0], expectedVersion: 20, unitPrice: "4000000", deliveryDate: dateAfter(4), validUntil: isoAfter(4), terms: "One excess version" }), code("PROCUREMENT_QUOTE_LIMIT"));
   getDb().prepare("UPDATE recipients SET user_id=? WHERE id=?").run(f.secondUser, f.suppliers[0]);
-  assert.equal(supplierRequests(f.supplierUser).length, 0); assert.equal(supplierRequests(f.secondUser).find(request => request.recipientId === f.suppliers[0])!.quotes.length, 0);
+  const original = supplierRequests(f.supplierUser).find(request => request.recipientId === f.suppliers[0])!;
+  assert.equal(original.historicalOnly, true); assert.equal(original.quotes.length, 20);
+  assert.equal(supplierRequests(f.secondUser).find(request => request.recipientId === f.suppliers[0]), undefined);
 });
 
 test("exact human awards bind current supplier and quote, create one unapproved PO and retain history", () => {
@@ -198,4 +200,77 @@ test("concurrent invoice approvals cannot reuse the same accepted receiving quan
     assert.deepEqual((await Promise.all([child(a.id), child(b.id)])).sort(), ["COMMITMENT_HOLD", "approved"]);
     const db = new DatabaseSync(filename); try { assert.equal((db.prepare("SELECT COUNT(*) AS n FROM procurement_invoice_matches WHERE award_id=? AND accepted_at IS NOT NULL").get(f.award.id) as { n: number }).n, 1); } finally { db.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("malformed money fields fail validation without throwing from BigInt refinement", () => {
+  const f = fixture(), validQuote = { recipientId: f.suppliers[0], expectedVersion: 0, unitPrice: "1", deliveryDate: dateAfter(5), validUntil: isoAfter(5), terms: "Complete supplier terms" };
+  const validStock = { sku: "SKU-VALID", name: "Reviewed item", unit: "units", threshold: "1", reorderQuantity: "1", reorderBudget: "1", supplierIds: f.suppliers, approvingRoleId: f.roleId };
+  for (const value of [undefined, null, 1, {}, [], "", " ", "oops", "1e3", "-1", "1.0", "01", "9".repeat(10000), (10n ** 30n + 1n).toString()]) {
+    for (const check of [() => requestInput.safeParse({ ...f.terms, budget: value }), () => quoteInput.safeParse({ ...validQuote, unitPrice: value }), () => inventoryInput.safeParse({ ...validStock, reorderBudget: value })]) {
+      let result: { success: boolean } | undefined;
+      assert.doesNotThrow(() => { result = check(); }); assert.equal(result!.success, false);
+    }
+  }
+});
+
+test("receiving-profile reassignment cannot transfer private invitations or awarded quote ownership", () => {
+  const base = fixture(); base.terms.supplierIds = [base.suppliers[0]];
+  const f = awarded(quoted(opened(base))), original = supplierRequests(f.supplierUser)[0];
+  assert.equal(original.awardedToYou, true); assert.equal(original.historicalOnly, false);
+  getDb().prepare("UPDATE recipients SET user_id=?,version=version+1 WHERE id=?").run(f.secondUser, f.suppliers[0]);
+  assert.deepEqual(supplierRequests(f.secondUser), []);
+  const historical = supplierRequests(f.supplierUser)[0];
+  assert.equal(historical.awardedToYou, true); assert.equal(historical.historicalOnly, true); assert.equal(historical.quotes[0].supplier_user_id, f.supplierUser);
+  for (const actor of [f.supplierUser, f.secondUser]) assert.throws(() => submitQuote(actor, f.id, { ...f.quoteInput, expectedVersion: 1 }), code("NOT_FOUND"));
+});
+
+test("legacy invitation identities fail closed and require a new explicitly reviewed invitation", () => {
+  const f = fixture(); f.terms.supplierIds = [f.suppliers[0]];
+  const old = createRequest(f.access, f.terms);
+  getDb().prepare("UPDATE procurement_suppliers SET invited_user_id=NULL WHERE request_id=?").run(old.id);
+  const review = inspectRequest(f.access, old.id);
+  assert.ok(review.invitationProblems[0].includes("Cancel this RFQ"));
+  assert.throws(() => publishRequest(f.access, old.id, review.reviewToken), code("PROCUREMENT_INVITATION_REVIEW_REQUIRED"));
+  getDb().prepare("UPDATE procurement_requests SET state='open' WHERE id=?").run(old.id);
+  assert.deepEqual(supplierRequests(f.supplierUser), []);
+  assert.throws(() => submitQuote(f.supplierUser, old.id, { recipientId: f.suppliers[0], expectedVersion: 0, unitPrice: "1", deliveryDate: dateAfter(5), validUntil: isoAfter(5), terms: "No implicit legacy authority" }), code("NOT_FOUND"));
+  assert.equal(cancelRequest(f.access, old.id, "Recreate uncaptured supplier invitations").state, "cancelled");
+  getDb().prepare("UPDATE recipients SET user_id=?,version=version+1 WHERE id=?").run(f.secondUser, f.suppliers[0]);
+  const replacement = createRequest(f.access, { ...f.terms, reference: `${f.terms.reference}-reinvite` });
+  assert.equal(row<{ invited_user_id: string }>("SELECT invited_user_id FROM procurement_suppliers WHERE request_id=?", replacement.id)!.invited_user_id, f.secondUser);
+  assert.deepEqual(supplierRequests(f.secondUser), []);
+  publishRequest(f.access, replacement.id, replacement.reviewToken);
+  assert.equal(supplierRequests(f.secondUser)[0].id, replacement.id); assert.equal(supplierRequests(f.secondUser)[0].historicalOnly, false);
+  const prior = quoted(); getDb().prepare("UPDATE procurement_suppliers SET invited_user_id=NULL WHERE request_id=?").run(prior.id);
+  const retained = supplierRequests(prior.supplierUser).find(value => value.id === prior.id)!;
+  assert.equal(retained.historicalOnly, true); assert.equal(retained.quotes[0].supplier_user_id, prior.supplierUser);
+  assert.throws(() => awardQuote(prior.access, prior.id, { recipientId: prior.suppliers[0], quoteVersion: 1, reviewToken: inspectRequest(prior.access, prior.id).reviewToken, purchaseReference: "PO-LEGACY-NO-AUTHORITY" }), code("PROCUREMENT_INVITATION_REVIEW_REQUIRED"));
+});
+
+test("captured invitations cannot change actor between draft review and publication", () => {
+  const f = fixture(); f.terms.supplierIds = [f.suppliers[0]]; const request = createRequest(f.access, f.terms);
+  getDb().prepare("UPDATE recipients SET user_id=?,version=version+1 WHERE id=?").run(f.secondUser, f.suppliers[0]);
+  const current = inspectRequest(f.access, request.id);
+  assert.throws(() => publishRequest(f.access, request.id, current.reviewToken), code("PROCUREMENT_INVITATION_REVIEW_REQUIRED"));
+  assert.deepEqual(supplierRequests(f.secondUser), []);
+});
+
+test("approve-only purchasing roles cannot publish an unawardable RFQ and permission loss holds new quotes", () => {
+  const f = fixture(), db = getDb(), approveOnly = permissions.filter(permission => permission !== "payments:prepare");
+  db.prepare("UPDATE organization_roles SET permissions_json=? WHERE id=?").run(JSON.stringify(approveOnly), f.preparerRole);
+  assert.throws(() => createRequest(f.access, { ...f.terms, approvingRoleId: f.preparerRole }), code("PROCUREMENT_ROLE_INVALID"));
+  assert.ok(!overview(f.access).roles.some(role => role.id === f.preparerRole));
+  db.prepare("UPDATE organization_roles SET permissions_json=? WHERE id=?").run(JSON.stringify(permissions), f.preparerRole);
+  db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,status,created_at) VALUES(?,?,?,'active',?)").run(f.access.organizationId, f.secondUser, f.preparerRole, new Date().toISOString());
+  const request = createRequest(f.access, { ...f.terms, approvingRoleId: f.preparerRole });
+  publishRequest({ ...f.access, userId: f.secondUser }, request.id, request.reviewToken);
+  submitQuote(f.supplierUser, request.id, { recipientId: f.suppliers[0], expectedVersion: 0, unitPrice: "1", deliveryDate: dateAfter(5), validUntil: isoAfter(5), terms: "Dual-role purchasing can progress" });
+  const selected = inspectRequest(f.access, request.id);
+  assert.equal(awardQuote({ ...f.access, userId: f.secondUser }, request.id, { recipientId: f.suppliers[0], quoteVersion: 1, reviewToken: selected.reviewToken, purchaseReference: `PO-DUAL-${request.id}` }).state, "awarded");
+  const another = createRequest(f.access, { ...f.terms, reference: `${f.terms.reference}-role-loss`, approvingRoleId: f.preparerRole });
+  publishRequest({ ...f.access, userId: f.secondUser }, another.id, another.reviewToken);
+  db.prepare("UPDATE organization_roles SET permissions_json=? WHERE id=?").run(JSON.stringify(approveOnly), f.preparerRole);
+  assert.equal(inspectRequest(f.access, another.id).reviewRoleEligible, false);
+  assert.equal(supplierRequests(f.supplierUser).find(value => value.id === another.id)!.reviewerActive, false);
+  assert.throws(() => submitQuote(f.supplierUser, another.id, { recipientId: f.suppliers[0], expectedVersion: 0, unitPrice: "1", deliveryDate: dateAfter(5), validUntil: isoAfter(5), terms: "Missing preparation role must hold" }), code("PROCUREMENT_ROLE_INVALID"));
 });

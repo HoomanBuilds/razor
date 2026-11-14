@@ -10,10 +10,12 @@ import { procurementInvoiceReview, receivingTotals } from "./matching";
 
 const stamp = () => new Date().toISOString();
 const quantity = z.string().regex(/^[1-9]\d{0,11}$/);
-const money = z.string().regex(/^[1-9]\d{0,30}$/).refine(value => BigInt(value) <= 10n ** 30n);
+const moneyPattern = /^[1-9]\d{0,30}$/;
+const money = z.string().regex(moneyPattern).refine(value => moneyPattern.test(value) && BigInt(value) <= 10n ** 30n);
 const requestKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 const text = z.string().trim().min(3).max(3000);
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const purchasingPermissions = (permissions: string[]) => ["payments:prepare", "payments:approve"].every(permission => permissions.includes(permission));
 export const requestInput = z.object({ reference: z.string().trim().min(1).max(120), specification: text, quantity, unit: z.string().trim().min(1).max(40), budget: money,
   deliveryFrom: z.string().date(), deliveryTo: z.string().date(), quoteDeadline: z.string().datetime(), evidence: text,
   supplierIds: z.array(z.string().min(1).max(128)).min(1).max(20), approvingRoleId: z.string().min(1).max(128), inventoryItemId: z.string().min(1).max(128).optional() }).strict();
@@ -29,7 +31,7 @@ function accessFor(access: AccessContext, permission: string) { const live = get
 function requestFor(organizationId: string, id: string) { const value = row<RequestRow>("SELECT * FROM procurement_requests WHERE organization_id=? AND id=?", organizationId, id); if (!value) throw new ApiError(404, "Purchase request not found", "NOT_FOUND"); return value; }
 function roleFor(organizationId: string, id: string) {
   const role = row<{ id: string; name: string; permissions_json: string }>("SELECT id,name,permissions_json FROM organization_roles WHERE id=? AND organization_id=? AND archived_at IS NULL", id, organizationId);
-  if (!role || !JSON.parse(role.permissions_json).includes("payments:approve")) throw new ApiError(422, "Choose an active company role with payment approval permission", "PROCUREMENT_ROLE_INVALID");
+  if (!role || !purchasingPermissions(JSON.parse(role.permissions_json))) throw new ApiError(422, "Choose an active purchasing role with both payment preparation and approval permissions", "PROCUREMENT_ROLE_INVALID");
   return role;
 }
 function assertReviewer(access: AccessContext, request: RequestRow) {
@@ -43,10 +45,17 @@ function supplierFor(organizationId: string, id: string) {
   return value;
 }
 function eligibleSupplier(userId: string, request: RequestRow, recipientId: string) {
-  if (!row("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? AND recipient_id=?", request.id, recipientId)) throw new ApiError(404, "This purchase request is unavailable", "NOT_FOUND");
+  if (!row("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? AND recipient_id=? AND invited_user_id=?", request.id, recipientId, userId)) throw new ApiError(404, "This purchase request is unavailable", "NOT_FOUND");
   const value = supplierFor(request.organization_id, recipientId);
   if (value.user_id !== userId) throw new ApiError(404, "This purchase request is unavailable", "NOT_FOUND");
   return value;
+}
+function invitationProblems(request: RequestRow) {
+  const invitations = rows<{ recipient_id: string; invited_user_id: string | null; user_id: string | null; archived: number; kind: string; preference_status: string }>("SELECT s.recipient_id,s.invited_user_id,r.user_id,r.archived,r.kind,r.preference_status FROM procurement_suppliers s JOIN recipients r ON r.id=s.recipient_id AND r.organization_id=? WHERE s.request_id=?", request.organization_id, request.id);
+  if (!invitations.some(value => !value.invited_user_id || value.invited_user_id !== value.user_id || value.archived || value.kind !== "business" || value.preference_status !== "confirmed")) return [];
+  return [request.state === "awarded"
+    ? "A supplier invitation identity changed or was not captured. Preserve this awarded agreement's liabilities and history. Review its affected PO controls and create a new reviewed RFQ for new supplier work."
+    : "A supplier invitation identity changed or was not captured. Cancel this RFQ and create a new reviewed request for the current supplier account. Existing quotes remain historical records."];
 }
 function publicRequest(value: RequestRow) { const { specification_ciphertext, evidence_ciphertext, ...rest } = value; return { ...rest, specification: decrypt(specification_ciphertext), evidence: decrypt(evidence_ciphertext) }; }
 function publicQuote(value: QuoteRow) { const { supplier_snapshot_ciphertext, terms_ciphertext, ...rest } = value; return { ...rest, supplier: JSON.parse(decrypt(supplier_snapshot_ciphertext)) as { name: string; asset: string; network: string }, terms: decrypt(terms_ciphertext) }; }
@@ -58,14 +67,14 @@ export function createRequest(access: AccessContext, data: unknown) {
   const live = accessFor(access, "payments:prepare"), input = requestInput.parse(data);
   if (input.deliveryFrom > input.deliveryTo || Date.parse(input.quoteDeadline) <= Date.now() || input.quoteDeadline.slice(0, 10) > input.deliveryTo) throw new ApiError(422, "Choose future quote terms and an ordered delivery window", "PROCUREMENT_DATES_INVALID");
   if (new Set(input.supplierIds).size !== input.supplierIds.length) throw new ApiError(422, "Select each eligible supplier once", "PROCUREMENT_SUPPLIERS_DUPLICATE");
-  roleFor(live.organizationId, input.approvingRoleId); for (const id of input.supplierIds) supplierFor(live.organizationId, id);
+  roleFor(live.organizationId, input.approvingRoleId); const suppliers = input.supplierIds.map(id => supplierFor(live.organizationId, id));
   if (input.inventoryItemId && itemFor(live.organizationId, input.inventoryItemId).unit !== input.unit) throw new ApiError(422, "Use the inventory item's exact unit", "PROCUREMENT_UNIT_MISMATCH");
   return transaction(db => {
     if (row("SELECT id FROM procurement_requests WHERE organization_id=? AND reference=?", live.organizationId, input.reference)) throw new ApiError(409, "This purchase request reference already exists", "PROCUREMENT_REFERENCE_EXISTS");
     const id = randomUUID(), at = stamp();
     db.prepare("INSERT INTO procurement_requests(id,organization_id,reference,specification_ciphertext,quantity,unit,budget,delivery_from,delivery_to,quote_deadline,evidence_ciphertext,approving_role_id,inventory_item_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .run(id, live.organizationId, input.reference, encrypt(input.specification), input.quantity, input.unit, input.budget, input.deliveryFrom, input.deliveryTo, input.quoteDeadline, encrypt(input.evidence), input.approvingRoleId, input.inventoryItemId ?? null, live.userId, at, at);
-    for (const supplier of input.supplierIds) db.prepare("INSERT INTO procurement_suppliers(request_id,recipient_id) VALUES(?,?)").run(id, supplier);
+    for (const supplier of suppliers) db.prepare("INSERT INTO procurement_suppliers(request_id,recipient_id,invited_user_id) VALUES(?,?,?)").run(id, supplier.id, supplier.user_id);
     audit(live.userId, live.organizationId, "procurement.request_created", id); return inspectRequest(live, id);
   });
 }
@@ -74,15 +83,17 @@ export function inspectRequest(access: AccessContext, id: string) {
   const quotes = rows<QuoteRow>("SELECT * FROM procurement_quotes WHERE request_id=? ORDER BY recipient_id,version DESC", id).map(publicQuote);
   const award = row<AwardRow>("SELECT * FROM procurement_awards WHERE request_id=?", id);
   const receipts = award ? rows<{ id: string; kind: string; quantity: string; evidence_ciphertext: string; created_by: string; created_at: string }>("SELECT id,kind,quantity,evidence_ciphertext,created_by,created_at FROM procurement_receipts WHERE award_id=? ORDER BY created_at,id", award.id).map(({ evidence_ciphertext, ...receipt }) => ({ ...receipt, evidence: decrypt(evidence_ciphertext) })) : [];
-  const role = row<{ id: string; name: string; archived_at: string | null }>("SELECT id,name,archived_at FROM organization_roles WHERE organization_id=? AND id=?", live.organizationId, value.approving_role_id)!;
+  const roleRecord = row<{ id: string; name: string; archived_at: string | null; permissions_json: string }>("SELECT id,name,archived_at,permissions_json FROM organization_roles WHERE organization_id=? AND id=?", live.organizationId, value.approving_role_id)!;
+  const { permissions_json, ...role } = roleRecord;
   const purchase = award ? row<{ reference: string; state: string; current_version: number | null }>("SELECT reference,state,current_version FROM vendor_commitments WHERE id=?", award.commitment_id)! : null;
-  const result = { ...publicRequest(value), role, supplierIds: rows<{ recipient_id: string }>("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? ORDER BY recipient_id", id).map(supplier => supplier.recipient_id), quotes, award: award ? { ...award, purchaseReference: purchase!.reference, poState: purchase!.state, poVersion: purchase!.current_version, receiving: receivingTotals(award.id) } : null, receipts };
+  const result = { ...publicRequest(value), role, reviewRoleEligible: !role.archived_at && purchasingPermissions(JSON.parse(permissions_json)), invitationProblems: invitationProblems(value), supplierIds: rows<{ recipient_id: string }>("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? ORDER BY recipient_id", id).map(supplier => supplier.recipient_id), quotes, award: award ? { ...award, purchaseReference: purchase!.reference, poState: purchase!.state, poVersion: purchase!.current_version, receiving: receivingTotals(award.id) } : null, receipts };
   return { ...result, reviewToken: digest(result) };
 }
 export function publishRequest(access: AccessContext, id: string, reviewToken: string) {
   return transaction(db => {
     const value = requestFor(access.organizationId, id), live = assertReviewer(access, value), review = inspectRequest(live, id);
     if (value.state !== "draft" || review.reviewToken !== reviewToken) throw new ApiError(409, "Review the current unpublished request", "PROCUREMENT_REVIEW_CHANGED");
+    if (review.invitationProblems.length) throw new ApiError(409, review.invitationProblems.join(". "), "PROCUREMENT_INVITATION_REVIEW_REQUIRED");
     for (const supplier of review.supplierIds) supplierFor(live.organizationId, supplier);
     if (value.quote_deadline <= stamp()) throw new ApiError(409, "The quote deadline passed", "PROCUREMENT_DEADLINE");
     db.prepare("UPDATE procurement_requests SET state='open',updated_at=? WHERE id=?").run(stamp(), id); audit(live.userId, live.organizationId, "procurement.request_published", id); return inspectRequest(live, id);
@@ -96,9 +107,18 @@ export function cancelRequest(access: AccessContext, id: string, reason: string)
     db.prepare("UPDATE procurement_requests SET state='cancelled',updated_at=? WHERE id=?").run(stamp(), id); audit(live.userId, live.organizationId, "procurement.request_cancelled", id, { reasonCiphertext: encrypt(note) }); return inspectRequest(live, id); });
 }
 export function supplierRequests(userId: string) {
-  return rows<RequestRow & { recipient_id: string; company_name: string }>("SELECT q.*,s.recipient_id,o.name AS company_name FROM procurement_requests q JOIN procurement_suppliers s ON s.request_id=q.id JOIN recipients r ON r.id=s.recipient_id AND r.organization_id=q.organization_id JOIN organizations o ON o.id=q.organization_id WHERE r.user_id=? AND r.kind='business' AND r.archived=0 AND r.preference_status='confirmed' AND q.state IN ('open','awarded') ORDER BY q.created_at DESC,q.id LIMIT 100", userId).map(value => {
-    const { recipient_id, company_name, ...request } = value;
-    return { ...publicRequest(request), recipientId: recipient_id, companyName: company_name, reviewerActive: !!row("SELECT id FROM organization_roles WHERE id=? AND organization_id=? AND archived_at IS NULL", request.approving_role_id, request.organization_id), quotes: rows<QuoteRow>("SELECT * FROM procurement_quotes WHERE request_id=? AND recipient_id=? AND supplier_user_id=? ORDER BY version DESC", request.id, recipient_id, userId).map(publicQuote), awardedToYou: !!row("SELECT id FROM procurement_awards WHERE request_id=? AND recipient_id=?", request.id, recipient_id), visibility: "Only your quotes are shown. Receiving and payment records remain in your ordinary recipient workspace." };
+  return rows<RequestRow & { recipient_id: string; company_name: string; invitation_active: number }>(`SELECT q.*,s.recipient_id,o.name AS company_name,
+    (s.invited_user_id=? AND r.user_id=? AND r.kind='business' AND r.archived=0 AND r.preference_status='confirmed' AND q.state IN ('open','awarded')) AS invitation_active
+    FROM procurement_requests q JOIN procurement_suppliers s ON s.request_id=q.id JOIN recipients r ON r.id=s.recipient_id AND r.organization_id=q.organization_id JOIN organizations o ON o.id=q.organization_id
+    WHERE (s.invited_user_id=? AND r.user_id=? AND r.kind='business' AND r.archived=0 AND r.preference_status='confirmed' AND q.state IN ('open','awarded'))
+    OR EXISTS(SELECT 1 FROM procurement_quotes h WHERE h.request_id=q.id AND h.recipient_id=s.recipient_id AND h.supplier_user_id=?)
+    ORDER BY q.created_at DESC,q.id LIMIT 100`, userId, userId, userId, userId, userId).map(value => {
+    const { recipient_id, company_name, invitation_active, ...request } = value;
+    const role = row<{ permissions_json: string }>("SELECT permissions_json FROM organization_roles WHERE id=? AND organization_id=? AND archived_at IS NULL", request.approving_role_id, request.organization_id);
+    return { ...publicRequest(request), recipientId: recipient_id, companyName: company_name, historicalOnly: !invitation_active, reviewerActive: !!role && purchasingPermissions(JSON.parse(role.permissions_json)),
+      quotes: rows<QuoteRow>("SELECT * FROM procurement_quotes WHERE request_id=? AND recipient_id=? AND supplier_user_id=? ORDER BY version DESC", request.id, recipient_id, userId).map(publicQuote),
+      awardedToYou: !!row("SELECT a.id FROM procurement_awards a JOIN procurement_quotes q ON q.request_id=a.request_id AND q.recipient_id=a.recipient_id AND q.version=a.quote_version WHERE a.request_id=? AND a.recipient_id=? AND q.supplier_user_id=?", request.id, recipient_id, userId),
+      visibility: invitation_active ? "Only your quotes are shown. Receiving and payment records remain in your ordinary recipient workspace." : "Historical access to your own quote submissions only. This receiving profile no longer grants new invitation or quoting authority." };
   });
 }
 export function submitQuote(userId: string, requestId: string, data: unknown) {
@@ -129,6 +149,7 @@ export function awardQuote(access: AccessContext, id: string, data: { recipientI
     if (existing) { if (existing.recipient_id !== parsed.recipientId || existing.quote_version !== parsed.quoteVersion || !row("SELECT id FROM vendor_commitments WHERE id=? AND reference=?", existing.commitment_id, parsed.purchaseReference)) throw new ApiError(409, "This RFQ already has a different award", "PROCUREMENT_ALREADY_AWARDED"); return inspectRequest(live, id); }
     const review = inspectRequest(live, id), quote = quoteFor(id, parsed.recipientId, parsed.quoteVersion), supplier = supplierFor(live.organizationId, parsed.recipientId);
     if (request.state !== "open" || review.reviewToken !== parsed.reviewToken) throw new ApiError(409, "Review the latest RFQ and quotes before award", "PROCUREMENT_REVIEW_CHANGED");
+    if (!row("SELECT recipient_id FROM procurement_suppliers WHERE request_id=? AND recipient_id=? AND invited_user_id=?", id, parsed.recipientId, supplier.user_id)) throw new ApiError(409, "Supplier invitation ownership changed or was not captured. Cancel this RFQ and create a new reviewed invitation", "PROCUREMENT_INVITATION_REVIEW_REQUIRED");
     if (quote.valid_until <= stamp() || request.delivery_to < stamp().slice(0, 10)) throw new ApiError(409, "This quote expired before award. Request a new valid revision", "PROCUREMENT_QUOTE_EXPIRED");
     if (quote.version !== row<{ version: number }>("SELECT MAX(version) AS version FROM procurement_quotes WHERE request_id=? AND recipient_id=?", id, parsed.recipientId)!.version || quote.supplier_version !== supplier.version || quote.supplier_user_id !== supplier.user_id) throw new ApiError(409, "Supplier details or quote revision changed", "PROCUREMENT_QUOTE_CHANGED");
     const commitment = createCommitment(live, { recipientId: parsed.recipientId, reference: parsed.purchaseReference, settlementUnit: "USDC", scope: `${review.specification}\nQuantity: ${request.quantity} ${request.unit}\n${decrypt(quote.terms_ciphertext)}`, allowance: quote.total, cadence: "total", startsOn: stamp().slice(0, 10), endsOn: request.delivery_to, targetState: "active", reason: `Human-reviewed award of ${request.reference}, quote ${quote.version}` });
@@ -215,7 +236,7 @@ export function overview(access: AccessContext, search = "") {
   return { requests: rows<RequestRow>("SELECT * FROM procurement_requests WHERE organization_id=? AND instr(lower(reference),lower(?))>0 ORDER BY created_at DESC,id DESC LIMIT 100", live.organizationId, reference).map(publicRequest),
     inventory: rows<ItemRow>("SELECT * FROM procurement_inventory WHERE organization_id=? ORDER BY sku LIMIT 100", live.organizationId).map(inventoryProjection),
     suppliers: rows<{ id: string; name: string }>("SELECT id,name FROM recipients WHERE organization_id=? AND kind='business' AND archived=0 AND preference_status='confirmed' AND user_id IS NOT NULL ORDER BY id", live.organizationId).map(value => ({ ...value, name: decrypt(value.name) })),
-    roles: rows<{ id: string; name: string; permissions_json: string }>("SELECT id,name,permissions_json FROM organization_roles WHERE organization_id=? AND archived_at IS NULL ORDER BY name", live.organizationId).filter(role => JSON.parse(role.permissions_json).includes("payments:approve")).map(({ id, name }) => ({ id, name })),
+    roles: rows<{ id: string; name: string; permissions_json: string }>("SELECT id,name,permissions_json FROM organization_roles WHERE organization_id=? AND archived_at IS NULL ORDER BY name", live.organizationId).filter(role => purchasingPermissions(JSON.parse(role.permissions_json))).map(({ id, name }) => ({ id, name })),
     bills: rows<{ id: string; reference: string; recipient_id: string }>("SELECT id,reference,recipient_id FROM bills WHERE organization_id=? AND accepted_at IS NULL ORDER BY created_at DESC LIMIT 100", live.organizationId),
     evidenceBoundary: "Receiving is a named human assertion. Reorders create unpublished drafts only. No escrow, shipping oracle, automated award or cash settlement is implied." };
 }
