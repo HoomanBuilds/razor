@@ -1,4 +1,4 @@
-use near_sdk::{AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, PromiseResult, env, ext_contract, json_types::{U64, U128}, near, require, serde_json, store::IterableMap};
+use near_sdk::{AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, PromiseError, env, ext_contract, json_types::{U64, U128}, near, require, serde_json, store::IterableMap};
 
 const MAINNET_USDC: &str = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 const DAY_MS: u64 = 86_400_000;
@@ -141,7 +141,11 @@ impl Billing {
         if refund.status != "pending" || refund.nonce.0 != nonce.0 { return false }
         let mut invoice = self.invoices.get(&refund.invoice_id).expect("INVOICE_NOT_FOUND").clone();
         require!(invoice.pending_refund.as_ref() == Some(&refund_id), "REFUND_BINDING_CHANGED");
-        let success = matches!(env::promise_result(0), PromiseResult::Successful(_));
+        let success = match env::promise_result_checked(0, 0) {
+            Ok(_) | Err(PromiseError::TooLong(_)) => true,
+            Err(PromiseError::Failed) => false,
+            Err(_) => return false,
+        };
         if success { invoice.refunded_amount.0 = invoice.refunded_amount.0.checked_add(refund.amount.0).expect("REFUND_OVERFLOW"); refund.status = "completed".into(); }
         else { self.available = self.available.checked_add(refund.amount.0).expect("BALANCE_OVERFLOW"); refund.status = "failed".into(); }
         invoice.pending_refund = None;
@@ -157,7 +161,11 @@ impl Billing {
     pub fn on_withdrawn(&mut self, nonce: U64) -> bool {
         let Some((expected, amount)) = self.withdrawal else { return false };
         if nonce.0 != expected { return false }
-        let success = matches!(env::promise_result(0), PromiseResult::Successful(_));
+        let success = match env::promise_result_checked(0, 0) {
+            Ok(_) | Err(PromiseError::TooLong(_)) => true,
+            Err(PromiseError::Failed) => false,
+            Err(_) => return false,
+        };
         if !success { self.available = self.available.checked_add(amount).expect("BALANCE_OVERFLOW"); }
         self.withdrawal = None; success
     }
