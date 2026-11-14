@@ -1,6 +1,6 @@
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
-use near_sdk::{RuntimeFeesConfig, test_utils::VMContextBuilder, test_vm_config, testing_env};
+use near_sdk::{PromiseResult, RuntimeFeesConfig, test_utils::VMContextBuilder, test_vm_config, testing_env};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 fn account(value:&str)->AccountId { value.parse().unwrap() }
 fn context(caller:&str,deposit:u128)->VMContextBuilder { let mut value=VMContextBuilder::new(); value.current_account_id(account("billing.testnet")).predecessor_account_id(account(caller)).signer_account_id(account(caller)).attached_deposit(NearToken::from_yoctonear(deposit)).account_balance(NearToken::from_near(100)).prepaid_gas(Gas::from_tgas(300)).block_timestamp(1_000_000_000_000).block_height(100); value }
@@ -45,4 +45,90 @@ fn typed_views_events_and_hex_preserve_exact_json_and_hash_bytes() {
     let bytes: Vec<u8> = (0..=255).collect();
     assert_eq!(hex(&bytes), bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
     assert_eq!(hex(&[]), "");
+}
+
+
+fn oversized_callback() {
+    testing_env!(
+        context("billing.testnet", 0).build(),
+        test_vm_config(),
+        RuntimeFeesConfig::test(),
+        Default::default(),
+        vec![PromiseResult::Successful(vec![b'x'; 262_144])]
+    );
+}
+
+#[test]
+fn oversized_successful_refund_never_restores_cash_or_refunds_twice() {
+    let mut billing = setup();
+    pay(&mut billing);
+    call("owner.testnet", 1);
+    drop(billing.refund_payment("invoice-one".into(), "refund-large".into(), U128(10_000_000)));
+    assert_eq!(billing.available, 19_000_000);
+    oversized_callback();
+    assert!(!billing.on_refunded("refund-large".into(), U64(9)));
+    assert_eq!(billing.get_invoice("invoice-one".into()).unwrap().pending_refund.as_deref(), Some("refund-large"));
+    assert!(billing.on_refunded("refund-large".into(), U64(1)));
+    assert_eq!(billing.available, 19_000_000);
+    let invoice = billing.get_invoice("invoice-one".into()).unwrap();
+    assert_eq!(invoice.refunded_amount, U128(10_000_000));
+    assert!(invoice.pending_refund.is_none());
+    assert_eq!(billing.get_refund("refund-large".into()).unwrap().status, "completed");
+    assert!(!billing.on_refunded("refund-large".into(), U64(1)));
+    callback(false);
+    assert!(!billing.on_refunded("refund-large".into(), U64(1)));
+    assert_eq!(billing.available, 19_000_000);
+    call("owner.testnet", 1);
+    assert!(matches!(billing.refund_payment("invoice-one".into(), "refund-large".into(), U128(10_000_000)), PromiseOrValue::Value(true)));
+    assert_eq!(billing.available, 19_000_000);
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.refund_payment("invoice-one".into(), "refund-over".into(), U128(19_000_001)))).is_err());
+}
+
+#[test]
+fn failed_refund_retries_exact_amount_and_oversized_success_closes_only_the_new_nonce() {
+    let mut billing = setup();
+    pay(&mut billing);
+    call("owner.testnet", 1);
+    drop(billing.refund_payment("invoice-one".into(), "refund-retry".into(), U128(7_000_000)));
+    callback(false);
+    assert!(!billing.on_refunded("refund-retry".into(), U64(1)));
+    assert_eq!(billing.available, 29_000_000);
+    assert!(!billing.on_refunded("refund-retry".into(), U64(1)));
+    assert_eq!(billing.available, 29_000_000);
+    call("owner.testnet", 1);
+    drop(billing.refund_payment("invoice-one".into(), "refund-retry".into(), U128(7_000_000)));
+    assert_eq!(billing.available, 22_000_000);
+    oversized_callback();
+    assert!(!billing.on_refunded("refund-retry".into(), U64(1)));
+    assert_eq!(billing.get_invoice("invoice-one".into()).unwrap().pending_refund.as_deref(), Some("refund-retry"));
+    assert!(billing.on_refunded("refund-retry".into(), U64(2)));
+    assert!(!billing.on_refunded("refund-retry".into(), U64(2)));
+    assert_eq!(billing.available, 22_000_000);
+    assert_eq!(billing.get_invoice("invoice-one".into()).unwrap().refunded_amount, U128(7_000_000));
+}
+
+#[test]
+fn revenue_withdrawal_failure_restores_once_and_oversized_success_does_not_restore() {
+    let mut billing = setup();
+    pay(&mut billing);
+    call("owner.testnet", 1);
+    drop(billing.withdraw(U128(10_000_000)));
+    callback(false);
+    assert!(!billing.on_withdrawn(U64(1)));
+    assert_eq!(billing.available, 29_000_000);
+    assert!(!billing.on_withdrawn(U64(1)));
+    assert_eq!(billing.available, 29_000_000);
+    call("owner.testnet", 1);
+    drop(billing.withdraw(U128(10_000_000)));
+    assert_eq!(billing.available, 19_000_000);
+    oversized_callback();
+    assert!(!billing.on_withdrawn(U64(1)));
+    assert_eq!(billing.withdrawal, Some((2, 10_000_000)));
+    assert!(billing.on_withdrawn(U64(2)));
+    assert!(billing.withdrawal.is_none());
+    assert_eq!(billing.available, 19_000_000);
+    assert!(!billing.on_withdrawn(U64(2)));
+    callback(false);
+    assert!(!billing.on_withdrawn(U64(2)));
+    assert_eq!(billing.available, 19_000_000);
 }
