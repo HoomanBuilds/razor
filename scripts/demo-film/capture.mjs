@@ -75,7 +75,7 @@ try {
       frames.push({file, timestamp: metadata.timestamp, received: performance.now()});
       void browser.call('Page.screencastFrameAck', {sessionId}).catch(() => {});
     });
-    const captureSeconds = segment.seconds - (segment.overview ?? 0);
+    const captureSeconds = segment.captureSeconds ?? segment.seconds - (segment.overview ?? 0);
     const started = performance.now();
     await browser.call('Page.startScreencast', {format: 'jpeg', quality: 93, maxWidth: 1920, maxHeight: 1080, everyNthFrame: 1});
     const events = [];
@@ -143,7 +143,7 @@ async function perform(action) {
     await browser.call('Input.dispatchKeyEvent', {type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2});
     await browser.call('Input.insertText', {text: action.value});
   } else if (action.type === 'select') {
-    await browser.evaluate(`(()=>{const element=${selector};element.value=${JSON.stringify(action.value)};element.dispatchEvent(new Event('change',{bubbles:true}));return element.value})()`);
+    await browser.evaluate(`(()=>{const element=${selector};element.value=${action.optionText ? `[...element.options].find(option=>option.textContent===${JSON.stringify(action.optionText)})?.value` : JSON.stringify(action.value)};element.dispatchEvent(new Event('change',{bubbles:true}));return element.value})()`);
   } else if (action.type !== 'click') throw new Error(`Unknown capture action: ${action.type}`);
 }
 async function click(target) {

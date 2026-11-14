@@ -36,7 +36,8 @@ export async function loadStory(path) {
     ids.add(segment.id);
     if (!['card', 'shot'].includes(segment.type) || !Number.isFinite(segment.seconds) || segment.seconds <= 0) throw new Error(`Invalid segment: ${segment.id}`);
     if (typeof segment.narration !== 'string' || !segment.narration.trim()) throw new Error(`Narration is missing: ${segment.id}`);
-    for (const action of segment.actions ?? []) if (!Number.isFinite(action.at) || action.at < 0 || action.at >= segment.seconds) throw new Error(`Action lies outside ${segment.id}`);
+    if (segment.captureSeconds !== undefined && (!Number.isFinite(segment.captureSeconds) || segment.captureSeconds <= 0)) throw new Error(`Invalid capture duration: ${segment.id}`);
+    for (const action of segment.actions ?? []) if (!Number.isFinite(action.at) || action.at < 0 || action.at >= (segment.captureSeconds ?? segment.seconds)) throw new Error(`Action lies outside ${segment.id}`);
   }
   if (story.segments.reduce((sum, segment) => sum + segment.seconds, 0) > 240) throw new Error('Planned film exceeds four minutes');
   return story;
