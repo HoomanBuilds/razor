@@ -18,7 +18,7 @@ function fixture() {
     const digest = createHash("sha256").update(bytes).digest();
     return { file, environmentKey, bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest) };
   });
-  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ architecture:"shared_v1", treasuryStateVersion: 3, clearingStateVersion: 2, artifacts }));
+  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ architecture:"shared_v1", treasuryStateVersion: 4, clearingStateVersion: 3, artifacts }));
   return { directory, input: { network: "mainnet" as const, treasuryAccount: "treasury.near", clearingAccount: "clearing.near", ownerAccount: "owner.near", artifactDirectory: directory } };
 }
 
@@ -29,8 +29,8 @@ test("deployment plan preserves canonical mainnet USDC, reviewed hashes and atom
     assert.equal(plan.tokenContract, NATIVE_USDC.near);
     assert.equal(plan.deployed, false);
     assert.equal(plan.accountsVerified, false);
-    assert.equal(plan.treasuryStateVersion, 3);
-    assert.equal(plan.clearingStateVersion, 2);
+    assert.equal(plan.treasuryStateVersion, 4);
+    assert.equal(plan.clearingStateVersion, 3);
     assert.ok(plan.optionalCashClearingSetup);
     assert.equal(plan.optionalCashClearingSetup.completed, false);
     assert.equal(plan.optionalCashClearingSetup.enabledByDeployment, false);
@@ -132,7 +132,7 @@ test("standing deployment refuses stale company-state manifests instead of plann
   const { directory, input } = fixture();
   try {
     const path = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(path, "utf8"));
-    for (const version of [undefined, 1, 2, 4]) {
+    for (const version of [undefined, 1, 2, 3, 5]) {
       manifest.treasuryStateVersion = version;
       writeFileSync(path, JSON.stringify(manifest));
       assert.throws(() => prepareDeployment(input), /fresh deployment accounts.*no populated-state migration/);
@@ -144,7 +144,7 @@ test("funded clearing refuses old or unknown state manifests before planning a d
   const { directory, input } = fixture();
   try {
     const path = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(path, "utf8"));
-    for (const version of [undefined, 1, 3]) {
+    for (const version of [undefined, 1, 2, 4]) {
       manifest.clearingStateVersion = version;
       writeFileSync(path, JSON.stringify(manifest));
       assert.throws(() => prepareDeployment(input), /fresh empty clearing account.*no populated-state migration/);
@@ -171,7 +171,7 @@ test("basic payments deployment needs only the treasury and rejects invalid expl
     assert.equal(plan.environment.NEAR_CLEARING_ID, undefined);
     assert.equal(plan.environment.NEAR_CLEARING_CODE_HASH, undefined);
     assert.deepEqual(plan.keyRetirement.map(step => step.accountId), [input.treasuryAccount]);
-    assert.throws(() => prepareDeployment({ ...core, clearingAccount }), /clearing state-version-2/);
+    assert.throws(() => prepareDeployment({ ...core, clearingAccount }), /clearing state-version-3/);
     assert.throws(() => prepareDeployment({ ...core, clearingAccount: "" }), /valid/);
     assert.throws(() => prepareDeployment({ ...core, clearingAccount: input.treasuryAccount }), /distinct/);
   } finally { rmSync(directory, { recursive: true, force: true }); }

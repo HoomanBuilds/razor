@@ -66,6 +66,45 @@ fn deposit(treasury: &mut Treasury, company_id: &str, deposit_id: &str, amount: 
 }
 
 #[test]
+fn native_reserve_preserves_every_company_prepaid_storage_and_tracks_growth() {
+    let (mut treasury, a, b) = setup();
+    let unused = |treasury: &Treasury| {
+        [a.clone(), b.clone()].iter().map(|id| treasury.get_storage(id.clone()).storage_available.0).sum::<u128>()
+    };
+    assert_eq!(treasury.native_customer_unused, unused(&treasury));
+    call("alice.testnet", 12345);
+    treasury.add_storage(a.clone());
+    assert_eq!(treasury.native_customer_unused, unused(&treasury));
+    call("alice.testnet", 1);
+    treasury.set_role(a.clone(), account("approver.testnet"), "approver".into(), true);
+    assert_eq!(treasury.native_customer_unused, unused(&treasury));
+    let quote = treasury.get_native_reserve();
+    assert_eq!(quote.customer_storage_reserved.0, unused(&treasury));
+    assert_eq!(quote.withdrawable.0, quote.balance.0.saturating_sub(quote.storage_locked.0).saturating_sub(unused(&treasury)));
+}
+
+#[test]
+fn native_reserve_requires_owner_one_yocto_and_exact_positive_capacity_even_when_paused() {
+    let (mut treasury, _, _) = setup();
+    call("attacker.testnet", 1);
+    assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(1)))).is_err());
+    call("platform.testnet", 0);
+    assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(1)))).is_err());
+    call("platform.testnet", 1);
+    treasury.paused = true;
+    let available = treasury.get_native_reserve().withdrawable.0.saturating_sub(1);
+    assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(0)))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| treasury.withdraw_native_reserve(U128(available + 1)))).is_err());
+    let protected = treasury.native_customer_unused;
+    drop(treasury.withdraw_native_reserve(U128(available)));
+    assert_eq!(treasury.native_customer_unused, protected);
+    let receipts = near_sdk::test_utils::get_created_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].receiver_id, account("platform.testnet"));
+    assert_eq!(receipts[0].actions.len(), 1);
+}
+
+#[test]
 fn shared_registration_binds_owner_and_charges_state_without_deploying_code() {
     call("platform.testnet", 0);
     let mut treasury = Treasury::new(account("platform.testnet"), account("usdc.testnet"));
