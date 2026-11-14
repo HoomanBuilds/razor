@@ -88,3 +88,8 @@ button:disabled { cursor: not-allowed; }
 @keyframes workspace-enter { from { opacity: .55; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }
 @media (max-width: 640px) { .workspace-panel { border-radius: 1rem; } .workspace-panel > .workspace-panel-body > form { padding: 1rem; } }
+
+.workspace-panel-white { background: #fff; border-color: var(--border); }
+.workspace-panel-brand { background: #f3f5ff; border-color: #e5eaff; }
+.workspace-content details.group\/panel > summary::after { display: none; }
+.workspace-panel-brand > div:first-child h2 { color: #1739ae; }

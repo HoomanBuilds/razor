@@ -168,10 +168,10 @@ export function FinancingManagement({
           ? "Company working capital"
           : "Your lending and borrowing agreements"
       }
-      description="Optional peer-to-peer native NEAR USDC loans. Real scope, exact owner approval and funded escrow are required."
+      tone="white" description="Peer-to-peer USDC working capital on NEAR." help="Real operating scope, exact owner approval and funded escrow are required."
     >
       <div className="grid min-w-0 grid-cols-1 gap-5">
-        <p className="text-sm leading-6 text-muted-foreground">
+        <p className="rounded-xl border border-amber-200/70 bg-amber-50/50 px-4 py-3 text-xs leading-6 text-amber-900">
           No lender, liquidity, repayment or creditworthiness guarantee.
           Principal, fixed borrowing cost and USDC bond remain separate from
           company deposits and revenue. Contract terms and repayment
@@ -230,7 +230,7 @@ export function FinancingManagement({
           </p>
         ) : null}
         {company && canManage && (
-          <details className="min-w-0 rounded-lg border p-4">
+          <details className="min-w-0 rounded-2xl border border-border bg-white p-5">
             <summary className="cursor-pointer text-sm font-medium">
               Request native-USDC working capital
             </summary>
@@ -404,7 +404,7 @@ export function FinancingManagement({
                 key={item.id}
                 type="button"
                 disabled={!!busy}
-                className={`min-w-0 rounded-lg border p-4 text-left ${selected === item.id ? "border-primary" : ""}`}
+                className={`min-w-0 rounded-2xl border border-border bg-white p-5 text-left ${selected === item.id ? "border-primary" : ""}`}
                 onClick={() => {
                   setSelected(item.id);
                   setPreview(null);
@@ -452,7 +452,7 @@ export function FinancingManagement({
           <Empty>Loading fixed agreement history...</Empty>
         ) : (
           current && (
-            <article className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">
+            <article className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-border bg-white p-5">
               <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                 <h3 className="break-words font-medium">
                   {current.companyName} working capital
@@ -1056,7 +1056,7 @@ export function FinancingManagement({
           )
         )}
         {preview && (
-          <section className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border border-primary p-4">
+          <section className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-primary/30 bg-secondary/40 p-5">
             <h3 className="font-medium">Confirm this exact NEAR action</h3>
             {preview.warnings.map((value) => (
               <p

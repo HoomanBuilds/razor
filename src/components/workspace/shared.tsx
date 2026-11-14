@@ -1,13 +1,27 @@
 "use client";
 
-import { Copy, ExternalLink, LoaderCircle } from "lucide-react";
+import { Copy, ExternalLink, LoaderCircle, Plus, Info } from "lucide-react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
-  return <section className="workspace-panel min-w-0 p-5 sm:p-6"><div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h2 className="text-lg font-medium tracking-tight">{title}</h2>{description && <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>}</div>{action}</div><div className="workspace-panel-body min-w-0">{children}</div></section>;
+export function Panel({ title, description, help, action, children, tone = "muted", collapsible = false, defaultOpen = false }: { title: string; description?: string; help?: string; action?: ReactNode; children: ReactNode; tone?: "muted" | "white" | "brand"; collapsible?: boolean; defaultOpen?: boolean }) {
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const details = disclosure.current;
+    if (!details) return;
+    const reveal = () => { if (details.querySelector('[aria-busy="true"]') || Array.from(details.querySelectorAll('[role="alert"]')).some(node => node.textContent?.trim())) details.open = true; };
+    const observer = new MutationObserver(reveal);
+    observer.observe(details, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["aria-busy"] });
+    reveal();
+    return () => observer.disconnect();
+  }, [collapsible]);
+  const heading = <div className="min-w-0"><h2 className="text-lg font-medium tracking-tight">{title}</h2>{description && <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>}{help && !collapsible && <details className="mt-2 text-xs text-muted-foreground"><summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] after:hidden"><Info size={12} aria-hidden="true"/>Details</summary><p className="mt-3 max-w-3xl leading-6">{help}</p></details>}</div>;
+  const content = <div className="workspace-panel-body min-w-0">{help && collapsible && <p className="mb-5 max-w-3xl text-xs leading-6 text-muted-foreground">{help}</p>}{children}</div>;
+  const className = cn("workspace-panel min-w-0 p-5 sm:p-6", tone === "white" && "workspace-panel-white", tone === "brand" && "workspace-panel-brand");
+  if (collapsible && !action) return <details ref={disclosure} className={cn(className, "group/panel")} open={defaultOpen}><summary onClick={event => { if (disclosure.current?.open && disclosure.current.querySelector('[aria-busy="true"]')) event.preventDefault(); }} className="flex cursor-pointer list-none items-start justify-between gap-4 after:hidden">{heading}<span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-white text-primary"><Plus size={16} aria-hidden="true" className="transition-transform group-open/panel:rotate-45"/></span></summary><div className="mt-6">{content}</div></details>;
+  return <section className={className}><div className="mb-6 flex flex-wrap items-start justify-between gap-4">{heading}{action}</div>{content}</section>;
 }
 
 export function Field({ label, children, hint, as: Tag = "label" }: { label: string; children: ReactNode; hint?: string; as?: "label" | "div" }) {
