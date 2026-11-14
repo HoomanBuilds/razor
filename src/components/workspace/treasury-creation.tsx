@@ -8,6 +8,7 @@ import { formatUnits, parseUnits } from "@/lib/money";
 import { usd } from "@/lib/format";
 import { authenticateWallet } from "@/components/auth/wallets";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
+import { withTaskDrawerWallet } from "./task-drawer";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Field, Panel, Status } from "./shared";
@@ -50,7 +51,7 @@ export function TreasuryCreation() {
     if(!quoted||!acknowledged||pending)return;
     const terms=input(),prepared=await api<QuoteResult&{walletActions:NearWalletAction[]}>(`${base}/onboarding/prepare`,{...terms,quoteHash:quoted.quote.hash});
     if(prepared.quote.hash!==quoted.quote.hash)throw new RequestError("Review a fresh registration quote before signing.",409,"CREATION_QUOTE_CHANGED");
-    const hash=await signNearActions(prepared.walletActions,prepared.quote.network,[terms.ownerAccount]);
+    const hash=await withTaskDrawerWallet(()=>signNearActions(prepared.walletActions,prepared.quote.network,[terms.ownerAccount]));
     if(!hash)throw new RequestError("No wallet receipt was returned. Check registration status before trying again.",409,"RECEIPT_REQUIRED");
     setTxHash(hash);
     setPending(true);pollCount.current=0;
@@ -73,7 +74,7 @@ export function TreasuryCreation() {
         <div hidden={step !== 1} className="grid gap-4 md:col-span-2 sm:grid-cols-2">        <Field label="Maximum per payment (USDC)"><input className={control} required value={perPayment} onChange={event=>setPerPayment(event.target.value)} inputMode="decimal"/></Field>
         <Field label="Daily payment limit (USDC)"><input className={control} required value={daily} onChange={event=>setDaily(event.target.value)} inputMode="decimal"/></Field>
 <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">These initial limits bound company payments. Review and change treasury policy later with authorized wallet approval.</p></div>
-        <div className="flex flex-wrap gap-3 md:col-span-2">{step === 1 && <Action type="button" disabled={!!busy} className="bg-muted text-foreground hover:bg-secondary" onClick={()=>setStep(0)}>Back</Action>}<Action busy={busy==="quote"} disabled={!config?.ready||!ownerAccount}>{step === 0 ? "Continue to limits" : "Review registration"}</Action>{step === 0 && <Action type="button" busy={busy==="link"} className="bg-muted text-foreground hover:bg-secondary" onClick={()=>void run("link",async()=>{const drawer=document.getElementById("treasury-activation-flow");const reopen=drawer instanceof HTMLDialogElement&&drawer.open;if(reopen)drawer.close();try{await authenticateWallet("near",{link:true});refresh();}finally{if(reopen&&drawer.isConnected)drawer.showModal();}})}>Link owner wallet</Action>}</div>
+        <div className="flex flex-wrap gap-3 md:col-span-2">{step === 1 && <Action type="button" disabled={!!busy} className="bg-muted text-foreground hover:bg-secondary" onClick={()=>setStep(0)}>Back</Action>}<Action busy={busy==="quote"} disabled={!config?.ready||!ownerAccount}>{step === 0 ? "Continue to limits" : "Review registration"}</Action>{step === 0 && <Action type="button" busy={busy==="link"} className="bg-muted text-foreground hover:bg-secondary" onClick={()=>void run("link",async()=>{await withTaskDrawerWallet(()=>authenticateWallet("near",{link:true}));refresh();})}>Link owner wallet</Action>}</div>
       </fieldset>
     </form>
     {(pending || recorded || txHash) && <Action type="button" busy={busy==="check"||busy==="poll"} disabled={!ownerAccount||!!busy} onClick={()=>void run("check",async()=>{pollCount.current=0;await refreshRegistration(ownerAccount);})}>Check registration status</Action>}

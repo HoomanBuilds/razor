@@ -12,7 +12,7 @@ export function focusWorkspaceForm(id: string) {
     const form = document.getElementById(id);
     if (form && !form.closest('[hidden], [aria-hidden="true"]')) {
       const drawer = form.closest("dialog");
-      if (drawer && !drawer.open) drawer.showModal();
+      if (drawer && !drawer.open && !document.querySelector('[data-task-drawer][data-wallet-suspended="true"]')) drawer.showModal();
       let ancestor = form.parentElement;
       while (ancestor) {
         if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, RequestError } from "@/lib/api";
 import { formatUnits, parseUnits } from "@/lib/money";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
+import { withTaskDrawerWallet } from "./task-drawer";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, Field, Panel, control } from "./shared";
@@ -30,7 +31,7 @@ export function TreasuryStorage() {
       const fresh = await api<Prepared>(`${base}/treasury-policy/storage/prepare`, { deposit: preview.deposit });
       if (fresh.companyId !== preview.companyId || fresh.ownerAccount !== preview.ownerAccount || JSON.stringify(fresh.walletActions) !== JSON.stringify(preview.walletActions)) { setPrepared(null); throw new RequestError("Company storage instructions changed. Review them again.", 409, "STORAGE_REVIEW_CHANGED"); }
       const expected = (BigInt(fresh.storage.storage_credit) + BigInt(fresh.deposit)).toString();
-      await signNearActions(fresh.walletActions, fresh.network, [fresh.ownerAccount]);
+      await withTaskDrawerWallet(()=>signNearActions(fresh.walletActions, fresh.network, [fresh.ownerAccount]));
       setPending({ companyId: fresh.companyId, credit: expected }); setPrepared(null); refresh();
       notify("Storage funding submitted. The confirmed allowance will update after verification.");
     })}>Authorize storage funding</Action></div>}

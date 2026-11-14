@@ -1,5 +1,7 @@
 "use client";
 
+import { withTaskDrawerWallet } from "@/components/workspace/task-drawer";
+
 import { ContractUpgradeDisclosure } from "@/components/contract-upgrade-disclosure";
 import type { ContractUpgradePolicy } from "@/lib/contract-upgrade-policy";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -195,7 +197,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
     function broadcast(txHash:string) {broadcastHash=txHash;setHash(txHash);setPhase("confirming");try{sessionStorage.setItem(storageKey(funding.id),txHash);}catch{} if(props.onBroadcast) void props.onBroadcast(txHash).catch(error=>setError(`Source transfer submitted. Reopen this task to reconcile it. ${walletErrorMessage(error)}`));}
     try {
       const sendTransfer=token.blockchain==="near"?transferNear:token.blockchain==="sol"?transferSolana:transferEvm;
-      const receipt=await sendTransfer(props,quote,(hash)=>broadcast(hash));
+      const receipt=await withTaskDrawerWallet(()=>sendTransfer(props,quote!,hash=>broadcast(hash)));
       setPhase(receipt.confirmed?"confirmed":"idle");
       await onSubmitted(receipt.hash);
     } catch(error) {
@@ -217,7 +219,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
   const tracking=props.depositAllowed===false||!!hash;
   const direct=quote&&isDirectFunding(quote)?quote:null;
-  return <section className="space-y-4 rounded-lg border border-border bg-card p-4">
+  return <section aria-busy={pending} className="space-y-4 rounded-lg border border-border bg-card p-4">
     <ContractUpgradeDisclosure policy={props.upgradePolicy}/>
     <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><AssetIdentity symbol={token.symbol} network={token.blockchain} assetId={token.assetId} showAssetId className="my-3"/><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
     {props.depositAllowed===false&&<p role="status" className="text-sm">New deposits are blocked for this saved quote. Check wallet activity and track any submitted source transfer below.</p>}
