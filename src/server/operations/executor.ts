@@ -66,7 +66,7 @@ export async function executeApprovedAttempt(job: OperationJob, access: AccessCo
     || exact.destination.asset_id !== attempt.destination_asset || exact.destination.network !== attempt.destination_network || exact.destination.address !== attempt.destination_address
     || exact.use_backup !== (attempt.route === "backup")) return blocked("The stored payment and the exact onchain route disagree. Reconcile them before signing.");
   const { Account, JsonRpcProvider, KeyPairSigner, SignedTransaction, actions } = await import("near-api-js");
-  const provider = new JsonRpcProvider({ url: config.network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org" }, { retries: 0 });
+  const provider = new JsonRpcProvider({ url: config.network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org" }, { retries: 1 });
   const signer = KeyPairSigner.fromSecretKey(process.env.RAZOR_EXECUTOR_PRIVATE_KEY as `ed25519:${string}`);
   const publicKey = await signer.getPublicKey();
   const key = await provider.viewAccessKey({ accountId: worker.accountId, publicKey, finalityQuery: { finality: "final" } });
