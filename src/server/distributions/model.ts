@@ -34,10 +34,14 @@ export function sumEntitlements(items: { amount: string }[]) {
   return value.toString();
 }
 export function distributionTermsHash(plan: FrozenPlan) {
-  return hash({ domain: "razor_native_distribution_v1", treasury: plan.treasury, company_id: plan.companyId, network: plan.network, token: plan.token,
-    id: plan.id, reference: plan.reference, total: plan.total, deadline_ms: plan.deadlineMs,
-    unused_policy: "return_unclaimed_to_company_after_deadline", policy_version: plan.policyVersion, required_approvals: plan.requiredApprovals,
-    claims: plan.allocations.map(({ destination, ...allocation }) => ({ allocation, destination, status: "ready", nonce: "0", sent_day: "0" })) });
+  // NEAR's serde_json preserve_order makes this field order part of the contract commitment.
+  const terms = { domain: "razor_native_distribution_v1", treasury: plan.treasury, company_id: plan.companyId, network: plan.network, token: plan.token,
+    id: plan.id, reference: plan.reference,
+    claims: plan.allocations.map(item => ({ allocation: { claim_id: item.claim_id, recipient_id: item.recipient_id,
+      recipient_version: item.recipient_version, amount: item.amount }, destination: item.destination, status: "ready", nonce: "0", sent_day: "0" })),
+    total: plan.total, deadline_ms: plan.deadlineMs, unused_policy: "return_unclaimed_to_company_after_deadline",
+    policy_version: plan.policyVersion, required_approvals: plan.requiredApprovals };
+  return createHash("sha256").update(JSON.stringify(terms)).digest("hex");
 }
 export function assertChainTerms(value: ChainDistribution, plan: FrozenPlan) {
   if (value.id !== plan.id || value.network !== plan.network || value.token_contract !== plan.token || value.reference !== plan.reference
