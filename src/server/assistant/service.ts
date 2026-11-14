@@ -7,6 +7,7 @@ import { extractPrivateInvoice, type InvoiceImage } from "./client";
 import { getAssistantConfig, requirePrivateAiConfig } from "./config";
 import { privateHistoryQuery, privateHistoryWindow } from "../private-history";
 import type { ExtractedInvoice } from "./extraction";
+import { createAnalysisPacket } from "./packet";
 
 interface StoredDraft {
   id: string;
@@ -83,6 +84,13 @@ export function getDraftEvidence(access: AccessContext, draftId: string) {
   if (!item) throw new ApiError(404, "Invoice draft not found or retention expired", "ASSISTANT_DRAFT_NOT_FOUND");
   audit(access, "invoice_evidence_viewed", draftId);
   return { id: item.id, documentHash:createHash("sha256").update(decrypt(item.input_ciphertext)).digest("hex"), sourceText:decrypt(item.input_ciphertext), draft: JSON.parse(decrypt(item.draft_ciphertext)), evidence: JSON.parse(decrypt(item.evidence_ciphertext)), createdAt: item.created_at, expiresAt: item.expires_at };
+}
+
+export function exportDraftPacket(access: AccessContext, draftId: string, disclosure: "encrypted_wire" | "metadata") {
+  const retained = getDraftEvidence(access, draftId);
+  const packet = createAnalysisPacket({ id: retained.id, kind: "invoice_analysis", evidence: retained.evidence }, disclosure);
+  audit(access, "invoice_packet_exported", draftId);
+  return packet;
 }
 
 export function deleteDraft(access: AccessContext, draftId: string) {

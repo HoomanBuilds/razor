@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../../context";
 import { planningInput } from "./plans";
-import { deleteFinancePlan, financeInsights, financePlanEvidence, financePlanHistory, prepareFinancePlan, proposeFinancePlan } from "./service";
+import { deleteFinancePlan, exportFinancePacket, financeInsights, financePlanEvidence, financePlanHistory, prepareFinancePlan, proposeFinancePlan } from "./service";
+import { packetDisclosure } from "../packet";
 
 export const financeRoutes=new Hono<AppEnv>();
 financeRoutes.get("/insights",c=>c.json(financeInsights(c.get("access"))));
@@ -12,6 +13,13 @@ financeRoutes.get("/plans/:id/evidence",c=>{
   c.header("Cache-Control","no-store");
   if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-finance-proposal.json"');
   return c.json(evidence);
+});
+financeRoutes.get("/plans/:id/packet", c => {
+  const { disclosure } = packetDisclosure.parse(c.req.query());
+  const packet = exportFinancePacket(c.get("access"), c.req.param("id"), disclosure);
+  c.header("Cache-Control", "private, no-store");
+  c.header("Content-Disposition", 'attachment; filename="razor-finance-evidence-v1.json"');
+  return c.json(packet);
 });
 financeRoutes.post("/plan",async c=>c.json(await proposeFinancePlan(c.get("access"),planningInput.parse(await c.req.json()))));
 financeRoutes.post("/plans/:id/prepare",async c=>{

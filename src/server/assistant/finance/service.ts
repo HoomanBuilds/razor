@@ -14,6 +14,7 @@ import { parseUnits } from "../../../lib/money";
 import { getAssistantConfig, requirePrivateAiConfig } from "../config";
 import { runVerifiedPrivateInference } from "../client";
 import { sha256 } from "../verification";
+import { createAnalysisPacket } from "../packet";
 import { privateHistoryQuery, privateHistoryWindow } from "../../private-history";
 import { financeSourceFingerprint, planningInput, validateModelPlan, type PlanningInput, type PlanSource, type SelectedRecipient } from "./plans";
 
@@ -92,6 +93,13 @@ export function financePlanEvidence(access:AccessContext,id:string) {
   if(!stored)throw new ApiError(404,"Finance proposal not found or retention expired","FINANCE_PLAN_NOT_FOUND");
   audit(access.userId,access.organizationId,"finance_plan.evidence_viewed",id);
   return {id,hash:stored.plan_hash,sourceFingerprint:stored.source_fingerprint,payload:JSON.parse(decrypt(stored.payload_ciphertext)),evidence:JSON.parse(decrypt(stored.evidence_ciphertext)),expiresAt:stored.expires_at};
+}
+
+export function exportFinancePacket(access: AccessContext, id: string, disclosure: "encrypted_wire" | "metadata") {
+  const retained = financePlanEvidence(access, id);
+  const packet = createAnalysisPacket({ id, kind: "finance_proposal", evidence: retained.evidence, model: retained.payload.verification?.model }, disclosure);
+  audit(access.userId, access.organizationId, "finance_plan.packet_exported", id, { disclosure });
+  return packet;
 }
 
 export async function proposeFinancePlan(access:AccessContext,data:PlanningInput) {
