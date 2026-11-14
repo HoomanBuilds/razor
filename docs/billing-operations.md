@@ -45,14 +45,14 @@ Calendar-month periods retain their original anchor day. Early renewal prepays a
 
 ```sh
 npm run billing:admin -- catalog
-npm run billing:admin -- publish-plan --input /path/to/reviewed-plan.json
-npm run billing:admin -- publish-plan --input /path/to/reviewed-plan.json --apply
+npm run billing:admin -- publish-plan --operator-user EXISTING_OPERATOR_ID --input /path/to/reviewed-plan.json
+npm run billing:admin -- publish-plan --operator-user EXISTING_OPERATOR_ID --input /path/to/reviewed-plan.json --apply
 npm run billing:admin -- retire-plan --id PLAN_VERSION --apply
 npm run billing:admin -- status --company COMPANY_ID
 npm run billing:admin -- invoices --company COMPANY_ID --page 1 --page-size 25
 ```
 
-A publication JSON contains `code` (`free`, `pro` or `business`), `name`, `monthlyAmount` in integer microUSDC, all four boolean `features` (`batch_payroll`, `recurring`, `private_ai`, `clearing`), and `limits` (`financeSeats`, `aiAttempts`). Free must cost zero; paid plans must be positive. Private AI requires a positive bounded allowance. Publishing creates a new immutable version. Retiring requires another available version of that code. New quotes use the latest published offer; existing frozen terms remain recoverable. Preview before applying a change.
+Publishing requires an existing user explicitly listed in `RAZOR_BILLING_OPERATOR_USER_IDS`. A publication JSON contains `capabilityPolicy` and `code` (`free`, `pro` or `business`), `name`, `monthlyAmount` in integer microUSDC, all four boolean `features` (`batch_payroll`, `recurring`, `private_ai`, `clearing`), and `limits` (`financeSeats`, `aiAttempts`). Free must cost zero; paid plans must be positive. Private AI requires a positive bounded allowance. Publishing creates a new immutable version. Retiring requires another available version of that code. New quotes use the latest published offer; existing frozen terms remain recoverable. Preview before applying a change.
 
 ```sh
 npm run billing:admin -- reconcile-invoice --company COMPANY_ID --id INVOICE_ID --apply
@@ -72,3 +72,18 @@ Withdrawals are unsigned owner-bound actions, with one yoctoNEAR and their exact
 Owners can download exact subscription JSON receipts and CSV history in Plans & billing. Subscription cash is merchant revenue, separate from company available/reserved funds, salary entitlements and cleared invoice value. Source transaction hashes are labelled submitted until independently verified. A contract invoice without its transaction hash remains usable final proof.
 
 Local unit/VM checks establish source behavior. Before collecting real subscriptions, deploy the reviewed contract and demonstrate a final checkout, duplicate return, early renewal, cancellation, quota exhaustion, original-payer refund and unchanged financial recovery. Record that evidence in the build checklist. Configuration and testnet payments do not establish mainnet revenue.
+
+
+## Optional creation policies and actual service costs
+
+New catalog versions atomically publish an immutable optional-capability policy. `pilot` policies fix explicit non-calibrated allowances and disclosure. `calibrated` policies derive integer limits from reviewed actual service-cost observations, sample units and allocated USDC budgets. No observation, staffing or revenue is seeded. Existing version IDs preserve their original legacy snapshot rather than acquiring retroactive caps.
+
+The six policy keys are `private_tender`, `financing_request`, `claim_pool`, `procurement_rfq`, `accounting_plan` and `integration_credential`. Their actual creators reserve usage inside the same transaction as a new stable resource. Retried existing resources and revised unattempted accounting plans do not consume another creation. NetSuite and QBO/Xero posting plans share the accounting allowance. Key rotation/revocation, existing obligations, wage approvals, collection, repayment, reconciliation, exports and fund recovery do not use these creation gates. Database, packet-size and concurrency safety bounds remain separate from a commercial allowance.
+
+Use `billing:admin` commands `cost-observations` and `record-service-cost --operator-user EXISTING_OPERATOR_ID --input /path/to/reviewed-observation.json`, previewing before `--apply`. Records identify the actual completed expense period, successful-creation sample, service, exact units and allocation method. USD service expenses require an explicit reviewed rational conversion; a dollar peg is not silently assumed. Network gas and customer principal are excluded from software operating costs. Catalog publication preview displays the derived policy before mutation.
+
+## Staffed support and transfer escalation
+
+The default offer is asynchronous sender-private support, without a staffing or response-time promise. Actual existing allowlisted staff propose coverage through `scripts/support-admin.ts`, specifying an IANA time zone, weekly coverage, each operator's daily case capacity and an expiry of at most ninety days. Each named operator must independently acknowledge the exact terms hash before publication. Removed operators, withdrawn acknowledgment and expiry immediately remove the staffing claim. Response targets count staffed coverage minutes and are not an SLA or online-presence indicator.
+
+A sender can explicitly escalate an unresolved transfer case with a stable UUID and current version, acknowledging that escalation never retries or authorizes money movement. The local operator queue records acknowledgment, assignment and resolution. Takeover is restricted to a deauthorized previous operator. No email, Slack, chat-provider message, refund or transfer is sent by these controls.

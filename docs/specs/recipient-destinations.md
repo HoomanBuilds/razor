@@ -35,3 +35,12 @@ Previews also flag missing non-USDC valuations. Catalog responses may be cached 
 Catalog health and its observation time are attached outside the review token. Changes to those transient observations do not invalidate otherwise unchanged approved terms. Immutable profile and payment terms remain bound to the review. Preview catalog calls run outside database transactions and do not create attempts, deposit instructions or source funding legs.
 
 Focused checks cover canonical XRP vectors and tag boundaries, mismatches and unsupported memos, network validation, versioned confirmation, immutable snapshots, catalog outages and removals, disabled backups and read-only preview token stability. These are local checks, not live deposit or payout evidence.
+
+
+## Additional catalog network formats
+
+Pearl accepts mainnet `prl` Bech32m Taproot version-1 addresses with a 32-byte program. Quantus accepts checked SS58 prefix-189 AccountId32 addresses; its test networks share this format, so the wallet's actual mainnet selection still needs confirmation. These are [Pearl](https://github.com/pearl-research-labs/pearl/blob/master/node/chaincfg/params.go) and [Quantus](https://github.com/Quantus-Network/chain/blob/main/node/src/chain_spec.rs) network formats, not unrelated tokens with similar symbols.
+
+Miden accepts current mainnet type-232/version-1 `mm1a` IDs, plus a strictly validated known BasicWallet routing profile. Bare IDs leave the interface unspecified, as in the official bridge parser. Legacy `mm1q`, older account versions, unknown or encrypted routing parameters and wrong-network/checksum forms are held with an updated-wallet-address action. Razor never strips an unknown routing suffix. The [released wallet](https://github.com/0xMiden/wallet/blob/v1.17.11/package.json) and [official bridge address parser](https://github.com/0xMiden/bridge-portal/blob/main/src/bridge/miden-address.ts) inform this narrow supported format.
+
+The same validators cover recipient preferences and source refund/recovery addresses. Dynamic catalog and quote responses still determine current token and route support; no research catalog snapshot becomes application configuration. Missing library icons use a readable network name and generic fallback rather than an unrelated token's logo. This addition was source reviewed and compiled, without a live quote, wallet or address-conformance run.

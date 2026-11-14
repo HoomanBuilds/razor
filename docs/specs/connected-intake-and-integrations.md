@@ -46,3 +46,12 @@ Delivery uses a durable lease, up to eight attempts per replay cycle, bounded ex
 Receivers verify `Razor-Signature` with constant-time comparison against `v1=hex(HMAC-SHA256(secret, Razor-Timestamp + "." + rawBody))`, reject timestamps outside five minutes, deduplicate payload `id` and track the largest sequence per resource. Retries/replays can arrive out of order. The payload version is `2026-11-01`. A successful HTTP response records receiver acceptance, not business settlement.
 
 The regular worker CLI processes one pending channel event and up to five webhook deliveries serially per tick. `--organization` also scopes event publication, lease recovery and claims. A failed connected service does not prevent the other services from running during that tick. Continuous delivery requires the worker process; a workspace page does not schedule it.
+
+
+## Supported accounting extensions
+
+QuickBooks Online and Xero plans cover reviewed bills, terminal full or partial settlements, unapplied supplier credits, independently receipt-backed native-NEAR fee journals and explicitly approved FX differences. Source and provider revisions are hashed separately. Unknown writes remain held for read-only reconciliation under the original external identity. Partial postings use only the terminal delivered entitlement; the original face value and unpaid remainder remain separate. Provider records do not create cash or prove delivery.
+
+The NetSuite connector supports per-company confidential PKCE OAuth, account-derived HTTPS endpoints, inspected metadata/subsidiary/currency/account mappings, and non-tax two-line base-currency journals for verified mainnet NEAR fee groups. It does not imply NetSuite bills, supplier credits, payroll, tax filing or bank settlement. Required fields or unsupported account/schema configurations hold the plan. Review expires after thirty minutes; one write uses the original durable external ID, and unknown results permit only read-only reconciliation. A changed provider revision needs explicit inspected-hash acknowledgment. The serial worker dispatches at most one NetSuite job per tick.
+
+No banking import is offered in this release. Existing read-only QBO/Xero accounting-activity matching uses exact durable Razor markers and source terms; unmatched records remain unresolved.
