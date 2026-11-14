@@ -5,7 +5,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { getRecipient } from "../identity/recipients";
 import type { Payment, TreasuryConfig, WalletTransaction } from "../payments/types";
-import { computeClearing, hash } from "./algorithm";
+import { computeClearing, describeCommittedClearing, hash, type ClearingOptimization } from "./algorithm";
 import { finalContext, readiness, roundEvidence, settings, verifyRegistration } from "./chain";
 import type { FinalEvidence, Link, Manifest, Registration, Round } from "./types";
 
@@ -156,7 +156,7 @@ export function createRound(access: AccessContext, input: PreviewInput & { revie
     const preview = previewRound(access, input);
     if (preview.reviewToken !== input.reviewToken || preview.network !== config.network) throw new ApiError(409, "The exact clearing proposal changed. Review it again", "CLEARING_REVIEW_STALE");
     const id = randomUUID(), manifest: Manifest = { id, ...preview.reviewed }, manifestJson = JSON.stringify(manifest), digest = hash(manifestJson);
-    db.prepare("INSERT INTO clearing_rounds(id,manifest_hash,manifest_json,network,contract_id,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)").run(id, digest, manifestJson, config.network, config.contractId, access.userId, now(), input.expiresAt);
+    db.prepare("INSERT INTO clearing_rounds(id,manifest_hash,manifest_json,network,contract_id,created_by,created_at,expires_at,optimization_json) VALUES(?,?,?,?,?,?,?,?,?)").run(id, digest, manifestJson, config.network, config.contractId, access.userId, now(), input.expiresAt, JSON.stringify(preview.optimization));
     for (const party of manifest.participants) db.prepare("INSERT INTO clearing_round_participants(round_id,organization_id) VALUES(?,?)").run(id, party.company_id);
     for (const linkId of preview.linkIds) { const link = ownRoundLink(linkId); db.prepare("INSERT INTO clearing_round_links(round_id,link_id,bill_id,payment_id) VALUES(?,?,?,?)").run(id, link.id, link.bill_id, link.payment_id); }
     return roundDetail(access, id);
@@ -180,17 +180,17 @@ function assertRoundTerms(round: Round, at = Date.now()) {
     if (!edge || edge.terms_hash !== link.terms_hash || edge.debtor !== link.debtor_id || edge.creditor !== link.creditor_id || edge.original !== JSON.parse(decrypt(link.terms_ciphertext)).amount) throw new ApiError(409, "An accepted obligation differs from the NEAR commitment", "CLEARING_REVIEW_STALE");
   }
   for (const party of manifest.participants) { const current = registration(party.company_id); if (current.treasury_id !== party.treasury_id || current.treasury_company_id !== party.treasury_company_id || current.owner_account_id !== party.owner_id || String(current.version) !== party.version || current.policy_version !== party.policy_version) throw new ApiError(409, "Participant authority changed after proposal", "CLEARING_REVIEW_STALE"); }
-  const calculation = computeClearing(manifest.obligations.map(edge => ({ id: edge.id, debtor: edge.debtor, creditor: edge.creditor, amount: edge.original })));
-  for (const edge of manifest.obligations) { const actual = calculation.obligations.find(value => value.id === edge.id); if (actual?.reduction !== edge.reduction || actual.residual !== edge.residual) throw new ApiError(409, "The round no longer matches its exact conservation calculation", "CLEARING_REVIEW_STALE"); }
+  try { if (describeCommittedClearing(manifest.obligations).dischargedInvoiceValue === "0") throw new Error("The committed clearing has no debt discharge"); }
+  catch { throw new ApiError(409, "The round no longer matches its exact conservation calculation", "CLEARING_REVIEW_STALE"); }
   return { manifest, links };
 }
 
 export function roundDetail(access: AccessContext, id: string) {
   const value = roundFor(access, id), manifest = JSON.parse(value.manifest_json) as Manifest;
-  const calculation = computeClearing(manifest.obligations.map(edge => ({ id: edge.id, debtor: edge.debtor, creditor: edge.creditor, amount: edge.original })));
+  const calculation = describeCommittedClearing(manifest.obligations, value.optimization_json ? JSON.parse(value.optimization_json) as ClearingOptimization : null);
   const companies = manifest.participants.map(party => ({ ...party, name: row<{ name: string }>("SELECT name FROM organizations WHERE id=?", party.company_id)?.name ?? party.company_id }));
   const links = rows<Link>("SELECT l.* FROM clearing_links l JOIN clearing_round_links rl ON rl.link_id=l.id WHERE rl.round_id=? AND (l.debtor_id=? OR l.creditor_id=?)", id, access.organizationId, access.organizationId).map(({ terms_ciphertext, ...link }) => ({ ...link, terms: JSON.parse(decrypt(terms_ciphertext)) }));
-  return { ...value, proof_ciphertext: undefined, manifest, calculation, companies, sharedInvoices: links, proof: value.proof_ciphertext ? JSON.parse(decrypt(value.proof_ciphertext)) as FinalEvidence : null };
+  return { ...value, proof_ciphertext: undefined, optimization_json: undefined, manifest, calculation, companies, sharedInvoices: links, proof: value.proof_ciphertext ? JSON.parse(decrypt(value.proof_ciphertext)) as FinalEvidence : null };
 }
 
 function action(account: string, methodName: string, args: unknown, deposit = "1", gas = "180000000000000"): WalletTransaction { return { receiverId: account, actions: [{ type: "FunctionCall", params: { methodName, args, deposit, gas } }] }; }
