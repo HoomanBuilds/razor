@@ -4,6 +4,7 @@ import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { getRecipient, type RecipientRecord } from "../identity/recipients";
 import { approveBill, approvePayrollRun, getPayrollRun } from "../business/service";
+import { billCommitmentReview } from "../vendor-commitments/service";
 import { addBillInstallment } from "../business/bill-terms";
 import { cancelPayment, createPayment, getPayment, getTreasury, listAttempts } from "../payments/service";
 import { paymentBudget } from "../../lib/payment-budget";
@@ -143,7 +144,7 @@ export function previewBillBatch(access: AccessContext, billIds: string[]) {
   const bills = [...billIds].sort().map((id) => {
     const bill = row<{ id: string; reference: string; title: string; amount: string; max_fee: string; payment_id: string; status: string; updated_at: string; requires_acceptance: number; milestone_accepted_at: string | null; acceptance_evidence: string | null }>("SELECT id,reference,title,amount,max_fee,payment_id,status,updated_at,requires_acceptance,milestone_accepted_at,acceptance_evidence FROM bills WHERE id=? AND organization_id=?", id, access.organizationId);
     if (!bill || !bill.payment_id) throw new ApiError(404, "Invoice or its payment draft was not found", "BILL_NOT_FOUND");
-    return { ...bill, title: decrypt(bill.title), acceptance_evidence: undefined, acceptanceEvidence: bill.acceptance_evidence ? decrypt(bill.acceptance_evidence) : null, ...paymentReview(access, getPayment(access, bill.payment_id)) };
+    return { ...bill, title: decrypt(bill.title), acceptance_evidence: undefined, acceptanceEvidence: bill.acceptance_evidence ? decrypt(bill.acceptance_evidence) : null, vendorCommitment: billCommitmentReview(access.organizationId, bill.id), ...paymentReview(access, getPayment(access, bill.payment_id)) };
   });
   const selected = new Set(billIds);
   const duplicateWarnings = duplicateInvoiceWarnings(rows<{id:string;recipient_id:string;reference:string;amount:string;created_at:string}>("SELECT id,recipient_id,reference,amount,created_at FROM bills WHERE organization_id=?", access.organizationId)).filter(warning => warning.invoiceIds.some(id => selected.has(id)));

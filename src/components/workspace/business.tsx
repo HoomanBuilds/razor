@@ -20,6 +20,7 @@ import type { PayrollCsvItem } from "@/lib/csv";
 import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
 import { PayrollImport, type ImportSelection } from "./payroll-import";
+import { PurchaseMatchFields, PurchaseMatchReview, purchaseMatchInput, VendorCommitments } from "./vendor-commitments";
 
 function dollars(value: FormDataEntryValue | null, allowZero = false): string {
   try {
@@ -51,6 +52,7 @@ export function Bills() {
   if (!canRead) return null;
   return (
     <div className="grid gap-6">
+      <VendorCommitments key={base} />
       {canPrepare && <Panel
         title="New bill"
         description="Record an invoice before funding. Approval creates one linked payment with a fixed entitlement and fee ceiling."
@@ -77,6 +79,7 @@ export function Bills() {
                 evidence: values.get("evidence") || undefined,
                 projectReference: values.get("project") || undefined,
                 costCenterReference: values.get("costCenter") || undefined,
+                ...purchaseMatchInput(values),
               });
               form.reset();
               refresh();
@@ -138,6 +141,7 @@ export function Bills() {
           <Field label="Cost center (optional)">
             <input name="costCenter" className={control} maxLength={120} />
           </Field>
+          <PurchaseMatchFields />
           <div className="md:col-span-3">
             <Field label="Acceptance evidence or notes">
               <textarea
@@ -210,6 +214,7 @@ export function Bills() {
                     {bill.title}
                   </div>
                   {(bill.project_reference || bill.cost_center_reference) && <p className="mt-1 text-xs text-muted-foreground">{[bill.project_reference && `Project: ${bill.project_reference}`, bill.cost_center_reference && `Cost center: ${bill.cost_center_reference}`].filter(Boolean).join(" · ")}</p>}
+                  <PurchaseMatchReview value={bill.vendorCommitment ?? null} />
                 </td>
                 <td>
                   {recordedPayee(bill.payment, recipients.find(

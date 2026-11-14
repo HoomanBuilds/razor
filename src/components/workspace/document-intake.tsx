@@ -6,6 +6,7 @@ import type { ExtractedInvoice } from "@/server/assistant/extraction";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, control, Empty, Field, Panel, Status } from "./shared";
+import { PurchaseMatchFields, purchaseMatchInput } from "./vendor-commitments";
 
 interface Summary {
   id: string; filename: string; mediaType: string; bytes: number; sourceHash: string;
@@ -85,7 +86,7 @@ export function InvoiceDocumentIntake() {
       {document.billId ? <div className="flex flex-wrap items-center gap-3"><p className="text-sm">A reviewed bill draft is already linked to this source.</p><Action type="button" onClick={() => navigate("bills")}>Open bills</Action></div> : prepare && <form key={`${document.id}:${document.revision}:review`} className="grid gap-4 sm:grid-cols-2" onSubmit={event => {
         event.preventDefault(); const body = new FormData(event.currentTarget);
         void run("review", async () => {
-          await mutate(`${base}/documents/${document.id}/review`, { revision: document.revision, sourceHash: document.sourceHash, recipientId: body.get("recipient"), reference: body.get("reference"), title: body.get("title"), agreedUSDC: body.get("amount"), maxFee: body.get("fee"), ...(body.get("dueDate") ? { dueDate: body.get("dueDate") } : {}), reviewConfirmed: true });
+          await mutate(`${base}/documents/${document.id}/review`, { revision: document.revision, sourceHash: document.sourceHash, recipientId: body.get("recipient"), reference: body.get("reference"), title: body.get("title"), agreedUSDC: body.get("amount"), maxFee: body.get("fee"), ...(body.get("dueDate") ? { dueDate: body.get("dueDate") } : {}), ...purchaseMatchInput(body), reviewConfirmed: true });
           setNotice("Reviewed bill draft saved. Its normal financial approval is still required.");
         });
       }}>
@@ -95,6 +96,7 @@ export function InvoiceDocumentIntake() {
         <Field label="Agreed net USDC"><input name="amount" className={control} required inputMode="decimal" defaultValue={draft?.currency === "USDC" ? draft.amount ?? "" : ""} disabled={!!busy || processing} /></Field>
         <Field label="Maximum payment cost (USDC)"><input name="fee" className={control} required inputMode="decimal" defaultValue="1" disabled={!!busy || processing} /></Field>
         <Field label="Due date"><input name="dueDate" type="date" className={control} defaultValue={draft?.dueDate ?? ""} disabled={!!busy || processing} /></Field>
+        <PurchaseMatchFields />
         <label className="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" required disabled={!!busy || processing} className="mt-1" />I checked the original document, supplier, reference, line items and agreed USDC amount. Invoice wallet details do not replace a confirmed receiving profile.</label>
         <div className="sm:col-span-2"><Action busy={busy === "review"} disabled={!!busy || processing || !recipients.length}>Save reviewed bill draft</Action></div>
       </form>}

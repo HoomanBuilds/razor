@@ -6,12 +6,13 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { getRecipient, getRecipientVersion, type RecipientRecord } from "../identity/recipients";
 import { audit } from "../identity/session";
 import { createBill } from "../business/service";
+import { billCommitmentFields } from "../vendor-commitments/service";
 import { parseUnits } from "../../lib/money";
 
 const Decimal=z.string().trim().regex(/^(0|[1-9]\d{0,23})(?:\.\d{1,6})?$/).refine(value=>{try{return BigInt(parseUnits(value,6))>0n;}catch{return false;}},"Enter a positive decimal amount with up to six decimal places");
 const DateInput=z.string().date();
-export const invoiceInput=z.object({recipientId:z.string().min(1),reference:z.string().trim().min(1).max(120),amount:Decimal,currency:z.string().trim().regex(/^[A-Z]{3,8}$/, "Use an uppercase currency code such as USD, EUR or USDC"),dueDate:DateInput.optional(),lineItems:z.array(z.object({description:z.string().trim().min(1).max(500),quantity:Decimal,unitPrice:Decimal})).min(1).max(100),text:z.string().trim().max(5000).optional()});
-export const reviewInput=z.object({sourceFingerprint:z.string().regex(/^[a-f0-9]{64}$/),agreedUSDC:Decimal,maxFee:z.string().trim().regex(/^(0|[1-9]\d{0,23})(?:\.\d{1,6})?$/).default("1"),title:z.string().trim().min(1).max(240).optional(),dueDate:DateInput.optional(),reviewConfirmed:z.literal(true)});
+export const invoiceInput=z.object({recipientId:z.string().min(1),reference:z.string().trim().min(1).max(120),amount:Decimal,currency:z.string().trim().regex(/^[A-Z]{3,8}$/, "Use an uppercase currency code such as USD, EUR or USDC"),dueDate:DateInput.optional(),lineItems:z.array(z.object({description:z.string().trim().min(1).max(500),quantity:Decimal,unitPrice:Decimal})).min(1).max(100),text:z.string().trim().max(5000).optional(),commitmentReference:billCommitmentFields.commitmentReference,commitmentDate:billCommitmentFields.commitmentDate});
+export const reviewInput=z.object({sourceFingerprint:z.string().regex(/^[a-f0-9]{64}$/),agreedUSDC:Decimal,maxFee:z.string().trim().regex(/^(0|[1-9]\d{0,23})(?:\.\d{1,6})?$/).default("1"),title:z.string().trim().min(1).max(240).optional(),dueDate:DateInput.optional(),reviewConfirmed:z.literal(true),...billCommitmentFields});
 type InvoiceInput=z.infer<typeof invoiceInput>;
 interface Intake {id:string;organization_id:string;recipient_id:string;submitted_by:string;source_fingerprint:string;payload_ciphertext:string;status:string;bill_id:string|null;review_ciphertext:string|null;created_at:string;updated_at:string}
 const hash=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -163,12 +164,14 @@ export function prepareInvoiceRequest(access:AccessContext,id:string,data:z.infe
     if(request.source_fingerprint!==input.sourceFingerprint)throw new ApiError(409,"The invoice source changed. Review the current request before creating a draft.","INVOICE_SOURCE_CHANGED");
     const payload=JSON.parse(decrypt(request.payload_ciphertext)) as InvoiceInput;
     const title=input.title || `Invoice ${payload.reference}`,dueDate=input.dueDate || payload.dueDate;
-    const review={sourceFingerprint:input.sourceFingerprint,agreedUSDC:agreedAmount,maxFee,title,dueDate:dueDate || null,reviewConfirmed:true};
+    if(payload.commitmentReference&&input.commitmentReference&&payload.commitmentReference!==input.commitmentReference)throw new ApiError(409,"Preserve the supplier's named purchase commitment. Correct a reviewed bill match explicitly with an authorized reason","COMMITMENT_REFERENCE_CHANGED");
+    const purchase={commitmentReference:input.commitmentReference??payload.commitmentReference,commitmentDate:input.commitmentDate??payload.commitmentDate,commitmentScopeConfirmed:input.commitmentScopeConfirmed};
+    const review={sourceFingerprint:input.sourceFingerprint,agreedUSDC:agreedAmount,maxFee,title,dueDate:dueDate || null,reviewConfirmed:true,...(purchase.commitmentReference?purchase:{})};
     if(request.review_ciphertext&&JSON.stringify(JSON.parse(decrypt(request.review_ciphertext)))!==JSON.stringify(review))throw new ApiError(409,"This request already has a reviewed draft with different agreed terms","INVOICE_REVIEW_CONFLICT");
     const recipient=getRecipient(access.organizationId,request.recipient_id);
     if(recipient.user_id!==request.submitted_by)throw new ApiError(409,"The receiving profile now belongs to a different person. Review the original supplier and create a separate verified profile before preparing this invoice.","INVOICE_RECIPIENT_CHANGED");
     if(recipient.archived||recipient.preference_status!=="confirmed")throw new ApiError(409,"The supplier must confirm an active receiving profile before a draft is prepared","RECIPIENT_CONFIRMATION_REQUIRED");
-    const bill=createBill(access,{recipientId:request.recipient_id,reference:payload.reference,title,amount:agreedAmount,maxFee,dueDate:dueDate?`${dueDate}T00:00:00.000Z`:undefined,lineItems:payload.lineItems.map(item=>({...item,currency:payload.currency})),evidence:JSON.stringify({invoiceRequestId:id,sourceFingerprint:request.source_fingerprint,originalAmount:payload.amount,originalCurrency:payload.currency,agreement:"Human finance review confirmed the explicit USDC liability"}),documentHash:request.source_fingerprint});
+    const bill=createBill(access,{recipientId:request.recipient_id,reference:payload.reference,title,amount:agreedAmount,maxFee,dueDate:dueDate?`${dueDate}T00:00:00.000Z`:undefined,lineItems:payload.lineItems.map(item=>({...item,currency:payload.currency})),evidence:JSON.stringify({invoiceRequestId:id,sourceFingerprint:request.source_fingerprint,originalAmount:payload.amount,originalCurrency:payload.currency,agreement:"Human finance review confirmed the explicit USDC liability"}),documentHash:request.source_fingerprint,...purchase});
     if(bill.document_hash!==request.source_fingerprint)throw new ApiError(409,"An invoice already uses this reference with a different source. Review the existing invoice instead.","INVOICE_SOURCE_CONFLICT");
     if(request.bill_id&&request.bill_id!==bill.id)throw new ApiError(409,"This source is already bound to a different invoice draft","INVOICE_BINDING_CONFLICT");
     db.prepare("UPDATE recipient_invoice_requests SET status='prepared',bill_id=?,review_ciphertext=?,reviewed_by=?,updated_at=? WHERE id=?").run(bill.id,encrypt(JSON.stringify(review)),access.userId,new Date().toISOString(),id);

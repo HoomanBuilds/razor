@@ -8,6 +8,7 @@ import type { Payment, TreasuryConfig, WalletTransaction } from "../payments/typ
 import { computeClearing, describeCommittedClearing, hash, type ClearingOptimization } from "./algorithm";
 import { finalContext, readiness, roundEvidence, settings, verifyRegistration } from "./chain";
 import type { FinalEvidence, Link, Manifest, Registration, Round } from "./types";
+import { consumeBillCommitment } from "../vendor-commitments/service";
 
 const now = () => new Date().toISOString();
 interface Bill { id: string; organization_id: string; recipient_id: string; reference: string; title: string; amount: string; setoff_amount: string; max_fee: string; payment_id: string | null; status: string; due_date: string | null; requires_acceptance: number; milestone_accepted_at: string | null; project_reference: string | null; cost_center_reference: string | null }
@@ -83,6 +84,7 @@ export function offerInvoice(access: AccessContext, input: { billId: string; cre
     if (debtor.network !== creditor.network || debtor.token_contract !== creditor.token_contract) throw new ApiError(409, "Both companies must use the same network and USDC settlement unit", "CLEARING_ASSET_MISMATCH");
     assertCounterparty(access.organizationId, input.billId, input.creditorId);
     const terms = eligibleTerms(access.organizationId, input.billId), digest = hash(terms);
+    consumeBillCommitment(access, input.billId);
     const existing = row<Link>("SELECT * FROM clearing_links WHERE bill_id=? AND payment_id=? AND status IN ('offered','accepted')", input.billId, terms.paymentId);
     if (existing) { if (existing.terms_hash !== digest || existing.creditor_id !== input.creditorId || existing.starts_at !== input.startsAt || existing.expires_at !== input.expiresAt) throw new ApiError(409, "Revoke the existing agreement before offering different terms", "CLEARING_OFFER_EXISTS"); return { ...existing, terms }; }
     const id = randomUUID(); db.prepare("INSERT INTO clearing_links(id,debtor_id,creditor_id,bill_id,payment_id,terms_hash,terms_ciphertext,starts_at,expires_at,offered_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(id, access.organizationId, input.creditorId, input.billId, terms.paymentId, digest, encrypt(JSON.stringify(terms)), input.startsAt, input.expiresAt, access.userId, now());

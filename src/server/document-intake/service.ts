@@ -7,6 +7,7 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { audit } from "../identity/session";
 import { privateHistoryQuery, privateHistoryWindow } from "../private-history";
 import { createBill } from "../business/service";
+import { billCommitmentFields } from "../vendor-commitments/service";
 import { analyzeInvoice } from "../assistant/service";
 import { getAssistantConfig, requirePrivateAiConfig } from "../assistant/config";
 import { parseUnits } from "../../lib/money";
@@ -33,6 +34,7 @@ export const documentReviewInput = z.object({
   recipientId: z.string().min(1), reference: z.string().trim().min(1).max(120),
   title: z.string().trim().min(1).max(240), agreedUSDC: decimal, maxFee: decimal.default("1"),
   dueDate: z.string().date().optional(), reviewConfirmed: z.literal(true),
+  ...billCommitmentFields,
 }).strict();
 
 export function purgeDocumentRetention(at = now()) {
@@ -190,7 +192,7 @@ export function reviewDocument(access: AccessContext, id: string, input: z.infer
     if (value.text_hash && row("SELECT id FROM invoice_documents WHERE organization_id=? AND text_hash=? AND id<>? AND bill_id IS NOT NULL", access.organizationId, value.text_hash, value.id)) throw new ApiError(409, "A matching invoice source already has a reviewed bill. Inspect that bill before another obligation", "DUPLICATE_DOCUMENT");
     const amount = parseUnits(parsed.agreedUSDC), maxFee = parseUnits(parsed.maxFee);
     const analysis = value.analysis_ciphertext ? JSON.parse(decrypt(value.analysis_ciphertext)) : null;
-    const bill = createBill(access, { recipientId: parsed.recipientId, reference: parsed.reference, title: parsed.title, amount, maxFee, dueDate: parsed.dueDate, documentHash: value.source_hash, lineItems: analysis?.draft?.lineItems ?? [], evidence: `Source document sha256:${value.source_hash}; reviewed manually before payment approval` });
+    const bill = createBill(access, { recipientId: parsed.recipientId, reference: parsed.reference, title: parsed.title, amount, maxFee, dueDate: parsed.dueDate, documentHash: value.source_hash, lineItems: analysis?.draft?.lineItems ?? [], evidence: `Source document sha256:${value.source_hash}; reviewed manually before payment approval`, commitmentReference: parsed.commitmentReference, commitmentDate: parsed.commitmentDate, commitmentScopeConfirmed: parsed.commitmentScopeConfirmed });
     db.prepare("UPDATE invoice_documents SET status='reviewed',bill_id=?,review_ciphertext=?,revision=revision+1,updated_at=? WHERE id=? AND organization_id=?")
       .run(bill.id, encrypt(JSON.stringify(terms)), now(), id, access.organizationId);
     audit(access.userId, access.organizationId, "document.bill_prepared", id, { billId: bill.id });
