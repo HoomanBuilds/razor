@@ -1,0 +1,34 @@
+[Unit]
+Description=Razor company payments web application
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=razor
+Group=razor
+WorkingDirectory=/opt/razor/current
+Environment=PATH=/opt/razor/runtime/node-v24.22.3-linux-arm64/bin:/usr/bin:/bin
+ExecStart=/opt/razor/runtime/node-v24.22.3-linux-arm64/bin/node --max-old-space-size=768 --env-file=/etc/razor/razor.env node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 8830
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+MemoryHigh=1G
+MemoryMax=1536M
+CPUQuota=100%
+Nice=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/razor /var/cache/razor /opt/razor/current/.next
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+
+[Install]
+WantedBy=multi-user.target

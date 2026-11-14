@@ -1,0 +1,8 @@
+razorfi.xyz {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8830
+}
+
+www.razorfi.xyz {
+	redir https://razorfi.xyz{uri} permanent
+}
