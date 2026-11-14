@@ -1,5 +1,8 @@
 use near_sdk::{AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue, PromiseError, env, ext_contract, json_types::{U64, U128}, near, require, serde_json, store::IterableMap};
 
+#[path = "../../native-reserve.rs"]
+mod native_reserve;
+
 const MAINNET_USDC: &str = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 const DAY_MS: u64 = 86_400_000;
 
@@ -98,6 +101,13 @@ impl Billing {
     }
     pub fn get_invoice(&self, invoice_id: String) -> Option<Invoice> { self.invoices.get(&invoice_id).cloned() }
     pub fn get_refund(&self, refund_id: String) -> Option<Refund> { self.refunds.get(&refund_id).cloned() }
+    pub fn get_native_reserve(&self) -> native_reserve::NativeReserveView {
+        native_reserve::reserve_view(0)
+    }
+    #[payable]
+    pub fn withdraw_native_reserve(&mut self, amount: U128) -> Promise {
+        native_reserve::withdraw(&self.owner_id, amount, 0)
+    }
     #[payable]
     pub fn set_paused(&mut self, paused: bool) { self.owner(); self.paused = paused; }
     #[payable]

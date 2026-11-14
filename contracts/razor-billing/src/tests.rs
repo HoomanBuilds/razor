@@ -132,3 +132,64 @@ fn revenue_withdrawal_failure_restores_once_and_oversized_success_does_not_resto
     assert!(!billing.on_withdrawn(U64(2)));
     assert_eq!(billing.available, 19_000_000);
 }
+
+#[test]
+fn native_reserve_rejects_unauthorized_zero_and_storage_backed_amounts() {
+    let mut billing = setup();
+    call("stranger.testnet", 1);
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(1)))).is_err());
+    for deposit in [0, 2] {
+        call("owner.testnet", deposit);
+        assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(1)))).is_err());
+    }
+    call("owner.testnet", 1);
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(0)))).is_err());
+    let excess = billing.get_native_reserve().withdrawable.0;
+    assert!(excess > 1);
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(excess)))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(u128::MAX)))).is_err());
+    assert!(near_sdk::test_utils::get_created_receipts().is_empty());
+}
+
+#[test]
+fn native_reserve_withdrawal_is_owner_bound_and_preserves_pending_usdc_while_paused() {
+    let mut billing = setup();
+    pay(&mut billing);
+    call("owner.testnet", 1);
+    drop(billing.withdraw(U128(10_000_000)));
+    billing.set_paused(true);
+    let previous = (billing.available, billing.withdrawal, billing.nonce);
+    call("owner.testnet", 1);
+    let amount = NearToken::from_near(1).as_yoctonear();
+    drop(billing.withdraw_native_reserve(U128(amount)));
+    assert_eq!((billing.available, billing.withdrawal, billing.nonce), previous);
+    assert!(billing.paused);
+    assert_eq!(billing.get_invoice("invoice-one".into()).unwrap().amount, U128(29_000_000));
+    let receipts = near_sdk::test_utils::get_created_receipts();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].receiver_id, account("owner.testnet"));
+    assert!(matches!(receipts[0].actions.as_slice(), [near_sdk::mock::MockAction::Transfer { deposit, .. }] if deposit.as_yoctonear() == amount));
+}
+
+#[test]
+fn native_reserve_quote_and_exact_boundary_preserve_current_storage() {
+    let mut billing = setup();
+    let storage_bytes = 400;
+    let storage_cost = env::storage_byte_cost().as_yoctonear() * storage_bytes as u128;
+    let mut builder = context("owner.testnet", 1);
+    builder.storage_usage(storage_bytes).account_balance(NearToken::from_yoctonear(storage_cost + 5));
+    testing_env!(builder.build());
+    let quote = billing.get_native_reserve();
+    assert_eq!(quote.balance, U128(storage_cost + 5));
+    assert_eq!(quote.storage_locked, U128(storage_cost));
+    assert_eq!(quote.customer_storage_reserved, U128(0));
+    assert_eq!(quote.withdrawable, U128(5));
+    drop(billing.withdraw_native_reserve(U128(4)));
+    let receipts = near_sdk::test_utils::get_created_receipts();
+    assert!(matches!(receipts[0].actions.as_slice(), [near_sdk::mock::MockAction::Transfer { deposit, .. }] if deposit.as_yoctonear() == 4));
+    let mut builder = context("owner.testnet", 1);
+    builder.storage_usage(storage_bytes).account_balance(NearToken::from_yoctonear(storage_cost - 1));
+    testing_env!(builder.build());
+    assert_eq!(billing.get_native_reserve().withdrawable, U128(0));
+    assert!(catch_unwind(AssertUnwindSafe(|| billing.withdraw_native_reserve(U128(1)))).is_err());
+}
