@@ -252,13 +252,13 @@ test("commitment export separates version approvals and commercial use from deli
 test("concurrent database writers cannot accept invoices beyond the same remaining allowance", async () => {
   const f = approved(), a = invoice(f, "CONCURRENT-A"), b = invoice(f, "CONCURRENT-B"), directory = mkdtempSync(join(tmpdir(), "razor-commitments-")), filename = join(directory, "concurrency.sqlite");
   getDb().prepare("VACUUM INTO ?").run(filename);
-  const source = 'import { approveBill } from "./src/server/business/service.ts"; try { approveBill(JSON.parse(process.argv[1]), process.argv[2]); process.stdout.write("approved"); } catch (error) { process.stdout.write(error.code ?? String(error)); }';
+  const source = 'import { approveBill } from "./src/server/business/service.ts"; try { approveBill(JSON.parse(process.argv[1]), process.argv[2]); process.stdout.write("approved"); } catch (error) { process.stdout.write(error.code ?? String(error)); if (error.code !== "COMMITMENT_HOLD") process.stderr.write(JSON.stringify({ code: error.code, errcode: error.errcode, message: error.message })); }';
   function child(billId: string) {
     return new Promise<string>((resolve, reject) => {
       const process = spawn(globalThis.process.execPath, ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "--eval", source, JSON.stringify(f.access), billId], { env: { ...globalThis.process.env, DATABASE_PATH: filename }, stdio: ["ignore", "pipe", "pipe"] });
       let output = "", errors = "";
       process.stdout.on("data", value => { output += value; }); process.stderr.on("data", value => { errors += value; });
-      process.on("error", reject); process.on("exit", code => code === 0 ? resolve(output) : reject(new Error(errors)));
+      process.on("error", reject); process.on("exit", code => code === 0 && ["approved", "COMMITMENT_HOLD"].includes(output) ? resolve(output) : reject(new Error(`${output}: ${errors}`)));
     });
   }
   try {

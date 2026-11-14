@@ -4,6 +4,18 @@ import { dirname, join, resolve } from "node:path";
 
 let database: DatabaseSync | undefined;
 let transactionDepth = 0;
+const startupWait = new Int32Array(new SharedArrayBuffer(4));
+
+function initializeWithRetry(action: () => void, deadline: number) {
+  for (;;) {
+    try { action(); return; }
+    catch (error) {
+      const sqlite = error as { code?: string; errcode?: number }, remaining = deadline - Date.now();
+      if (sqlite.code !== "ERR_SQLITE_ERROR" || typeof sqlite.errcode !== "number" || ![5, 6].includes(sqlite.errcode & 255) || remaining <= 0) throw error;
+      Atomics.wait(startupWait, 0, 0, Math.min(25, remaining));
+    }
+  }
+}
 
 export function getDb(): DatabaseSync {
   if (database) return database;
@@ -19,32 +31,40 @@ export function getDb(): DatabaseSync {
     }
   }
   const connection = new DatabaseSync(file);
-  connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
-  connection.exec("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
-  const migrations = resolve("db/migrations");
-  mkdirSync(migrations, { recursive: true });
-  for (const name of readdirSync(migrations).filter((name) => name.endsWith(".sql")).sort()) {
-    if (connection.prepare("SELECT name FROM schema_migrations WHERE name = ?").get(name)) continue;
-    connection.exec("BEGIN IMMEDIATE");
-    try {
-      connection.exec(readFileSync(join(migrations, name), "utf8"));
-      connection.prepare("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)").run(name, new Date().toISOString());
-      connection.exec("COMMIT");
-    } catch (error) {
-      connection.exec("ROLLBACK");
-      connection.close();
-      throw error;
-    }
-  }
+  try {
+    const deadline = Date.now() + 5000;
+    connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 100;");
+    initializeWithRetry(() => connection.exec("PRAGMA journal_mode = WAL"), deadline);
+    const migrations = resolve("db/migrations");
+    mkdirSync(migrations, { recursive: true });
+    const names = readdirSync(migrations).filter(name => name.endsWith(".sql")).sort();
+    initializeWithRetry(() => {
+      connection.exec("BEGIN IMMEDIATE");
+      try {
+        connection.exec("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+        for (const name of names) {
+          if (connection.prepare("SELECT name FROM schema_migrations WHERE name = ?").get(name)) continue;
+          connection.exec(readFileSync(join(migrations, name), "utf8"));
+          connection.prepare("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)").run(name, new Date().toISOString());
+        }
+        connection.exec("COMMIT");
+      } catch (error) {
+        connection.exec("ROLLBACK");
+        throw error;
+      }
+    }, deadline);
+    connection.exec("PRAGMA busy_timeout = 5000");
+  } catch (error) { connection.close(); throw error; }
   database = connection;
   return connection;
 }
 
 export function transaction<T>(action: (db: DatabaseSync) => T): T {
   const db = getDb();
-  const depth = transactionDepth++;
+  const depth = transactionDepth;
   const savepoint = `razor_transaction_${depth}`;
   db.exec(depth ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
+  transactionDepth = depth + 1;
   try {
     const result = action(db);
     if (result instanceof Promise) throw new Error("Database transactions must not contain asynchronous work");
@@ -55,7 +75,7 @@ export function transaction<T>(action: (db: DatabaseSync) => T): T {
     if (depth) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
     throw error;
   } finally {
-    transactionDepth--;
+    transactionDepth = depth;
   }
 }
 
