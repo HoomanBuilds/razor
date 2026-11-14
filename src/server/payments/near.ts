@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { base58 } from "@scure/base";
 import { ApiError } from "../context";
 import type { TreasuryConfig, WalletTransaction } from "./types";
 import { atomic } from "../../lib/money";
@@ -60,7 +61,18 @@ export async function view<T>(config: TreasuryTarget, method: string, args: unkn
 }
 
 export async function contractCodeHash(config: Pick<TreasuryConfig, "near_account_id" | "network">): Promise<string> {
-  const account = await rpc<{ code_hash: string }>(config.network, "query", { request_type: "view_account", finality: "final", account_id: config.near_account_id });
+  const account = await rpc<{ code_hash: string; block_hash: string; block_height: number; global_contract_account_id?: string | null }>(config.network, "query", { request_type: "view_account", finality: "final", account_id: config.near_account_id });
+  if (account.global_contract_account_id != null) throw new ApiError(409, "The treasury cannot use indirectly mutable global contract code", "TREASURY_CODE_MISMATCH");
+  if (process.env.NEAR_CONTRACT_UPGRADE_POLICY && process.env.NEAR_CONTRACT_UPGRADE_POLICY !== "immutable") {
+    const { assertContractUpgradeKeys, describeContractUpgradePolicy } = await import("../near-upgrade-policy");
+    describeContractUpgradePolicy(config.near_account_id);
+    let validBlock = false;
+    try { validBlock = base58.decode(account.block_hash).length === 32 && Number.isSafeInteger(account.block_height) && account.block_height > 0; } catch {}
+    if (!validBlock) throw new ApiError(409, "The treasury code has no verified finalized block identity", "TREASURY_UPGRADE_BLOCK_UNVERIFIED");
+    const keys = await rpc<{keys: unknown; block_hash: string; block_height: number}>(config.network, "query", {request_type:"view_access_key_list", block_id:account.block_hash, account_id:config.near_account_id});
+    if (keys.block_hash !== account.block_hash || keys.block_height !== account.block_height) throw new ApiError(409, "The treasury code and upgrade keys do not share one finalized block", "TREASURY_UPGRADE_BLOCK_UNVERIFIED");
+    assertContractUpgradeKeys(config.near_account_id, keys.keys);
+  }
   return account.code_hash;
 }
 

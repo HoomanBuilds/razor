@@ -3,6 +3,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { base58 } from "@scure/base";
 import { ApiError } from "../context";
 import { reviewedArtifactHash } from "../near-artifacts";
+import { assertContractUpgradeKeys, describeContractUpgradePolicy } from "../near-upgrade-policy";
 import { validNearAccount } from "../payments/near";
 import { NATIVE_USDC } from "../../lib/native-usdc";
 import { decodeDataEncryptionKey } from "../identity/crypto";
@@ -49,10 +50,22 @@ async function view<T>(target:BillingTarget,method:string,args:object={},blockHa
 export async function verifyBillingContract(target:BillingTarget,checkout=false,blockHash?:string) {
   const status=await rpc<{chain_id:string}>(target.network,"status",[]);
   if(status.chain_id!==target.network)throw new ApiError(503,"The billing RPC belongs to another network","BILLING_NETWORK_MISMATCH");
-  const account=await rpc<{code_hash:string;block_hash:string;block_height:number}>(target.network,"query",{request_type:"view_account",...(blockHash?{block_id:blockHash}:{finality:"final"}),account_id:target.billingContract});
-  if(account.code_hash!==target.codeHash)throw new ApiError(503,"The billing contract code differs from the reviewed artifact","BILLING_CODE_MISMATCH");
+  const account=await rpc<{code_hash:string;block_hash:string;block_height:number;global_contract_account_id?:string|null}>(target.network,"query",{request_type:"view_account",...(blockHash?{block_id:blockHash}:{finality:"final"}),account_id:target.billingContract});
+  if(account.code_hash!==target.codeHash || account.global_contract_account_id!=null)throw new ApiError(503,"The billing contract code differs from the reviewed artifact","BILLING_CODE_MISMATCH");
   if(!account.block_hash||!Number.isSafeInteger(account.block_height))throw new ApiError(502,"The billing code response has no final block identity","BILLING_RESPONSE_INVALID");
-  const config=(await view<BillingChainConfig>(target,"get_config",{},account.block_hash)).value;
+  const verifyUpgradeKeys=Boolean(process.env.NEAR_CONTRACT_UPGRADE_POLICY && process.env.NEAR_CONTRACT_UPGRADE_POLICY!=="immutable");
+  if(verifyUpgradeKeys) {
+    describeContractUpgradePolicy(target.billingContract);
+    let validBlock=false;
+    try{validBlock=base58.decode(account.block_hash).length===32 && account.block_height>0 && (!blockHash || account.block_hash===blockHash);}catch{}
+    if(!validBlock)throw new ApiError(502,"The billing deployment has no verified finalized block identity","BILLING_UPGRADE_BLOCK_UNVERIFIED");
+    const keys=await rpc<{keys:unknown;block_hash:string;block_height:number}>(target.network,"query",{request_type:"view_access_key_list",block_id:account.block_hash,account_id:target.billingContract});
+    if(keys.block_hash!==account.block_hash || keys.block_height!==account.block_height)throw new ApiError(502,"The billing code and upgrade keys do not share one finalized block","BILLING_UPGRADE_BLOCK_UNVERIFIED");
+    assertContractUpgradeKeys(target.billingContract,keys.keys);
+  }
+  const configured=await view<BillingChainConfig>(target,"get_config",{},account.block_hash);
+  if(verifyUpgradeKeys && (configured.blockHash!==account.block_hash || configured.blockHeight!==account.block_height))throw new ApiError(502,"The billing configuration does not match its verified deployment block","BILLING_UPGRADE_BLOCK_UNVERIFIED");
+  const config=configured.value;
   if(config.version!==1||config.network!==target.network||config.token_contract!==target.tokenContract||!validNearAccount(config.owner_id)||config.owner_id===target.billingContract||typeof config.paused!=="boolean"||!/^\d+$/.test(config.available)||target.network==="mainnet"&&config.token_contract!==NATIVE_USDC.near)throw new ApiError(503,"The initialized billing configuration does not match the expected network, token or owner","BILLING_CONFIG_MISMATCH");
   if(checkout) {
     if(config.paused)throw new ApiError(503,"Subscription collection is paused; existing paid access and recovery remain available","BILLING_COLLECTION_PAUSED");

@@ -1,5 +1,7 @@
 import { ApiError } from "../context";
+import { base58 } from "@scure/base";
 import { reviewedArtifactHash } from "../near-artifacts";
+import { assertContractUpgradeKeys, describeContractUpgradePolicy } from "../near-upgrade-policy";
 import { validNearAccount } from "../payments/near";
 import { NATIVE_USDC } from "../payments/policy";
 import type { ChainRound, FinalEvidence, Registration } from "./types";
@@ -27,16 +29,36 @@ export async function finalContext(blockHeight?: number) {
   const config = settings();
   const [status, block] = await Promise.all([rpc<{ chain_id: string }>(config.network, "status", []), rpc<{ header: { hash: string; height: number; timestamp_nanosec: string } }>(config.network, "block", blockHeight === undefined ? { finality: "final" } : { block_id: blockHeight })]);
   if (status.chain_id !== config.network || !block.header.hash || !Number.isSafeInteger(block.header.height) || blockHeight !== undefined && block.header.height !== blockHeight || !/^\d+$/.test(block.header.timestamp_nanosec)) throw new ApiError(503, "The NEAR network or final block could not be established", "CLEARING_NETWORK_MISMATCH");
-  const query = <T>(accountId: string, request: Record<string, unknown>) => rpc<T>(config.network, "query", { ...request, account_id: accountId, block_id: block.header.hash });
+  const verifyUpgradeKeys = Boolean(process.env.NEAR_CONTRACT_UPGRADE_POLICY && process.env.NEAR_CONTRACT_UPGRADE_POLICY !== "immutable");
+  if (verifyUpgradeKeys) {
+    describeContractUpgradePolicy(config.contractId);
+    describeContractUpgradePolicy(config.treasuryId);
+    let validBlock = false;
+    try { validBlock = base58.decode(block.header.hash).length === 32 && block.header.height > 0; } catch {}
+    if (!validBlock) throw new ApiError(409, "The clearing deployment has no verified finalized block identity", "CLEARING_UPGRADE_BLOCK_UNVERIFIED");
+  }
+  const query = async <T>(accountId: string, request: Record<string, unknown>): Promise<T> => {
+    const value = await rpc<T & {block_hash:string;block_height:number}>(config.network, "query", { ...request, account_id: accountId, block_id: block.header.hash });
+    if (verifyUpgradeKeys && (value.block_hash !== block.header.hash || value.block_height !== block.header.height)) throw new ApiError(409, "The clearing code, configuration and keys do not share one finalized block", "CLEARING_UPGRADE_BLOCK_UNVERIFIED");
+    return value;
+  };
   const view = async <T>(accountId: string, method: string, args: unknown = {}) => {
     const value = await query<{ result: number[] }>(accountId, { request_type: "call_function", method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
     try { return JSON.parse(Buffer.from(value.result).toString()) as T; } catch { throw new ApiError(502, "The clearing contract returned invalid evidence", "CLEARING_RESPONSE_INVALID"); }
   };
   const [clearingCode, treasuryCode, clearing, platform] = await Promise.all([
-    query<{ code_hash: string }>(config.contractId, { request_type: "view_account" }), query<{ code_hash: string }>(config.treasuryId, { request_type: "view_account" }),
+    query<{ code_hash: string; global_contract_account_id?:string|null }>(config.contractId, { request_type: "view_account" }), query<{ code_hash: string; global_contract_account_id?:string|null }>(config.treasuryId, { request_type: "view_account" }),
     view<{ treasury_id: string; token_contract: string; paused: boolean; state_version?: number; cash_network?: "mainnet" | "testnet" | null; max_cash_deposits_per_company?: number }>(config.contractId, "get_config"), view<{ architecture: string; token_contract: string }>(config.treasuryId, "get_platform_config"),
   ]);
-  if (clearingCode.code_hash !== config.codeHash || treasuryCode.code_hash !== config.treasuryHash || clearing.treasury_id !== config.treasuryId || clearing.token_contract !== platform.token_contract || platform.architecture !== "shared_v1") throw new ApiError(409, "Clearing code, shared treasury or settlement token differs from the reviewed deployment", "CLEARING_CODE_MISMATCH");
+  if (clearingCode.code_hash !== config.codeHash || treasuryCode.code_hash !== config.treasuryHash || clearingCode.global_contract_account_id != null || treasuryCode.global_contract_account_id != null || clearing.treasury_id !== config.treasuryId || clearing.token_contract !== platform.token_contract || platform.architecture !== "shared_v1") throw new ApiError(409, "Clearing code, shared treasury or settlement token differs from the reviewed deployment", "CLEARING_CODE_MISMATCH");
+  if (verifyUpgradeKeys) {
+    const [clearingKeys, treasuryKeys] = await Promise.all([
+      query<{keys:unknown}>(config.contractId, {request_type:"view_access_key_list"}),
+      query<{keys:unknown}>(config.treasuryId, {request_type:"view_access_key_list"}),
+    ]);
+    assertContractUpgradeKeys(config.contractId, clearingKeys.keys);
+    assertContractUpgradeKeys(config.treasuryId, treasuryKeys.keys);
+  }
   if (config.network === "mainnet" && clearing.token_contract !== NATIVE_USDC.near) throw new ApiError(409, "Business clearing requires verified native USDC on NEAR mainnet", "CLEARING_ASSET_MISMATCH");
   return { config, clearing, view, query, blockHash: block.header.hash, blockHeight: String(block.header.height), timestampMs: (BigInt(block.header.timestamp_nanosec) / 1000000n).toString() };
 }
