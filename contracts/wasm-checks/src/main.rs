@@ -857,7 +857,8 @@ fn check_shared_treasury(directory: &Path) -> Value {
         Some(Ok(b"\"999999999\"".to_vec())),
     );
     let standing = check_native_standing(&mut instance, &mut calls, &a, &b);
-    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true,"native_standing":standing})
+    let distributions = check_claim_distribution(&mut instance, &mut calls, &a);
+    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true,"native_standing":standing,"claim_distribution":distributions})
 }
 
 fn assert_native_transfer_actions(
@@ -1188,6 +1189,167 @@ fn check_native_standing(
     );
     json!({"owner_grant_highest_quorum_and_actor_key":true,"recipient_cooldown_boundary":true,
         "native_transfer_duplicate_and_budget_holds":true,"late_callback_conservation_and_replay":true})
+}
+
+fn check_claim_distribution(instance: &mut Instance, calls: &mut usize, company: &str) -> Value {
+    macro_rules! invoke {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr, $promise:expr) => {{
+            let mut args = $args;
+            if $method != "get_pool_liability" {
+                args["company_id"] = json!(company);
+            }
+            actual_call(
+                instance, calls, $caller, $method, args, $deposit, $error, $promise,
+            )
+        }};
+    }
+    macro_rules! ok {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr) => {
+            invoke!($caller, $method, $args, $deposit, None, None)
+        };
+    }
+    macro_rules! read {
+        ($method:expr, $args:expr) => {
+            ok!("reader.near", $method, $args, 0)
+        };
+    }
+    macro_rules! reject {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr) => {
+            invoke!($caller, $method, $args, $deposit, Some($error), None)
+        };
+    }
+    let policy = read!("get_config", json!({}));
+    let before = read!("get_balance", json!({}));
+    let pool_before = read!("get_pool_liability", json!({"token_contract":TOKEN}));
+    let deadline = instance.now_ms + 86_400_000;
+    let allocation = json!({"claim_id":"fixed-claim","recipient_id":"standing-vendor","recipient_version":"1","amount":"200"});
+    let creation = json!({"distribution_id":"wasm-claims","reference":"wasm-claims","network":"mainnet",
+        "allocations":[allocation],"expected_total":"200","deadline_ms":deadline.to_string(),"expected_policy_version":policy["policy_version"]});
+    let mut wrong = creation.clone();
+    wrong["expected_total"] = json!("201");
+    reject!(
+        "alice.near",
+        "create_distribution",
+        wrong,
+        1,
+        "ALLOCATION_TOTAL_MISMATCH"
+    );
+    let proposed = ok!("alice.near", "create_distribution", creation, 1);
+    assert_eq!(proposed["status"], "proposed");
+    assert_eq!(proposed["required_approvals"], 2);
+    assert_eq!(
+        read!("get_balance", json!({}))["reserved"],
+        before["reserved"]
+    );
+    let claim = json!({"distribution_id":"wasm-claims","claim_id":"fixed-claim"});
+    reject!(
+        "relayer.near",
+        "claim_distribution",
+        claim.clone(),
+        0,
+        "DISTRIBUTION_NOT_ACTIVE"
+    );
+    let active = ok!(
+        "finance.near",
+        "approve_distribution",
+        json!({"distribution_id":"wasm-claims","expected_terms_hash":proposed["terms_hash"]}),
+        1
+    );
+    assert_eq!(active["status"], "active");
+    let action_start = instance.external.action_log.len();
+    ok!("relayer.near", "claim_distribution", claim.clone(), 0);
+    let functions: Vec<_> = instance.external.action_log[action_start..]
+        .iter()
+        .filter_map(|action| match action {
+            MockAction::FunctionCallWeight {
+                method_name,
+                args,
+                attached_deposit,
+                ..
+            } => Some((
+                method_name.clone(),
+                serde_json::from_slice::<Value>(args).unwrap(),
+                *attached_deposit,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(functions.len(), 2);
+    assert_eq!(functions[0].0.as_slice(), b"ft_transfer");
+    assert_eq!(functions[0].1["receiver_id"], "vendor.near");
+    assert_eq!(functions[0].1["amount"], "200");
+    assert_eq!(functions[0].2, Balance::from_yoctonear(1));
+    assert_eq!(functions[1].0.as_slice(), b"on_distribution_claim_result");
+    assert_eq!(functions[1].1["company_id"], company);
+    reject!(
+        "relayer.near",
+        "claim_distribution",
+        claim,
+        0,
+        "CLAIM_ALREADY_USED"
+    );
+    let pending = read!("get_balance", json!({}));
+    assert_eq!(pending["in_flight"], "200");
+    instance.now_ms = deadline;
+    let reclaim =
+        json!({"distribution_id":"wasm-claims","expected_terms_hash":proposed["terms_hash"]});
+    reject!(
+        "alice.near",
+        "reclaim_distribution",
+        reclaim.clone(),
+        1,
+        "NO_RECLAIMABLE_FUNDS"
+    );
+    let callback = json!({"distribution_id":"wasm-claims","claim_id":"fixed-claim","nonce":"1"});
+    invoke!(
+        "stranger.near",
+        "on_distribution_claim_result",
+        callback.clone(),
+        0,
+        Some("private"),
+        Some(Err(()))
+    );
+    assert_eq!(
+        invoke!(
+            "treasury.near",
+            "on_distribution_claim_result",
+            callback.clone(),
+            0,
+            None,
+            Some(Err(()))
+        ),
+        false
+    );
+    assert_eq!(
+        invoke!(
+            "treasury.near",
+            "on_distribution_claim_result",
+            callback,
+            0,
+            None,
+            Some(Err(()))
+        ),
+        false
+    );
+    let returned = ok!("alice.near", "reclaim_distribution", reclaim, 1);
+    assert_eq!(returned["reclaimed"], "200");
+    assert_eq!(returned["pending"], "0");
+    assert_eq!(
+        read!("get_balance", json!({}))["balance"],
+        before["balance"]
+    );
+    assert_eq!(
+        read!("get_balance", json!({}))["reserved"],
+        before["reserved"]
+    );
+    assert_eq!(
+        read!("get_pool_liability", json!({"token_contract":TOKEN})),
+        pool_before
+    );
+    json!({"exact_sum_and_highest_quorum":true,"fixed_transfer_and_duplicate_guard":true,"pending_reclaim_and_callback_replay":true,
+        "terms_hash":proposed["terms_hash"],"commitment_input":{"network":"mainnet","treasury":"treasury.near","companyId":company,"token":TOKEN,
+        "owner":"alice.near","policyVersion":policy["policy_version"],"requiredApprovals":2,"deadlineMs":deadline.to_string(),"id":"wasm-claims",
+        "reference":"wasm-claims","total":"200","allocations":[{"claim_id":"fixed-claim","recipient_id":"standing-vendor","recipient_version":"1","amount":"200","destination":"vendor.near"}]}})
 }
 
 fn check_shared_clearing(directory: &Path) -> Value {

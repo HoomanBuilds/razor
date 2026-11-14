@@ -1,3 +1,5 @@
+#[path = "distributions.rs"]
+mod distributions;
 #[path = "partial.rs"]
 mod partial;
 #[path = "retained.rs"]
@@ -66,6 +68,8 @@ pub(crate) struct CompanyTreasury {
     pub(crate) standing_mandates: IterableMap<String, StandingMandate>,
     pub(crate) standing_payments: IterableMap<String, String>,
     pub(crate) recipient_activation: IterableMap<String, U64>,
+    pub(crate) distributions: IterableMap<String, Distribution>,
+    pub(crate) void_distributions: IterableMap<String, bool>,
     pub(crate) partial_receipts: IterableMap<String, String>,
 }
 
@@ -128,6 +132,8 @@ impl CompanyTreasury {
             standing_mandates: IterableMap::new(prefix(b'm')),
             standing_payments: IterableMap::new(prefix(b'n')),
             recipient_activation: IterableMap::new(prefix(b'c')),
+            distributions: IterableMap::new(prefix(b'e')),
+            void_distributions: IterableMap::new(prefix(b'g')),
             partial_receipts: IterableMap::new(prefix(b't')),
         }
     }
@@ -1338,6 +1344,8 @@ impl CompanyTreasury {
         self.standing_mandates.flush();
         self.standing_payments.flush();
         self.recipient_activation.flush();
+        self.distributions.flush();
+        self.void_distributions.flush();
         self.withdrawals.flush();
     }
 
