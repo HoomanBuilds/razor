@@ -1,0 +1,3 @@
+Graphic source: https://vallure.framer.website/
+The supplied geometric mark is hosted locally. Original SVG geometry is retained.
+Google sign-in mark: https://www.gstatic.com/images/branding/googleg/1x/googleg_standard_color_128dp.png

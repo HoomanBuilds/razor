@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { CapsuleMeter } from "./dashboard-visuals";
 import { TokenLogo } from "@/components/assets/asset-identity";
 
-export function PageMetrics({ items }: { items: { label: string; value: ReactNode; detail?: string; asset?: string }[] }) {
-  return <div className="grid min-w-0 gap-y-6 py-2 sm:grid-cols-2 xl:flex">{items.map((item, index) => <div key={item.label} className={`min-w-0 flex-1 sm:px-6 ${index ? "xl:border-l" : "sm:pl-0"}`}><div className="flex items-center justify-between gap-3"><p className="text-[13px] text-muted-foreground">{item.label}</p>{item.asset && <TokenLogo symbol={item.asset} size={19}/>}</div>{item.value === null || item.value === undefined ? <div role="status" aria-label={`Loading ${item.label}`} className="mt-4 h-10 w-28 animate-pulse rounded-lg bg-muted"/> : <p className="mt-3 break-words text-[32px] font-normal leading-tight tracking-[-.045em] tabular-nums sm:text-[38px]">{item.value}</p>}{item.detail && <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p>}</div>)}</div>;
+export function PageMetrics({ items }: { items: { label: string; value: ReactNode; detail?: string; asset?: string; progress?: { value: number; label: string; detail?: string } }[] }) {
+  return <div className="dashboard-metrics" style={{"--metric-count":Math.min(items.length,4)} as CSSProperties}>{items.map(item => <section key={item.label} className="dashboard-metric"><div className="flex items-center justify-between gap-3"><p className="text-[13px] text-foreground">{item.label}</p>{item.asset && <TokenLogo symbol={item.asset} size={19}/>}</div>{item.value === null || item.value === undefined ? <div role="status" aria-label={`Loading ${item.label}`} className="mt-5 h-14 w-28 animate-pulse rounded-lg bg-muted"/> : <p className={`dashboard-metric-value ${typeof item.value === "string" && item.value.length > 12 ? "dashboard-metric-value-compact" : ""}`}>{item.value}</p>}{item.progress ? <div className="mt-6"><div className="mb-3 flex items-center justify-between gap-2 text-[11px]"><span>{item.progress.label}</span><span className="tabular-nums text-muted-foreground">{item.progress.detail}</span></div><CapsuleMeter value={item.progress.value} label={`${item.progress.label}${item.progress.detail ? `: ${item.progress.detail}` : ""}`}/></div> : item.detail && <p className="mt-4 text-xs leading-5 text-muted-foreground">{item.detail}</p>}</section>)}</div>;
 }
 
 export function focusWorkspaceForm(id: string) {

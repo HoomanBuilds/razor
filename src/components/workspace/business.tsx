@@ -1,5 +1,7 @@
 "use client";
 
+import { proportion } from "@/lib/payment-activity";
+
 import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { TokenLogo } from "@/components/assets/asset-identity";
@@ -61,7 +63,7 @@ export function Bills() {
       <PageMetrics items={[
         {label:"Outstanding invoices",value:data ? usd(data.bills.reduce((sum,bill) => sum + BigInt(bill.remainingLiability),0n)) : loadError ? "Unavailable" : null,asset:"USDC"},
         {label:"Recorded invoices",value:data?.bills.length ?? (loadError ? "Unavailable" : null)},
-        {label:"Settled invoices",value:data ? data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length : loadError ? "Unavailable" : null},
+        {label:"Settled invoices",value:data ? data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length : loadError ? "Unavailable" : null,progress:data ? {value:proportion(data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length,data.bills.length),label:"Settled / recorded",detail:`${data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length} / ${data.bills.length}`} : undefined},
       ]}/>
       <Panel
         title="Invoice register"
@@ -304,7 +306,7 @@ export function Payroll() {
       <PageMetrics items={[
         {label:"Recorded pay runs",value:data?.runs.length ?? (loadError ? "Unavailable" : null)},
         {label:"Prepared net entitlement",value:data ? usd(data.runs.reduce((sum,run) => sum + BigInt(run.total),0n)) : loadError ? "Unavailable" : null,asset:"USDC",detail:"Across all recorded pay runs"},
-        {label:"Draft pay runs",value:data ? data.runs.filter(run => run.status === "draft").length : loadError ? "Unavailable" : null},
+        {label:"Draft pay runs",value:data ? data.runs.filter(run => run.status === "draft").length : loadError ? "Unavailable" : null,progress:data ? {value:proportion(data.runs.filter(run => run.status === "draft").length,data.runs.length),label:"Draft / recorded",detail:`${data.runs.filter(run => run.status === "draft").length} / ${data.runs.length}`} : undefined},
       ]}/>
       <Panel
         title="Pay runs"

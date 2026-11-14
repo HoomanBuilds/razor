@@ -1,3 +1,4 @@
+import { paymentActivity } from "../../lib/payment-activity";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext } from "../context";
@@ -85,6 +86,10 @@ function personalPayment(payment:PersonalPayment) {
 
 export function ownPayments(userId:string,recipientId?:string) {
   return authorizedPayments(userId,recipientId).map(personalPayment);
+}
+
+export function ownPaymentActivity(userId:string,recipientId?:string) {
+  return paymentActivity(authorizedPayments(userId,recipientId));
 }
 
 export function ownPaymentPage(userId:string,page:number,pageSize:number,recipientId?:string) {

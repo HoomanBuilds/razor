@@ -1,3 +1,4 @@
+import { RazorLogo } from "@/components/brand/razor-logo";
 import type { Metadata } from "next";
 import { PublicDemo } from "@/components/demo/public-demo";
 import { getPublicDemoScenario } from "@/server/demo/scenario";
@@ -11,9 +12,7 @@ export const metadata: Metadata = {
 export default function PublicDemoPage() {
   return (
     <main className="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-8 px-5 py-10">
-      <a href="/" className="w-fit text-xl font-bold">
-        Razor
-      </a>
+      <a href="/" className="w-fit text-xl font-bold"><RazorLogo size={23}/></a>
       <header className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Public product preview

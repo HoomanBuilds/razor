@@ -7,7 +7,7 @@ import { encrypt, hashToken } from "../src/server/identity/crypto";
 import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { getAccess } from "../src/server/identity/session";
 import { recipientWorkspaceRoutes } from "../src/server/recipient-workspace";
-import { companyRequests, ownPayments, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
+import { companyRequests, ownPayments, ownPaymentActivity, ownProfiles, ownRecipient, ownRequests, prepareInvoiceRequest, submitInvoice } from "../src/server/recipient-workspace/service";
 
 process.env.DATABASE_PATH=":memory:";
 process.env.DATA_ENCRYPTION_KEY="73".repeat(32);
@@ -24,6 +24,7 @@ const access:AccessContext={userId:finance,organizationId:org,permissions:["comp
 test("permanent recipient access survives expired invitations and isolates other payees",async()=>{
   assert.equal(ownProfiles(user).length,1);
   const payments=ownPayments(user);
+  assert.equal(ownPaymentActivity(user).total,1);
   assert.equal(payments.length,1);assert.equal(payments[0].reference,"November services");assert.equal(payments[0].periodStart,"2026-11-01");
   assert.throws(()=>getAccess(user,org),(error)=>error instanceof ApiError&&error.status===403);
   const app=new Hono<AppEnv>().route("/",recipientWorkspaceRoutes);
@@ -32,6 +33,10 @@ test("permanent recipient access survives expired invitations and isolates other
   const response=await app.request("http://localhost:3000/",{headers});
   assert.equal(response.status,200);assert.equal((await response.json()).payments.length,1);
   assert.equal((await app.request("http://localhost:3000/profiles/profile-two",{headers})).status,404);
+  const activity = await app.request("http://localhost:3000/summary", {headers});
+  assert.equal(activity.status,200);
+  assert.equal((await activity.json()).total,1);
+  assert.equal((await app.request("http://localhost:3000/summary")).status,401);
 });
 
 test("private invoice requests are idempotent and create only explicit human-reviewed USDC drafts",()=>{
@@ -73,6 +78,8 @@ test("recipient reassignment preserves original private history without exposing
   assert.ok(ownPayments(other).some(record=>record.id==="new-owner-payment"));
   assert.ok(!ownPayments(other).some(record=>record.id==="unclaimed-profile-payment"));
   assert.deepEqual(ownPayments(user,id).map(record=>record.id),["original-owner-payment"]);
+  assert.equal(ownPaymentActivity(user,id).total,1);
+  assert.equal(ownPaymentActivity(other,id).total,1);
   const historical=ownProfiles(user).find(profile=>profile.recipient.id===id)!;
   assert.equal(historical.historicalOnly,true);
   assert.equal(historical.recipient.name,"Original supplier");
