@@ -45,7 +45,7 @@ export function CompanyPrivateProcessing() {
           {review.draft.warnings.map((warning, index) => <p key={index} className="text-xs text-amber-900">{warning}</p>)}
           {review.draft.paymentDetails && <p className="break-words text-xs text-amber-900">The document contains payment instructions. They are untrusted observations and will not be imported or used to change a receiving profile.</p>}
           {review.draft.lineItems.length > 0 && <details className="min-w-0"><summary className="cursor-pointer text-xs font-medium">Inspect extracted original-currency line items</summary><div className="mt-3"><DataTable columns={["Description", "Quantity", "Unit price", "Total"]}>{review.draft.lineItems.map((item, index) => <tr key={index}><td className="max-w-64 break-words">{item.description}</td><td>{item.quantity ?? "Missing"}</td><td>{item.unitPrice ?? "Missing"}</td><td>{item.total ?? "Missing"}</td></tr>)}</DataTable></div></details>}
-          <form key={`${review.source.sha256}:${review.processedAt}`} className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2" onChange={event => { if ((event.target as HTMLInputElement).name !== "reviewConfirmed") setConfirmed(false); }} onSubmit={event => {
+          <form key={`${review.source.sha256}:${review.processedAt}`} className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2" onChange={event => { const target = event.nativeEvent.target; if (!(target instanceof HTMLInputElement) || target.name !== "reviewConfirmed") setConfirmed(false); }} onSubmit={event => {
             event.preventDefault(); if (!confirmed) return; const values = new FormData(event.currentTarget);
             void run("import-local-review", async () => {
               const dueDate = String(values.get("dueDate") ?? "");

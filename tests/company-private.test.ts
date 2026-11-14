@@ -144,7 +144,7 @@ test("actual company CLI with an SDK fixture sends encrypted data only to NEAR A
     const inputPath = join(directory, "invoice.txt"), output = join(directory, "review.json"), packet = join(directory, "packet.json"), audit = join(directory, "transport.log"), preload = join(directory, "sdk-fixture.mjs");
     await writeFile(inputPath, "TOP_SECRET_COMPANY_INVOICE LOCAL-INV-1 total 30 EUR"); await writeFile(preload, sdkFixture(audit));
     const composeHash = await import("node:crypto").then(module => module.createHash("sha256").update("fixture-reviewed-compose").digest("hex"));
-    const env = { ...process.env, NODE_ENV: "production", DATA_ENCRYPTION_KEY: "", NEAR_AI_API_KEY: key, NEAR_AI_MODEL: "fixture/private-model", NEAR_AI_MODEL_COMPOSE_SHA256: composeHash, NEAR_AI_GATEWAY_COMPOSE_SHA256: composeHash, NEAR_AI_RETENTION_DAYS: "30" };
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "production", DATA_ENCRYPTION_KEY: "", NEAR_AI_API_KEY: key, NEAR_AI_MODEL: "fixture/private-model", NEAR_AI_MODEL_COMPOSE_SHA256: composeHash, NEAR_AI_GATEWAY_COMPOSE_SHA256: composeHash, NEAR_AI_RETENTION_DAYS: "30" };
     const result = spawnSync(process.execPath, ["--max-old-space-size=512", "--import", pathToFileURL(preload).href, "--import", "tsx", "scripts/process-invoice-private.ts", "--input", inputPath, "--output", output, "--packet", packet], { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000 });
     assert.equal(result.status, 0, result.stderr); assert.ok(result.stdout.includes("No source, key or draft was sent to Razor"));
     const local = parseCompanyReview(await readFile(output, "utf8")), packetText = await readFile(packet, "utf8");
