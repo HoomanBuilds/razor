@@ -8,7 +8,7 @@ import * as service from "./service";
 export const invoiceChannelRoutes = new Hono<AppEnv>();
 invoiceChannelRoutes.get("/", c => c.json(service.listInvoiceChannels(c.get("access"))));
 invoiceChannelRoutes.post("/", async c => c.json(service.createInvoiceChannel(c.get("access"), service.connectionInput.parse(await c.req.json())), 201));
-invoiceChannelRoutes.put("/:id/credentials", async c => c.json(service.replaceChannelSecrets(c.get("access"), c.req.param("id"), z.object({ botToken: z.string().max(200).optional(), accessToken: z.string().max(4096).optional(), appSecret: z.string().max(200).optional() }).strict().parse(await c.req.json()))));
+invoiceChannelRoutes.put("/:id/credentials", async c => c.json(service.replaceChannelSecrets(c.get("access"), c.req.param("id"), z.object({ appId: z.string().regex(/^\d{1,30}$/).optional(), botToken: z.string().max(200).optional(), accessToken: z.string().max(4096).optional(), appSecret: z.string().max(200).optional() }).strict().parse(await c.req.json()))));
 invoiceChannelRoutes.post("/:id/rotate", c => c.json(service.rotateChannelCredential(c.get("access"), c.req.param("id"))));
 invoiceChannelRoutes.delete("/:id", c => c.json(service.revokeInvoiceChannel(c.get("access"), c.req.param("id"))));
 invoiceChannelRoutes.post("/events/:id/retry", c => c.json(service.retryInvoiceEvent(c.get("access"), c.req.param("id"))));
@@ -22,6 +22,7 @@ invoiceIngressRoutes.post("/:id/telegram", async (c, next) => {
 invoiceIngressRoutes.get("/:id/whatsapp", c => c.text(service.verifyWhatsAppChallenge(c.req.param("id"), c.req.query("hub.mode"), c.req.query("hub.verify_token"), c.req.query("hub.challenge"))));
 invoiceIngressRoutes.post("/:id/whatsapp", async (c, next) => {
   service.authenticateProvider(c.req.param("id"), "whatsapp");
+  service.requireWhatsAppSignature(c.req.header("X-Hub-Signature-256"));
   return service.withInvoiceIngress(async () => { c.req.raw = await boundedInvoiceRequest(c.req.raw, 128 * 1024); await next(); });
 }, webhookLimit, async c => c.json(service.receiveWhatsApp(c.req.param("id"), c.req.header("X-Hub-Signature-256"), Buffer.from(await c.req.arrayBuffer())), 202));
 invoiceIngressRoutes.get("/:id/events/:eventKey", c => c.json(service.folderEventStatus(c.req.param("id"), c.req.header("Authorization"), c.req.param("eventKey"))));

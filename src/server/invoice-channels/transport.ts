@@ -28,7 +28,7 @@ export const providerTransport: ProviderTransport = async (value, headers, maxBy
   if (!addresses.length || addresses.some(item => !publicProviderAddress(item.address))) throw new ApiError(422, "The provider resolved to an unsafe network address", "CHANNEL_URL_REJECTED");
   const address = addresses[0];
   return new Promise((resolve, reject) => {
-    const req = request(url, { headers, family: address.family, autoSelectFamily: false, lookup: (_host, _options, done) => done(null, address.address, address.family), timeout: 15_000 }, response => {
+    const req = request(url, { headers, family: address.family, lookup: (_host, _options, done) => done(null, address.address, address.family), timeout: 15_000 }, response => {
       if (response.statusCode !== 200) { response.destroy(); reject(new ApiError(503, "The provider could not deliver this file. Retry or upload it manually", "CHANNEL_PROVIDER_UNAVAILABLE")); return; }
       const declared = response.headers["content-length"];
       if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) { response.destroy(); reject(new ApiError(413, "The provider file exceeds its size limit", "CHANNEL_FILE_TOO_LARGE")); return; }

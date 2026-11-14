@@ -36,7 +36,7 @@ function telegram(access: AccessContext, token = true) {
 function update(id = 100) { return { update_id: id, message: { message_id: 5, date: 1700000000, chat: { id: -98765 }, from: { id: 12345 }, document: { file_id: "provider-file-id", file_name: "invoice.png", file_size: png.length, mime_type: "image/png" } } }; }
 function whatsapp(access: AccessContext, supplied = true) {
   const phoneNumberId = String(Math.floor(Math.random() * 1e12) + 1000);
-  return createInvoiceChannel(access, { provider: "whatsapp", label: "Company WhatsApp", businessAccountId: "987654", phoneNumberId, senderId: "919999999999", graphVersion: "v24.0", accessToken: supplied ? "meta-fixture-access-token" : "", appSecret: supplied ? "meta-fixture-app-secret" : "", privacyAcknowledged: true });
+  return createInvoiceChannel(access, { provider: "whatsapp", label: "Company WhatsApp", appId: "246810", businessAccountId: "987654", phoneNumberId, senderId: "919999999999", graphVersion: "v24.0", accessToken: supplied ? "meta-fixture-access-token" : "", appSecret: supplied ? "meta-fixture-app-secret" : "", privacyAcknowledged: true });
 }
 function metaBody(channel: ReturnType<typeof whatsapp>["channel"], id = "wamid.invoice-1") {
   return Buffer.from(JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "987654", changes: [{ field: "messages", value: { metadata: { phone_number_id: channel.config.phoneNumberId }, messages: [{ id, from: "919999999999", timestamp: "1700000000", type: "image", image: { id: "12345678", mime_type: "image/png", sha256: hash(png) } }] } }] }] }));
@@ -44,9 +44,32 @@ function metaBody(channel: ReturnType<typeof whatsapp>["channel"], id = "wamid.i
 const signature = (body: Buffer) => `sha256=${createHmac("sha256", "meta-fixture-app-secret").update(body).digest("hex")}`;
 const telegramTransport: ProviderTransport = async (url, headers, cap) => {
   assert.equal(url.hostname, "api.telegram.org"); assert.deepEqual(headers, {});
+  if (url.pathname.endsWith("/getMe")) return Buffer.from(JSON.stringify({ ok: true, result: { id: Number(/\/bot(\d+):/.exec(url.pathname)![1]), is_bot: true } }));
   if (url.pathname.endsWith("/getFile")) { assert.equal(url.searchParams.get("file_id"), "provider-file-id"); assert.equal(cap, 32768); return Buffer.from(JSON.stringify({ ok: true, result: { file_id: "provider-file-id", file_path: "documents/invoice.png", file_size: png.length } })); }
   assert.match(url.pathname, /\/file\/bot\d+:T+\/documents\/invoice.png$/); assert.equal(cap, 3 * 1024 * 1024); return png;
 };
+
+function metaVerifiedTransport(channel: ReturnType<typeof whatsapp>["channel"]): ProviderTransport {
+  return async (url, headers, cap) => {
+    const proof = createHmac("sha256", "meta-fixture-app-secret").update("meta-fixture-access-token").digest("hex");
+    if (url.pathname.endsWith("/debug_token")) {
+      assert.equal(headers.Authorization, "Bearer 246810|meta-fixture-app-secret"); assert.equal(cap, 32768);
+      assert.equal(url.searchParams.get("input_token"), "meta-fixture-access-token");
+      return Buffer.from(JSON.stringify({ data: { app_id: "246810", is_valid: true, scopes: ["whatsapp_business_management", "whatsapp_business_messaging"] } }));
+    }
+    assert.equal(headers.Authorization, "Bearer meta-fixture-access-token");
+    if (url.pathname.endsWith("/phone_numbers")) {
+      assert.equal(url.pathname, "/v24.0/987654/phone_numbers"); assert.equal(cap, 32768);
+      assert.equal(url.searchParams.get("limit"), "100"); assert.equal(url.searchParams.get("fields"), "id"); assert.equal(url.searchParams.get("appsecret_proof"), proof);
+      return Buffer.from(JSON.stringify({ data: [{ id: channel.config.phoneNumberId }] }));
+    }
+    if (url.hostname === "graph.facebook.com") {
+      assert.equal(url.searchParams.get("phone_number_id"), channel.config.phoneNumberId); assert.equal(url.searchParams.get("appsecret_proof"), proof);
+      return Buffer.from(JSON.stringify({ id: "12345678", url: "https://lookaside.fbsbx.com/whatsapp_business/attachments?mid=12345678", mime_type: "image/png", file_size: png.length, sha256: hash(png) }));
+    }
+    assert.equal(url.hostname, "lookaside.fbsbx.com"); assert.equal(cap, 3 * 1024 * 1024); return png;
+  };
+}
 
 test("owner authorization, encrypted credentials, visible missing setup and binding isolation", () => {
   const { access } = fixture(), other = fixture(), pending = telegram(access, false);
@@ -58,7 +81,8 @@ test("owner authorization, encrypted credentials, visible missing setup and bind
   assert.equal(JSON.stringify(listInvoiceChannels(access)).includes(pending.setup.webhookSecret!), false);
   assert.equal(listInvoiceChannels(other.access).channels.length, 0);
   assert.throws(() => revokeInvoiceChannel(other.access, pending.channel.id), /not found/);
-  assert.throws(() => createInvoiceChannel(other.access, { provider: "telegram", label: "Cross-company", ...pending.channel.config as { botId: string; chatId: string; senderId: string }, privacyAcknowledged: true }), /already has/);
+  const otherPending = createInvoiceChannel(other.access, { provider: "telegram", label: "Cross-company pending", ...pending.channel.config as { botId: string; chatId: string; senderId: string }, privacyAcknowledged: true });
+  assert.equal(otherPending.channel.status, "setup_required"); assert.equal(otherPending.channel.bindingVerifiedAt, null);
   assert.equal(replaceChannelSecrets(access, pending.channel.id, { botToken: `${pending.channel.config.botId}:${"T".repeat(30)}` }).channel.status, "awaiting_verified_input");
   const notOwner = fixture();
   getDb().prepare("UPDATE organizations SET owner_id=? WHERE id=?").run(other.access.userId, notOwner.access.organizationId);
@@ -126,11 +150,8 @@ test("WhatsApp verifies challenge and exact raw-body HMAC without treating setup
   const saved = receiveWhatsApp(connection.channel.id, signature(raw), raw);
   assert.equal(saved.events.length, 1); assert.equal(receiveWhatsApp(connection.channel.id, signature(raw), raw).events[0].duplicate, true);
   let downloads = 0;
-  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async (url, headers, cap) => {
-    assert.equal(headers.Authorization, "Bearer meta-fixture-access-token");
-    if (url.hostname === "graph.facebook.com") { assert.equal(url.searchParams.get("phone_number_id"), connection.channel.config.phoneNumberId); return Buffer.from(JSON.stringify({ id: "12345678", url: "https://lookaside.fbsbx.com/whatsapp_business/attachments?mid=12345678", mime_type: "image/png", file_size: png.length, sha256: hash(png) })); }
-    assert.equal(url.hostname, "lookaside.fbsbx.com"); assert.equal(cap, 3 * 1024 * 1024); downloads++; return png;
-  } });
+  const provider = metaVerifiedTransport(connection.channel);
+  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async (url, headers, cap) => { if (url.hostname === "lookaside.fbsbx.com") downloads++; return provider(url, headers, cap); } });
   assert.equal(downloads, 1); assert.equal(listInvoiceChannels(access).events[0].status, "received");
   assert.equal(listDocuments(access).total, 1);
 });
@@ -142,10 +163,10 @@ test("provider metadata cannot select arbitrary hosts, traversal paths, redirect
   const { access } = fixture(), connection = telegram(access);
   receiveTelegram(connection.channel.id, connection.setup.webhookSecret!, update());
   let count = 0;
-  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async () => { count++; return Buffer.from(JSON.stringify({ ok: true, result: { file_id: "provider-file-id", file_path: "../../private", file_size: 1 } })); } });
-  assert.equal(count, 1); assert.equal(listInvoiceChannels(access).events[0].errorCode, "CHANNEL_URL_REJECTED");
+  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async (url, headers, cap) => { count++; if (url.pathname.endsWith("/getMe")) return telegramTransport(url, headers, cap); return Buffer.from(JSON.stringify({ ok: true, result: { file_id: "provider-file-id", file_path: "../../private", file_size: 1 } })); } });
+  assert.equal(count, 2); assert.equal(listInvoiceChannels(access).events[0].errorCode, "CHANNEL_URL_REJECTED");
   const meta = whatsapp(access), raw = metaBody(meta.channel); receiveWhatsApp(meta.channel.id, signature(raw), raw);
-  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async () => Buffer.from(JSON.stringify({ id: "12345678", url: "https://attacker.invalid/invoice", mime_type: "image/png", file_size: png.length })) });
+  await processPendingInvoiceEvents({ organizationId: access.organizationId, transport: async (url, headers, cap) => url.pathname.endsWith("/debug_token") || url.pathname.endsWith("/phone_numbers") ? metaVerifiedTransport(meta.channel)(url, headers, cap) : Buffer.from(JSON.stringify({ id: "12345678", url: "https://attacker.invalid/invoice", mime_type: "image/png", file_size: png.length })) });
   assert.equal(listDocuments(access).total, 0);
   assert.ok(listInvoiceChannels(access).events.every(event => event.status === "failed"));
 });
@@ -287,4 +308,117 @@ test("retained revocation history cannot hide an active connection from administ
   }
   const channels = listInvoiceChannels(access).channels;
   assert.equal(channels.length, 50); assert.equal(channels[0].id, active.channel.id); assert.equal(channels[0].revokedAt, null);
+});
+
+test("missing or malformed Meta signature is rejected before ingress slots or body reads", async () => {
+  const owner = fixture(), connection = whatsapp(owner.access), url = `http://localhost:3000/api/invoice-ingress/${connection.channel.id}/whatsapp`;
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const slots = [withDocumentIngress(() => gate), withDocumentIngress(() => gate)];
+  try {
+    for (const supplied of [undefined, "", "sha256=00", `sha256=${"z".repeat(64)}`, `wrong=${"0".repeat(64)}`]) {
+      let pulls = 0;
+      const body = new ReadableStream<Uint8Array>({ pull(controller) { pulls++; controller.enqueue(new Uint8Array(200000)); controller.close(); } }, { highWaterMark: 0 });
+      const response = await app.request(url, { method: "POST", body, duplex: "half", headers: supplied === undefined ? {} : { "X-Hub-Signature-256": supplied } } as RequestInit);
+      assert.equal(response.status, 401); assert.equal((await response.json()).code, "CHANNEL_SIGNATURE_INVALID"); assert.equal(pulls, 0);
+      await body.cancel();
+    }
+  } finally { release(); await Promise.all(slots); }
+  const raw = metaBody(connection.channel);
+  const wrongHmac = await app.request(url, { method: "POST", headers: { "X-Hub-Signature-256": `sha256=${"0".repeat(64)}` }, body: raw });
+  assert.equal(wrongHmac.status, 401); assert.equal(listInvoiceChannels(owner.access).events.length, 0);
+});
+
+test("an attacker pending Telegram setup cannot reserve a legitimate owner's provider inbox", async () => {
+  const attacker = fixture(), legitimate = fixture(), botId = String(Math.floor(Math.random() * 1e12) + 1000);
+  const input = { provider: "telegram" as const, label: "Bound inbox", botId, chatId: "-98765", senderId: "12345", privacyAcknowledged: true as const };
+  const pending = createInvoiceChannel(attacker.access, input);
+  const fake = createInvoiceChannel(attacker.access, { ...input, label: "Invented token", botToken: `${botId}:${"F".repeat(30)}` });
+  const real = createInvoiceChannel(legitimate.access, { ...input, botToken: `${botId}:${"T".repeat(30)}` });
+  receiveTelegram(fake.channel.id, fake.setup.webhookSecret!, update());
+  let requests = 0;
+  await processPendingInvoiceEvents({ organizationId: attacker.access.organizationId, transport: async () => { requests++; return Buffer.from(JSON.stringify({ ok: true, result: { id: Number(botId) + 1, is_bot: true } })); } });
+  assert.equal(requests, 1); assert.equal(listInvoiceChannels(attacker.access).events[0].errorCode, "CHANNEL_BINDING_UNVERIFIED");
+  assert.equal(row<{ count: number }>("SELECT COUNT(*) AS count FROM invoice_channels WHERE binding_verified_at IS NOT NULL AND id IN (?,?)", pending.channel.id, fake.channel.id)!.count, 0);
+  receiveTelegram(real.channel.id, real.setup.webhookSecret!, update());
+  assert.equal(listInvoiceChannels(legitimate.access).channels[0].status, "awaiting_verified_input");
+  await processPendingInvoiceEvents({ organizationId: legitimate.access.organizationId, transport: telegramTransport });
+  assert.equal(listInvoiceChannels(legitimate.access).channels[0].status, "verified_input_received"); assert.equal(listDocuments(legitimate.access).total, 1); assert.equal(listDocuments(attacker.access).total, 0);
+});
+
+test("Meta verifies the configured app identity and WABA phone membership before claiming a binding", async () => {
+  const attacker = fixture(), legitimate = fixture(), phoneNumberId = String(Math.floor(Math.random() * 1e12) + 1000);
+  const input = { provider: "whatsapp" as const, label: "Bound Meta inbox", appId: "246810", businessAccountId: "987654", phoneNumberId, senderId: "919999999999", graphVersion: "v24.0", privacyAcknowledged: true as const };
+  const pending = createInvoiceChannel(attacker.access, input);
+  const fake = createInvoiceChannel(attacker.access, { ...input, label: "Wrong issuing app", appId: "135791", accessToken: "meta-fixture-access-token", appSecret: "fake-app-secret" });
+  const real = createInvoiceChannel(legitimate.access, { ...input, accessToken: "meta-fixture-access-token", appSecret: "meta-fixture-app-secret" });
+  const forged = metaBody(fake.channel);
+  receiveWhatsApp(fake.channel.id, `sha256=${createHmac("sha256", "fake-app-secret").update(forged).digest("hex")}`, forged);
+  let calls = 0;
+  await processPendingInvoiceEvents({ organizationId: attacker.access.organizationId, transport: async (url, headers) => {
+    calls++; assert.ok(url.pathname.endsWith("/debug_token")); assert.equal(headers.Authorization, "Bearer 135791|fake-app-secret");
+    return Buffer.from(JSON.stringify({ data: { app_id: "246810", is_valid: true, scopes: ["whatsapp_business_management", "whatsapp_business_messaging"] } }));
+  } });
+  assert.equal(calls, 1); assert.equal(listInvoiceChannels(attacker.access).events[0].errorCode, "CHANNEL_BINDING_UNVERIFIED");
+  assert.equal(row<{ binding_verified_at: null }>("SELECT binding_verified_at FROM invoice_channels WHERE id=?", pending.channel.id)!.binding_verified_at, null);
+  const raw = metaBody(real.channel); receiveWhatsApp(real.channel.id, signature(raw), raw);
+  await processPendingInvoiceEvents({ organizationId: legitimate.access.organizationId, transport: metaVerifiedTransport(real.channel) });
+  assert.equal(listDocuments(legitimate.access).total, 1); assert.equal(listDocuments(attacker.access).total, 0);
+  assert.equal(listInvoiceChannels(legitimate.access).channels[0].status, "verified_input_received");
+});
+
+test("competing verified provider claims serialize and the database rejects a second active binding", async () => {
+  const first = fixture(), second = fixture(), a = telegram(first.access);
+  const b = createInvoiceChannel(second.access, { provider: "telegram", label: "Competing inbox", ...a.channel.config as { botId: string; chatId: string; senderId: string }, botToken: `${a.channel.config.botId}:${"T".repeat(30)}`, privacyAcknowledged: true });
+  receiveTelegram(a.channel.id, a.setup.webhookSecret!, update()); receiveTelegram(b.channel.id, b.setup.webhookSecret!, update());
+  let started!: () => void, release!: () => void; const entered = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const work = processPendingInvoiceEvents({ organizationId: first.access.organizationId, transport: async (url, headers, cap) => { if (url.pathname.endsWith("/getMe")) { started(); await gate; } return telegramTransport(url, headers, cap); } });
+  await entered;
+  assert.deepEqual(await processPendingInvoiceEvents({ organizationId: second.access.organizationId, transport: telegramTransport }), { processed: 0, busy: true });
+  release(); await work;
+  await processPendingInvoiceEvents({ organizationId: second.access.organizationId, transport: async () => { assert.fail("A competing proven binding must prevent downloads"); } });
+  assert.equal(listDocuments(first.access).total, 1); assert.equal(listDocuments(second.access).total, 0);
+  assert.equal(listInvoiceChannels(second.access).events[0].errorCode, "CHANNEL_ALREADY_BOUND");
+  assert.throws(() => getDb().prepare("UPDATE invoice_channels SET binding_verified_at=? WHERE id=?").run(new Date().toISOString(), b.channel.id), /UNIQUE constraint/);
+});
+
+test("rotation and replacement preserve exclusive ownership until explicit revocation", async () => {
+  const first = fixture(), second = fixture(), a = telegram(first.access);
+  const b = createInvoiceChannel(second.access, { provider: "telegram", label: "Other pending inbox", ...a.channel.config as { botId: string; chatId: string; senderId: string }, botToken: `${a.channel.config.botId}:${"T".repeat(30)}`, privacyAcknowledged: true });
+  receiveTelegram(a.channel.id, a.setup.webhookSecret!, update()); await processPendingInvoiceEvents({ organizationId: first.access.organizationId, transport: telegramTransport });
+  const rotated = rotateChannelCredential(first.access, a.channel.id);
+  assert.equal(rotated.channel.verifiedAt, null); assert.ok(rotated.channel.bindingVerifiedAt);
+  replaceChannelSecrets(first.access, a.channel.id, { botToken: `${a.channel.config.botId}:${"T".repeat(30)}` });
+  for (const action of [() => rotateChannelCredential(second.access, b.channel.id), () => replaceChannelSecrets(second.access, b.channel.id, { botToken: `${a.channel.config.botId}:${"T".repeat(30)}` }), () => receiveTelegram(b.channel.id, b.setup.webhookSecret!, update())]) assert.throws(action, error => error instanceof ApiError && error.code === "CHANNEL_ALREADY_BOUND");
+  receiveTelegram(a.channel.id, rotated.credential, update(101));
+  revokeInvoiceChannel(first.access, a.channel.id);
+  receiveTelegram(b.channel.id, b.setup.webhookSecret!, update(102)); await processPendingInvoiceEvents({ organizationId: second.access.organizationId, transport: telegramTransport });
+  assert.equal(listDocuments(second.access).total, 1); assert.ok(listInvoiceChannels(second.access).channels[0].bindingVerifiedAt);
+});
+
+test("credential replacement during provider verification cannot claim ownership or download media", async () => {
+  const owner = fixture(), connection = telegram(owner.access); receiveTelegram(connection.channel.id, connection.setup.webhookSecret!, update());
+  let calls = 0;
+  await processPendingInvoiceEvents({ organizationId: owner.access.organizationId, transport: async (url, headers, cap) => {
+    calls++; assert.ok(url.pathname.endsWith("/getMe"));
+    replaceChannelSecrets(owner.access, connection.channel.id, { botToken: `${connection.channel.config.botId}:${"R".repeat(30)}` });
+    return telegramTransport(url, headers, cap);
+  } });
+  assert.equal(calls, 1); assert.equal(listDocuments(owner.access).total, 0);
+  assert.equal(listInvoiceChannels(owner.access).events[0].errorCode, "CHANNEL_CREDENTIALS_CHANGED"); assert.equal(listInvoiceChannels(owner.access).channels[0].bindingVerifiedAt, null);
+});
+
+test("Meta missing management scope or wrong WABA phone cannot acquire a provider reservation", async () => {
+  for (const mismatch of ["scope", "phone"]) {
+    const owner = fixture(), connection = whatsapp(owner.access), raw = metaBody(connection.channel); receiveWhatsApp(connection.channel.id, signature(raw), raw);
+    let calls = 0;
+    await processPendingInvoiceEvents({ organizationId: owner.access.organizationId, transport: async (url, headers, cap) => {
+      calls++;
+      if (url.pathname.endsWith("/debug_token")) return mismatch === "scope" ? Buffer.from(JSON.stringify({ data: { app_id: "246810", is_valid: true, scopes: ["whatsapp_business_messaging"] } })) : metaVerifiedTransport(connection.channel)(url, headers, cap);
+      assert.ok(url.pathname.endsWith("/phone_numbers")); assert.equal(url.searchParams.get("limit"), "100");
+      return Buffer.from(JSON.stringify({ data: [{ id: "1" }] }));
+    } });
+    assert.equal(calls, mismatch === "scope" ? 1 : 2);
+    assert.equal(listDocuments(owner.access).total, 0); assert.equal(listInvoiceChannels(owner.access).channels[0].bindingVerifiedAt, null);
+    assert.equal(listInvoiceChannels(owner.access).events[0].errorCode, "CHANNEL_BINDING_UNVERIFIED");
+  }
 });

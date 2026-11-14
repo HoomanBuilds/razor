@@ -14,17 +14,17 @@ const numericId = z.string().regex(/^\d{1,30}$/);
 const base = { label: z.string().trim().min(1).max(80), privacyAcknowledged: z.literal(true) };
 export const connectionInput = z.discriminatedUnion("provider", [
   z.object({ ...base, provider: z.literal("telegram"), botId: numericId, chatId: z.string().regex(/^-?\d{1,30}$/), senderId: numericId, botToken: z.string().max(200).default("") }).strict(),
-  z.object({ ...base, provider: z.literal("whatsapp"), businessAccountId: numericId, phoneNumberId: numericId, senderId: numericId, graphVersion: z.string().regex(/^v\d{1,3}\.0$/), accessToken: z.string().max(4096).default(""), appSecret: z.string().max(200).default("") }).strict(),
+  z.object({ ...base, provider: z.literal("whatsapp"), appId: numericId, businessAccountId: numericId, phoneNumberId: numericId, senderId: numericId, graphVersion: z.string().regex(/^v\d{1,3}\.0$/), accessToken: z.string().max(4096).default(""), appSecret: z.string().max(200).default("") }).strict(),
   z.object({ ...base, provider: z.literal("folder") }).strict(),
 ]);
 type Provider = "telegram" | "whatsapp" | "folder";
 interface Channel {
   id: string; organization_id: string; created_by: string; provider: Provider; label: string; config_ciphertext: string; secrets_ciphertext: string | null;
-  credential_hash: string | null; authorized_at: string; challenge_verified_at: string | null; verified_at: string | null; last_received_at: string | null; revoked_at: string | null; created_at: string;
+  credential_hash: string | null; binding_hash: string; binding_verified_at: string | null; authorized_at: string; challenge_verified_at: string | null; verified_at: string | null; last_received_at: string | null; revoked_at: string | null; created_at: string;
 }
 interface Source { filename: string; mediaType: string; mediaId?: string; senderId?: string; chatId?: string; messageId?: string; providerTimestamp?: string; contentHash?: string; declaredBytes?: number }
 interface Event { id: string; organization_id: string; channel_id: string; event_key: string; payload_hash: string; source_ciphertext: string | null; status: string; attempts: number; processing_token: string | null; next_attempt_at: string; error_code: string | null; document_id: string | null; created_at: string; updated_at: string; expires_at: string }
-type Config = { botId?: string; chatId?: string; senderId?: string; phoneNumberId?: string; businessAccountId?: string; graphVersion?: string };
+type Config = { appId?: string; botId?: string; chatId?: string; senderId?: string; phoneNumberId?: string; businessAccountId?: string; graphVersion?: string };
 type Secrets = { webhookSecret?: string; botToken?: string; accessToken?: string; appSecret?: string; verifyToken?: string };
 const configOf = (channel: Channel): Config => JSON.parse(decrypt(channel.config_ciphertext));
 const secretsOf = (channel: Channel): Secrets => channel.secrets_ciphertext ? JSON.parse(decrypt(channel.secrets_ciphertext)) : {};
@@ -40,6 +40,7 @@ function owner(access: AccessContext) {
 function find(id: string) {
   const value = row<Channel>("SELECT * FROM invoice_channels WHERE id=?", id);
   if (!value || value.revoked_at) throw new ApiError(401, "This invoice connection is unavailable or revoked", "CHANNEL_UNAVAILABLE");
+  if (value.provider !== "folder" && row("SELECT id FROM invoice_channels WHERE provider=? AND binding_hash=? AND id<>? AND revoked_at IS NULL AND binding_verified_at IS NOT NULL", value.provider, value.binding_hash, value.id)) throw new ApiError(409, "This provider inbox already has a verified company binding", "CHANNEL_ALREADY_BOUND");
   return value;
 }
 function companyChannel(access: AccessContext, id: string) {
@@ -53,10 +54,16 @@ export function channelAccess(channel: Channel) {
   requirePermission(access, "company:read"); requirePermission(access, "documents:manage");
   return access;
 }
+function currentChannel(channel: Channel) {
+  const current = find(channel.id); channelAccess(current);
+  if (current.secrets_ciphertext !== channel.secrets_ciphertext) throw new ApiError(409, "The inbox credentials changed during verification. Retry this event", "CHANNEL_CREDENTIALS_CHANGED");
+  return current;
+}
+
 function projection(channel: Channel) {
   const config = configOf(channel), secrets = secretsOf(channel);
-  const missing = channel.provider === "telegram" ? !secrets.botToken ? ["Telegram bot token"] : [] : channel.provider === "whatsapp" ? [...(!secrets.accessToken ? ["Meta access token"] : []), ...(!secrets.appSecret ? ["Meta app secret"] : [])] : [];
-  return { id: channel.id, provider: channel.provider, label: channel.label, config, status: channel.revoked_at ? "revoked" : missing.length ? "setup_required" : channel.verified_at ? "verified_input_received" : "awaiting_verified_input", missing, authorizedAt: channel.authorized_at, challengeVerifiedAt: channel.challenge_verified_at, verifiedAt: channel.verified_at, lastReceivedAt: channel.last_received_at, revokedAt: channel.revoked_at, createdAt: channel.created_at, webhookPath: channel.provider === "folder" ? null : `/api/invoice-ingress/${channel.id}/${channel.provider}`, uploadPath: channel.provider === "folder" ? `/api/invoice-ingress/${channel.id}/upload` : null };
+  const missing = channel.provider === "telegram" ? !secrets.botToken ? ["Telegram bot token"] : [] : channel.provider === "whatsapp" ? [...(!config.appId ? ["Meta app ID"] : []), ...(!secrets.accessToken ? ["Meta access token"] : []), ...(!secrets.appSecret ? ["Meta app secret"] : [])] : [];
+  return { id: channel.id, provider: channel.provider, label: channel.label, config, status: channel.revoked_at ? "revoked" : missing.length ? "setup_required" : channel.verified_at ? "verified_input_received" : "awaiting_verified_input", missing, authorizedAt: channel.authorized_at, bindingVerifiedAt: channel.binding_verified_at, challengeVerifiedAt: channel.challenge_verified_at, verifiedAt: channel.verified_at, lastReceivedAt: channel.last_received_at, revokedAt: channel.revoked_at, createdAt: channel.created_at, webhookPath: channel.provider === "folder" ? null : `/api/invoice-ingress/${channel.id}/${channel.provider}`, uploadPath: channel.provider === "folder" ? `/api/invoice-ingress/${channel.id}/upload` : null };
 }
 function eventProjection(event: Event) {
   return { id: event.id, channelId: event.channel_id, eventKey: event.event_key, status: event.status, attempts: event.attempts, errorCode: event.error_code, documentId: event.document_id, source: event.source_ciphertext ? JSON.parse(decrypt(event.source_ciphertext)) as Source : null, nextAttemptAt: event.next_attempt_at, createdAt: event.created_at, expiresAt: event.expires_at };
@@ -69,35 +76,36 @@ export function createInvoiceChannel(access: AccessContext, input: z.input<typeo
   owner(access);
   const parsed = connectionInput.parse(input), id = randomUUID(), createdAt = stamp();
   const secrets: Secrets = {}, config: Config = {};
-  let credential: string | null = null, binding = id;
+  let credential: string | null = null, binding: string = id;
   if (parsed.provider === "telegram") {
     if (parsed.botToken && !new RegExp(`^${parsed.botId}:[A-Za-z0-9_-]{20,150}$`).test(parsed.botToken)) throw new ApiError(422, "The bot token must belong to the configured Telegram bot", "CHANNEL_TOKEN_INVALID");
     Object.assign(config, { botId: parsed.botId, chatId: parsed.chatId, senderId: parsed.senderId });
     Object.assign(secrets, { botToken: parsed.botToken, webhookSecret: newToken() }); binding = parsed.botId;
   } else if (parsed.provider === "whatsapp") {
-    Object.assign(config, { businessAccountId: parsed.businessAccountId, phoneNumberId: parsed.phoneNumberId, senderId: parsed.senderId, graphVersion: parsed.graphVersion });
+    Object.assign(config, { appId: parsed.appId, businessAccountId: parsed.businessAccountId, phoneNumberId: parsed.phoneNumberId, senderId: parsed.senderId, graphVersion: parsed.graphVersion });
     Object.assign(secrets, { accessToken: parsed.accessToken, appSecret: parsed.appSecret, verifyToken: newToken() }); binding = parsed.phoneNumberId;
   } else credential = newToken();
   transaction(db => {
     if (row<{ count: number }>("SELECT COUNT(*) AS count FROM invoice_channels WHERE organization_id=? AND revoked_at IS NULL", access.organizationId)!.count >= 10) throw new ApiError(422, "Revoke unused inbox connections before adding another", "CHANNEL_LIMIT");
-    if (parsed.provider !== "folder" && row("SELECT id FROM invoice_channels WHERE provider=? AND binding_hash=? AND revoked_at IS NULL", parsed.provider, digest(binding))) throw new ApiError(409, "This provider inbox already has an active company binding", "CHANNEL_ALREADY_BOUND");
     db.prepare("INSERT INTO invoice_channels(id,organization_id,created_by,provider,label,config_ciphertext,secrets_ciphertext,credential_hash,binding_hash,authorized_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
       .run(id, access.organizationId, access.userId, parsed.provider, parsed.label, encrypt(JSON.stringify(config)), parsed.provider === "folder" ? null : encrypt(JSON.stringify(secrets)), credential ? hashToken(credential) : null, digest(binding), createdAt, createdAt);
     audit(access.userId, access.organizationId, "invoice_channel.authorized", id, { provider: parsed.provider });
   });
-  return { channel: projection(find(id)), setup: { credential, webhookSecret: secrets.webhookSecret ?? null, verifyToken: secrets.verifyToken ?? null } };
+  return { channel: projection(row<Channel>("SELECT * FROM invoice_channels WHERE id=?", id)!), setup: { credential, webhookSecret: secrets.webhookSecret ?? null, verifyToken: secrets.verifyToken ?? null } };
 }
-export function replaceChannelSecrets(access: AccessContext, id: string, input: { botToken?: string; accessToken?: string; appSecret?: string }) {
+export function replaceChannelSecrets(access: AccessContext, id: string, input: { botToken?: string; accessToken?: string; appSecret?: string; appId?: string }) {
   owner(access); const channel = companyChannel(access, id); find(id);
   const config = configOf(channel), secrets = secretsOf(channel);
   if (channel.provider === "telegram") {
     if (!input.botToken || !new RegExp(`^${config.botId}:[A-Za-z0-9_-]{20,150}$`).test(input.botToken)) throw new ApiError(422, "Enter the token for this configured Telegram bot", "CHANNEL_TOKEN_INVALID");
     secrets.botToken = input.botToken;
   } else if (channel.provider === "whatsapp") {
+    const appId = numericId.parse(input.appId ?? config.appId);
     if (!input.accessToken || !input.appSecret) throw new ApiError(422, "Enter the Meta access token and app secret", "CHANNEL_TOKEN_INVALID");
+    config.appId = appId;
     secrets.accessToken = input.accessToken; secrets.appSecret = input.appSecret;
   } else throw new ApiError(422, "Rotate the folder ingestion credential instead", "CHANNEL_PROVIDER_INVALID");
-  getDb().prepare("UPDATE invoice_channels SET secrets_ciphertext=?,verified_at=NULL,challenge_verified_at=NULL WHERE id=?").run(encrypt(JSON.stringify(secrets)), id);
+  getDb().prepare("UPDATE invoice_channels SET secrets_ciphertext=?,config_ciphertext=?,verified_at=NULL,challenge_verified_at=NULL WHERE id=?").run(encrypt(JSON.stringify(secrets)), encrypt(JSON.stringify(config)), id);
   audit(access.userId, access.organizationId, "invoice_channel.credentials_updated", id);
   return { channel: projection(find(id)) };
 }
@@ -129,7 +137,7 @@ export function authenticateProvider(id: string, provider: "telegram" | "whatsap
   channelAccess(channel);
   const secrets = secretsOf(channel);
   if (provider === "telegram" && (!secrets.botToken || !secret || !safeEqual(secret, secrets.webhookSecret ?? ""))) throw new ApiError(401, "Telegram webhook authentication failed", "CHANNEL_SIGNATURE_INVALID");
-  if (provider === "whatsapp" && (!secrets.appSecret || !secrets.accessToken)) throw new ApiError(503, "Complete the Meta credentials before receiving invoices", "CHANNEL_SETUP_REQUIRED");
+  if (provider === "whatsapp" && (!configOf(channel).appId || !secrets.appSecret || !secrets.accessToken)) throw new ApiError(503, "Complete the Meta credentials before receiving invoices", "CHANNEL_SETUP_REQUIRED");
   return channel;
 }
 export function verifyWhatsAppChallenge(id: string, mode?: string, token?: string, challenge?: string) {
@@ -150,7 +158,7 @@ function enqueue(channel: Channel, eventKey: string, source: Source) {
     const created = stamp(), id = randomUUID();
     db.prepare("INSERT INTO invoice_channel_events(id,organization_id,channel_id,event_key,payload_hash,source_ciphertext,status,next_attempt_at,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,'queued',?,?,?,?)")
       .run(id, channel.organization_id, channel.id, eventKey, payloadHash, encrypt(serialized), created, created, created, new Date(Date.now() + documentRetentionDays() * 86400000).toISOString());
-    db.prepare("UPDATE invoice_channels SET verified_at=COALESCE(verified_at,?),last_received_at=? WHERE id=? AND revoked_at IS NULL").run(created, created, channel.id);
+    db.prepare("UPDATE invoice_channels SET last_received_at=? WHERE id=? AND revoked_at IS NULL").run(created, channel.id);
     return { duplicate: false, event: eventProjection(row<Event>("SELECT * FROM invoice_channel_events WHERE id=?", id)!) };
   });
 }
@@ -165,7 +173,11 @@ export function receiveTelegram(id: string, secret: string | undefined, body: un
   if (!file) return { ignored: true, duplicate: false, event: null };
   return enqueue(channel, String(update.update_id), { filename: documentFilename(file.file_name ?? `telegram-${message.message_id}.jpg`), mediaType: file.mime_type ?? (message.photo ? "image/jpeg" : "application/octet-stream"), mediaId: file.file_id, senderId: String(message.from.id), chatId: String(message.chat.id), messageId: String(message.message_id), providerTimestamp: String(message.date), ...(file.file_size ? { declaredBytes: file.file_size } : {}) });
 }
+export function requireWhatsAppSignature(signature: string | undefined): asserts signature is string {
+  if (!signature || !/^sha256=[a-f0-9]{64}$/.test(signature)) throw new ApiError(401, "Meta webhook signature verification failed", "CHANNEL_SIGNATURE_INVALID");
+}
 export function receiveWhatsApp(id: string, signature: string | undefined, raw: Buffer) {
+  requireWhatsAppSignature(signature);
   const channel = authenticateProvider(id, "whatsapp"), config = configOf(channel), secrets = secretsOf(channel);
   const expected = `sha256=${createHmac("sha256", secrets.appSecret!).update(raw).digest("hex")}`;
   if (!signature || !safeEqual(signature, expected)) throw new ApiError(401, "Meta webhook signature verification failed", "CHANNEL_SIGNATURE_INVALID");
@@ -197,19 +209,37 @@ async function providerFile(channel: Channel, source: Source, transport: Provide
   const json = async (url: URL, headers: Record<string, string>) => { try { return JSON.parse((await transport(safeProviderUrl(url), headers, 32 * 1024)).toString("utf8")) as unknown; } catch (error) { if (error instanceof SyntaxError) throw new ApiError(503, "The provider returned invalid file metadata", "CHANNEL_PROVIDER_UNAVAILABLE"); throw error; } };
   if (channel.provider === "telegram") {
     if (!secrets.botToken) throw new ApiError(503, "Configure the Telegram token", "CHANNEL_SETUP_REQUIRED");
+    const identity = z.object({ ok: z.literal(true), result: z.object({ id: z.number().int().safe().positive(), is_bot: z.literal(true) }) }).parse(await json(new URL(`https://api.telegram.org/bot${secrets.botToken}/getMe`), {}));
+    if (String(identity.result.id) !== config.botId) throw new ApiError(403, "The Telegram credential did not verify this inbox identity", "CHANNEL_BINDING_UNVERIFIED");
+    currentChannel(channel);
     const url = new URL(`https://api.telegram.org/bot${secrets.botToken}/getFile`); url.searchParams.set("file_id", source.mediaId!);
     const metadata = z.object({ ok: z.literal(true), result: z.object({ file_id: z.string(), file_path: z.string().min(1).max(512), file_size: z.number().int().positive().max(DOCUMENT_LIMITS.fileBytes).optional() }) }).parse(await json(url, {}));
     const path = metadata.result.file_path;
     if (metadata.result.file_id !== source.mediaId || !/^[A-Za-z0-9_./-]+$/.test(path) || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === "..")) throw new ApiError(422, "The provider returned an unsafe file path", "CHANNEL_URL_REJECTED");
+    currentChannel(channel);
     return transport(safeProviderUrl(`https://api.telegram.org/file/bot${secrets.botToken}/${path}`), {}, DOCUMENT_LIMITS.fileBytes);
   }
   if (!secrets.accessToken) throw new ApiError(503, "Configure the Meta access token", "CHANNEL_SETUP_REQUIRED");
-  const headers = { Authorization: `Bearer ${secrets.accessToken}` }, url = new URL(`https://graph.facebook.com/${config.graphVersion}/${source.mediaId}`);
-  url.searchParams.set("phone_number_id", config.phoneNumberId!);
+  if (!secrets.appSecret) throw new ApiError(503, "Configure the Meta app secret", "CHANNEL_SETUP_REQUIRED");
+  if (!config.appId) throw new ApiError(503, "Configure the Meta app ID", "CHANNEL_SETUP_REQUIRED");
+  const tokenUrl = new URL(`https://graph.facebook.com/${config.graphVersion}/debug_token`); tokenUrl.searchParams.set("input_token", secrets.accessToken);
+  const tokenIdentity = z.object({ data: z.object({ app_id: numericId, is_valid: z.boolean(), scopes: z.array(z.string().max(100)).max(200) }) }).parse(await json(tokenUrl, { Authorization: `Bearer ${config.appId}|${secrets.appSecret}` }));
+  if (!tokenIdentity.data.is_valid || tokenIdentity.data.app_id !== config.appId || !["whatsapp_business_management", "whatsapp_business_messaging"].every(scope => tokenIdentity.data.scopes.includes(scope))) throw new ApiError(403, "Meta did not verify this app, access token and required permissions", "CHANNEL_BINDING_UNVERIFIED");
+  currentChannel(channel);
+  const headers = { Authorization: `Bearer ${secrets.accessToken}` };
+  const proof = createHmac("sha256", secrets.appSecret).update(secrets.accessToken).digest("hex");
+  const identityUrl = new URL(`https://graph.facebook.com/${config.graphVersion}/${config.businessAccountId}/phone_numbers`);
+  identityUrl.searchParams.set("fields", "id"); identityUrl.searchParams.set("limit", "100"); identityUrl.searchParams.set("appsecret_proof", proof);
+  const identity = z.object({ data: z.array(z.object({ id: numericId })).max(100) }).parse(await json(identityUrl, headers));
+  if (!identity.data.some(phone => phone.id === config.phoneNumberId)) throw new ApiError(403, "The Meta credentials did not verify this business account and phone number", "CHANNEL_BINDING_UNVERIFIED");
+  currentChannel(channel);
+  const url = new URL(`https://graph.facebook.com/${config.graphVersion}/${source.mediaId}`);
+  url.searchParams.set("phone_number_id", config.phoneNumberId!); url.searchParams.set("appsecret_proof", proof);
   const metadata = z.object({ id: z.string(), url: z.string().max(4096), mime_type: z.string(), file_size: z.number().int().positive().max(DOCUMENT_LIMITS.fileBytes), sha256: z.string().optional() }).parse(await json(url, headers));
   if (metadata.id !== source.mediaId || metadata.mime_type !== source.mediaType) throw new ApiError(422, "Meta media metadata did not match the received invoice", "CHANNEL_MEDIA_MISMATCH");
   const mediaUrl = safeProviderUrl(metadata.url);
   if (mediaUrl.hostname !== "lookaside.fbsbx.com") throw new ApiError(422, "Meta returned an unsupported media host", "CHANNEL_URL_REJECTED");
+  currentChannel(channel);
   const bytes = await transport(mediaUrl, headers, DOCUMENT_LIMITS.fileBytes);
   const hash = digest(bytes);
   if (bytes.length !== metadata.file_size || metadata.sha256 && ![hash, Buffer.from(hash, "hex").toString("base64")].includes(metadata.sha256) || source.contentHash && ![hash, Buffer.from(hash, "hex").toString("base64")].includes(source.contentHash)) throw new ApiError(422, "The downloaded media did not match the provider evidence", "CHANNEL_MEDIA_MISMATCH");
@@ -224,10 +254,18 @@ async function saveEvent(channel: Channel, event: Event, token: string, bytes: B
   const current = find(channel.id), access = channelAccess(current);
   const source = JSON.parse(decrypt(event.source_ciphertext!)) as Source;
   validateDocument(bytes, source.mediaType);
+  if (current.secrets_ciphertext !== channel.secrets_ciphertext) throw new ApiError(409, "The inbox credentials changed during verification. Retry this event", "CHANNEL_CREDENTIALS_CHANGED");
   if (source.contentHash && channel.provider === "folder" && source.contentHash !== digest(bytes)) throw new ApiError(422, "The file changed during upload. Rescan the folder", "CHANNEL_MEDIA_MISMATCH");
   if (!row("SELECT id FROM invoice_channel_events WHERE id=? AND processing_token=? AND expires_at>?", event.id, token, stamp())) throw new ApiError(409, "This intake event changed during processing", "CHANNEL_EVENT_CHANGED");
+  if (current.provider !== "folder") transaction(db => {
+    const live = find(current.id); channelAccess(live);
+    if (live.secrets_ciphertext !== channel.secrets_ciphertext) throw new ApiError(409, "The inbox credentials changed during verification. Retry this event", "CHANNEL_CREDENTIALS_CHANGED");
+    db.prepare("UPDATE invoice_channels SET binding_verified_at=COALESCE(binding_verified_at,?) WHERE id=? AND revoked_at IS NULL").run(stamp(), live.id);
+  });
   const result = await uploadDocument(access, { filename: source.filename, mediaType: source.mediaType, bytes });
-  find(channel.id); channelAccess(current);
+  const completed = find(channel.id); channelAccess(completed);
+  if (completed.secrets_ciphertext !== channel.secrets_ciphertext) throw new ApiError(409, "The inbox credentials changed during processing. Retry this event", "CHANNEL_CREDENTIALS_CHANGED");
+  getDb().prepare("UPDATE invoice_channels SET verified_at=COALESCE(verified_at,?),last_received_at=? WHERE id=? AND revoked_at IS NULL").run(stamp(), stamp(), channel.id);
   getDb().prepare("UPDATE invoice_documents SET expires_at=MIN(expires_at,?) WHERE id=? AND organization_id=?").run(event.expires_at, result.document.id, access.organizationId);
   getDb().prepare("UPDATE invoice_channel_events SET status='received',document_id=?,processing_token=NULL,error_code=NULL,updated_at=? WHERE id=? AND processing_token=?").run(result.document.id, stamp(), event.id, token);
   audit(access.userId, access.organizationId, "invoice_channel.received", event.id, { channelId: channel.id, provider: channel.provider, documentId: result.document.id });
