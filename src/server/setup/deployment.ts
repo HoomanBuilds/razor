@@ -242,7 +242,7 @@ export function prepareDeployment(input: DeploymentInput) {
       "json-args",
       JSON.stringify(step.args),
       "prepaid-gas",
-      "100 Tgas",
+      "10 Tgas",
       "attached-deposit",
       "0 NEAR",
       "network-config",

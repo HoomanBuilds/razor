@@ -45,6 +45,7 @@ test("deployment plan preserves canonical mainnet USDC, reviewed hashes and atom
     assert.equal(plan.steps.length, 2);
     for (const step of plan.steps) {
       assert.equal(step.atomicInitialization, true);
+      assert.equal(step.argv[step.argv.indexOf("prepaid-gas") + 1], "10 Tgas");
       assert.equal(step.signerAccountId, step.accountId);
       assert.deepEqual(step.argv.slice(4, 9), [step.artifact.path, "with-init-call", "new", "json-args", JSON.stringify(step.args)]);
       assert(step.shellCommand.includes("'\\''"));
