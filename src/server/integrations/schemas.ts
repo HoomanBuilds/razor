@@ -27,7 +27,7 @@ const atomic = z.string().regex(/^(0|[1-9][0-9]{0,38})$/);
 export const paymentDraftInput = z.strictObject({
   recipientId: z.string().min(1).max(128),
   reference: z.string().trim().min(1).max(120),
-  amount: atomic.refine(value => BigInt(value) > 0n && BigInt(value) <= (1n << 128n) - 1n),
+  amount: atomic.refine(value => /^(0|[1-9][0-9]{0,38})$/.test(value) && BigInt(value) > 0n && BigInt(value) <= (1n << 128n) - 1n),
   maxFee: atomic.default("0"),
   scheduledFor: z.iso.datetime().optional(),
 });

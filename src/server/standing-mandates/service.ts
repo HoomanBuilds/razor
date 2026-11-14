@@ -9,7 +9,7 @@ import { reviewedArtifactHash } from "../near-artifacts";
 import { notify, iso } from "../operations/service";
 import { assertNativeSupplier, standingProblems, supplierHash, type StandingGrant, type StandingPolicy, type StandingRow, type StandingTerms } from "./model";
 
-const atomic = z.string().regex(/^[1-9]\d*$/).max(39).refine(value => BigInt(value) <= (1n << 128n) - 1n);
+const atomic = z.string().regex(/^[1-9]\d*$/).max(39).refine(value => /^[1-9]\d{0,38}$/.test(value) && BigInt(value) <= (1n << 128n) - 1n);
 export const grantInput = z.object({ recipientId: z.string().uuid(), actorAccountId: z.string().min(2).max(64),
   actorPublicKey: z.string().regex(/^ed25519:[1-9A-HJ-NP-Za-km-z]{32,50}$/), perPaymentMaxInput: atomic,
   periodMaxInput: atomic, lifetimeMaxInput: atomic, periodDays: z.number().int().min(1).max(366),
