@@ -48,7 +48,7 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
   const committedRunId = draft?.runId || drafts.data?.drafts.find(value => value.id === draft?.id)?.runId;
   const result = draft?.preview;
   const visibleRows = result?.rows.slice((page - 1) * 25, page * 25) ?? [];
-  return <Panel title="Import your payroll spreadsheet" description="Upload a UTF-8 CSV, map its columns and confirm its number format. No AI credential is needed. Amounts remain agreed USDC obligations; payout assets are chosen separately.">
+  return <Panel title="Import your payroll spreadsheet" description="Upload a UTF-8 CSV, map its columns and confirm its number format. Amounts remain agreed USDC obligations; payout assets are chosen separately.">
     <div className="grid gap-5">
       {templates.error || drafts.error ? <p role="alert" className="text-sm text-destructive">{templates.error || drafts.error}</p> : null}
       <div className="grid gap-4 sm:grid-cols-2">
