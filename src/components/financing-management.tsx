@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./workspace/task-drawer";
 import { api } from "@/lib/api";
 import { parseUnits, formatUnits } from "@/lib/money";
 import { usd } from "@/lib/format";
@@ -168,7 +169,7 @@ export function FinancingManagement({
           ? "Company working capital"
           : "Your lending and borrowing agreements"
       }
-      tone="white" description="Peer-to-peer USDC working capital on NEAR." help="Real operating scope, exact owner approval and funded escrow are required."
+      tone="white" description="Peer-to-peer USDC working capital on NEAR." action={company && canManage ? <Action type="button" onClick={()=>openTaskDrawer("financing-request-flow")}>Request working capital</Action> : undefined} help="Real operating scope, exact owner approval and funded escrow are required."
     >
       <div className="grid min-w-0 grid-cols-1 gap-5">
         <p className="rounded-xl border border-amber-200/70 bg-amber-50/50 px-4 py-3 text-xs leading-6 text-amber-900">
@@ -230,10 +231,7 @@ export function FinancingManagement({
           </p>
         ) : null}
         {company && canManage && (
-          <details className="min-w-0 rounded-2xl border border-border bg-white p-5">
-            <summary className="cursor-pointer text-sm font-medium">
-              Request native-USDC working capital
-            </summary>
+          <TaskDrawer id="financing-request-flow" title="Request working capital" description="Choose an operating scope and review principal, borrowing costs and collateral separately."><div aria-busy={!!busy}>
             {!scopes.length ? (
               <Empty>
                 No operator-published operating scope covers this company.
@@ -271,7 +269,7 @@ export function FinancingManagement({
                       endpoint,
                       { ...payload, requestKey: key(["request", payload]) },
                     );
-                    setSelected(result.request.id);
+                    setSelected(result.request.id);closeTaskDrawer("financing-request-flow",true);
                     form.reset();
                     setNotice(
                       "Request recorded for invited scoped lenders. No loan, funding or company cash has been created.",
@@ -391,7 +389,7 @@ export function FinancingManagement({
                 </fieldset>
               </form>
             )}
-          </details>
+          {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</div></TaskDrawer>
         )}
         {requests.loading ? (
           <Empty>Loading authorized financing...</Empty>
