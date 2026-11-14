@@ -77,8 +77,15 @@ export function listDrafts(access: AccessContext) {
   return invoiceDraftHistory(access,{pageSize:100}).drafts;
 }
 
-export function getDraftEvidence(access: AccessContext, draftId: string) {
+export function assertDraftPacketSource(access: AccessContext, draftId: string) {
   requirePermission(access, "documents:manage");
+  const source = row<{id:string;expires_at:string}>("SELECT id,expires_at FROM assistant_drafts WHERE id=? AND organization_id=? AND expires_at>?", draftId, access.organizationId, new Date().toISOString());
+  if (!source) throw new ApiError(404, "Invoice draft not found or retention expired", "ASSISTANT_DRAFT_NOT_FOUND");
+  return {id:source.id,expiresAt:source.expires_at};
+}
+
+export function getDraftEvidence(access: AccessContext, draftId: string) {
+  assertDraftPacketSource(access, draftId);
   purgeExpired();
   const item = row<StoredDraft>("SELECT * FROM assistant_drafts WHERE id=? AND organization_id=?", draftId, access.organizationId);
   if (!item) throw new ApiError(404, "Invoice draft not found or retention expired", "ASSISTANT_DRAFT_NOT_FOUND");

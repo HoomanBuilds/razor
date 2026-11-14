@@ -87,8 +87,15 @@ export function listFinancePlans(access:AccessContext) {
   return financePlanHistory(access,{pageSize:100}).plans;
 }
 
+export function assertFinancePacketSource(access: AccessContext, id: string) {
+  plannerPermission(access);
+  const source = row<{id:string;expires_at:string}>("SELECT id,expires_at FROM finance_plans WHERE id=? AND organization_id=? AND expires_at>?", id, access.organizationId, new Date().toISOString());
+  if (!source) throw new ApiError(404,"Finance proposal not found or retention expired","FINANCE_PLAN_NOT_FOUND");
+  return {id:source.id,expiresAt:source.expires_at};
+}
+
 export function financePlanEvidence(access:AccessContext,id:string) {
-  plannerPermission(access);purgeFinancePlans();
+  assertFinancePacketSource(access,id);purgeFinancePlans();
   const stored=row<StoredPlan>("SELECT * FROM finance_plans WHERE id=? AND organization_id=?",id,access.organizationId);
   if(!stored)throw new ApiError(404,"Finance proposal not found or retention expired","FINANCE_PLAN_NOT_FOUND");
   audit(access.userId,access.organizationId,"finance_plan.evidence_viewed",id);
