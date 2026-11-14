@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { base58 } from "@scure/base";
-import { computeClearing } from "../src/server/clearing/algorithm";
+import { computeClearing, hash } from "../src/server/clearing/algorithm";
+import { clearingExportRows } from "../src/server/clearing/accounting";
 import { acceptInvoice, createRound, eligibleTerms, offerInvoice, overview, prepareRoundAction, previewRound, reconcileRound, roundDetail, shareInvoice } from "../src/server/clearing/service";
 import { getDb, row } from "../src/server/db";
 import { createBill, approveBill, disputeBill, listBills } from "../src/server/business/service";
@@ -9,7 +10,7 @@ import { acceptBillMilestone, getBillTerms, setBillTerms } from "../src/server/b
 import { cancelPayment, revalidatePaymentRecipient } from "../src/server/payments/service";
 import { accountingExport } from "../src/server/reconciliation/export";
 import { ApiError, type AccessContext } from "../src/server/context";
-import type { ChainRound } from "../src/server/clearing/types";
+import type { ChainRound, Manifest } from "../src/server/clearing/types";
 
 process.env.DATABASE_PATH = ":memory:";
 process.env.DATA_ENCRYPTION_KEY = "61".repeat(32);
@@ -66,6 +67,71 @@ test("stale invoices, personal pay and concurrent payment authority cannot enter
   assert.throws(() => createRound(fresh.a, { ...fresh.input, reviewToken: reviewed.reviewToken }), /already uses/);
   assert.equal(round.status, "prepared");
   assert.throws(() => roundDetail(company(), round.id), /not found/);
+});
+
+test("optimization evidence is stored separately and legacy exact consents survive algorithm upgrades", async () => {
+  const b = company(), c = company(), d = company(), parties = [b, c, d];
+  const startsAt = new Date(Date.now() - 60000).toISOString(), expiresAt = new Date(Date.now() + 3600000).toISOString();
+  const debts = [{ debtor: d, creditor: c, amount: "3000000", cancelled: true }, { debtor: c, creditor: d, amount: "3000000", cancelled: true }, { debtor: d, creditor: b, amount: "3000000", cancelled: false }, { debtor: b, creditor: c, amount: "1000000", cancelled: false }];
+  const links = debts.map(debt => {
+    const bill = invoice(debt.debtor, debt.amount, "business", debt.creditor), link = offerInvoice(debt.debtor, { billId: bill.id, creditorId: debt.creditor.organizationId, startsAt, expiresAt });
+    acceptInvoice(debt.creditor, link.id, link.terms_hash);
+    for (const party of parties.filter(party => party !== debt.debtor && party !== debt.creditor)) { shareInvoice(debt.debtor, link.id, party.organizationId); shareInvoice(debt.creditor, link.id, party.organizationId); }
+    return link;
+  });
+  const input = { linkIds: links.map(link => link.id), startsAt, expiresAt }, preview = previewRound(b, input), created = createRound(b, { ...input, reviewToken: preview.reviewToken });
+  assert.equal(created.calculation.optimization.optimal, true);
+  assert.deepEqual(created.calculation.optimization, preview.optimization);
+  assert.equal(created.calculation.residualTransferVolume, "3000000");
+  assert.ok(!("optimization" in created.manifest));
+  const legacy: Manifest = { ...created.manifest, obligations: created.manifest.obligations.map(edge => {
+    const index = links.findIndex(link => link.payment_id === edge.id), reduction = debts[index].cancelled ? edge.original : "0";
+    return { ...edge, reduction, residual: (BigInt(edge.original) - BigInt(reduction)).toString() };
+  }) };
+  const manifestJson = JSON.stringify(legacy), manifestHash = hash(manifestJson);
+  getDb().prepare("UPDATE clearing_rounds SET manifest_json=?,manifest_hash=?,optimization_json=NULL WHERE id=?").run(manifestJson, manifestHash, created.id);
+  const saved = roundDetail(b, created.id);
+  assert.equal(saved.calculation.optimization.status, "unknown");
+  assert.equal(saved.calculation.optimization.optimal, null);
+  assert.equal(saved.calculation.dischargedInvoiceValue, "6000000");
+  assert.equal(saved.calculation.residualTransferVolume, "4000000");
+  assert.equal(saved.calculation.minimumStartingLiquidity, "3000000");
+  assert.equal(saved.manifest_json, manifestJson);
+  const report = clearingExportRows(b.organizationId).find(value => value.record_type === "business_clearing_round")!;
+  assert.equal(report.planned_residual_transfer_volume_usdc, "4");
+  assert.equal(report.optimization_status, "unknown");
+  assert.equal(report.actual_fees_paid_usdc, "");
+  assert.match(String(report.fee_evidence), /not measured/);
+  getDb().prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES(?,?,'near',?,'testnet',?)").run(`wallet-${next()}`, b.userId, `${b.userId}.testnet`, new Date().toISOString());
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const { method, params } = JSON.parse(String(init?.body)); let result: unknown;
+    if (method === "status") result = { chain_id: "testnet" };
+    else if (method === "block") result = { header: { hash: "fixture-legacy-clearing-not-live", height: 101, timestamp_nanosec: String(BigInt(Date.now()) * 1000000n) } };
+    else if (params.request_type === "view_account") result = { code_hash: codeHash };
+    else {
+      let value: unknown;
+      if (params.method_name === "get_round") value = null;
+      else if (params.method_name === "registration_cost") value = "20000";
+      else if (params.account_id === "clearing.testnet") value = { treasury_id: "treasury.testnet", token_contract: "usdc.testnet", paused: false };
+      else if (params.method_name === "get_platform_config") value = { architecture: "shared_v1", token_contract: "usdc.testnet" };
+      else { const companyId = JSON.parse(Buffer.from(params.args_base64, "base64").toString()).company_id, party = legacy.participants.find(party => party.treasury_company_id === companyId)!; value = { architecture: "shared_v1", company_id: companyId, owner_id: party.owner_id, token_contract: "usdc.testnet", policy_version: party.policy_version, paused: false }; }
+      result = { result: [...Buffer.from(JSON.stringify(value))] };
+    }
+    return Response.json({ result });
+  };
+  try {
+    const action = await prepareRoundAction(b, created.id, manifestHash, "register");
+    assert.equal((action.walletActions[0].actions[0].params.args as { manifest_json: string }).manifest_json, manifestJson);
+    const tampered = structuredClone(legacy);
+    tampered.obligations[0].reduction = (BigInt(tampered.obligations[0].reduction) + 1n).toString();
+    const tamperedJson = JSON.stringify(tampered), tamperedHash = hash(tamperedJson);
+    getDb().prepare("UPDATE clearing_rounds SET manifest_json=?,manifest_hash=? WHERE id=?").run(tamperedJson, tamperedHash, created.id);
+    await assert.rejects(prepareRoundAction(b, created.id, tamperedHash, "register"), /conservation calculation/);
+    const emptyDischarge = { ...legacy, obligations: legacy.obligations.map(edge => ({ ...edge, reduction: "0", residual: edge.original })) }, emptyJson = JSON.stringify(emptyDischarge), emptyHash = hash(emptyJson);
+    getDb().prepare("UPDATE clearing_rounds SET manifest_json=?,manifest_hash=? WHERE id=?").run(emptyJson, emptyHash, created.id);
+    await assert.rejects(prepareRoundAction(b, created.id, emptyHash, "register"), /conservation calculation/);
+  } finally { globalThis.fetch = original; }
 });
 
 test("active clearing locks are exposed as actionable conflicts before financial mutations", async () => {
