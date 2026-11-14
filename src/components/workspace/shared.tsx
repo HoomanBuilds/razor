@@ -16,8 +16,8 @@ export function Field({ label, children, hint, as: Tag = "label" }: { label: str
 
 export const control = "min-h-10 min-w-0 w-full rounded-md border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-50";
 
-export function Action({ busy, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
-  return <Button {...props} aria-busy={!!busy} disabled={props.disabled || busy}>{busy && <LoaderCircle aria-hidden="true" className="animate-spin" />}{children}</Button>;
+export function Action({ busy, children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean }) {
+  return <Button {...props} className={cn("h-auto min-h-9 max-w-full whitespace-normal", className)} aria-busy={!!busy} disabled={props.disabled || busy}>{busy && <LoaderCircle aria-hidden="true" className="animate-spin" />}{children}</Button>;
 }
 
 export function Status({ value }: { value: string }) {
