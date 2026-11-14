@@ -277,3 +277,14 @@ test("folder scanning stops at the advertised entry cap", async () => {
     assert.equal(scan.scanned, 100); assert.equal(scan.capped, true); assert.equal(files, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("retained revocation history cannot hide an active connection from administrators", () => {
+  const { access } = fixture(), active = createInvoiceChannel(access, { provider: "folder", label: "Active connector", privacyAcknowledged: true });
+  for (let index = 0; index < 51; index++) {
+    const old = createInvoiceChannel(access, { provider: "folder", label: `Retired ${index}`, privacyAcknowledged: true });
+    revokeInvoiceChannel(access, old.channel.id);
+  }
+  const channels = listInvoiceChannels(access).channels;
+  assert.equal(channels.length, 50); assert.equal(channels[0].id, active.channel.id); assert.equal(channels[0].revokedAt, null);
+});
