@@ -7,9 +7,10 @@ import { createBill, createPayrollRun, disputeBill, getPayrollRun, listBills, li
 import { acceptBillMilestone, addBillInstallment, getBillTerms, resolveBillDispute, setBillTerms } from "./bill-terms";
 import { approveBillBatch, approveReviewedPayrollRun } from "../payment-management/service";
 import { payrollImportRoutes } from "../payroll-import";
+import { billCommitmentFields } from "../vendor-commitments/service";
 
 const money = z.string().regex(/^\d+$/);
-const billInput = z.object({ recipientId: z.string().min(1), reference: z.string().trim().min(1).max(120), title: z.string().trim().min(1).max(240), amount: money, maxFee: money.optional(), dueDate: z.string().datetime().optional(), lineItems: z.array(z.unknown()).max(100).optional(), evidence: z.string().max(5000).optional(), documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), projectReference: z.string().trim().max(120).optional(), costCenterReference: z.string().trim().max(120).optional() });
+const billInput = z.object({ recipientId: z.string().min(1), reference: z.string().trim().min(1).max(120), title: z.string().trim().min(1).max(240), amount: money, maxFee: money.optional(), dueDate: z.string().datetime().optional(), lineItems: z.array(z.unknown()).max(100).optional(), evidence: z.string().max(5000).optional(), documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), projectReference: z.string().trim().max(120).optional(), costCenterReference: z.string().trim().max(120).optional(), ...billCommitmentFields });
 const payrollInput = z.object({ reference: z.string().trim().min(1).max(120), periodStart: z.string().date(), periodEnd: z.string().date(), scheduledFor: z.string().datetime().optional(), items: z.array(z.object({ recipientId: z.string().min(1), amount: money, maxFee: money.optional(), baseAmount: money.optional(), bonusAmount: money.optional(), adjustmentAmount: z.string().regex(/^-?\d+$/).optional(), note: z.string().max(500).optional() })).min(1).max(1000) });
 
 export const businessRoutes = new Hono<AppEnv>();

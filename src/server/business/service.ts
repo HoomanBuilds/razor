@@ -8,6 +8,7 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { accountingExport } from "../reconciliation/export";
 import { liabilityPayments } from "../partial-settlement/model";
 import { assertNoActiveClearing } from "../clearing/locks";
+import { billCommitmentReview, consumeBillCommitment, resolveBillCommitment, type BillCommitmentInput } from "../vendor-commitments/service";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
@@ -16,6 +17,7 @@ type Bill = {
   payment_id: string | null; accepted_at: string | null; created_at: string; updated_at: string;
   requires_acceptance: number; milestone_accepted_at: string | null;
   project_reference: string | null; cost_center_reference: string | null;
+  vendor_commitment_id: string | null; commitment_date: string | null; commitment_scope_confirmed: number;
 };
 type PayrollRun = {
   id: string; organization_id: string; reference: string; period_start: string; period_end: string;
@@ -54,7 +56,7 @@ export function listBills(access: AccessContext) {
       const installments = rows<{ amount: string; status: string; delivered_amount: string }>("SELECT p.amount,p.status,p.delivered_amount FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=?", bill.id);
       const delivered = installments.reduce((sum, item) => sum + BigInt(item.status === "paid" ? item.amount : item.delivered_amount), 0n), setoff = BigInt(bill.setoff_amount), remaining = BigInt(bill.amount) - delivered - setoff;
       const status = bill.status === "disputed" ? "disputed" : remaining === 0n ? setoff > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : setoff > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : bill.status;
-      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), setoffAmount: setoff.toString(), remainingLiability: remaining.toString() };
+      return { ...bill, status, line_items: JSON.parse(bill.line_items), payment: bill.payment_id ? getPayment(access, bill.payment_id) : null, deliveredAmount: delivered.toString(), setoffAmount: setoff.toString(), remainingLiability: remaining.toString(), vendorCommitment: billCommitmentReview(access.organizationId, bill.id) };
     });
 }
 
@@ -62,18 +64,19 @@ export function createBill(access: AccessContext, input: {
   recipientId: string; reference: string; title: string; amount: string; maxFee?: string;
   dueDate?: string; lineItems?: unknown[]; evidence?: string; documentHash?: string;
   projectReference?: string; costCenterReference?: string;
-}) {
+} & BillCommitmentInput) {
   requirePermission(access, "payments:prepare");
   recipient(access, input.recipientId);
   const value = amount(input.amount);
   const fee = amount(input.maxFee ?? "1000000", true);
+  const purchase = resolveBillCommitment(access, input);
   const projectReference = input.projectReference?.trim() || null;
   const costCenterReference = input.costCenterReference?.trim() || null;
   if ([projectReference, costCenterReference].some(value => value && value.length > 120)) throw new ApiError(400, "Use at most 120 characters for a project or cost center reference", "INVALID_BILL_ATTRIBUTION");
   const existing = row<Bill>("SELECT * FROM bills WHERE organization_id = ? AND recipient_id = ? AND reference = ?", access.organizationId, input.recipientId, input.reference);
   if (existing) {
     const readable = readableBill(existing);
-    if (existing.amount !== value || existing.max_fee !== fee || readable.title !== input.title || existing.due_date !== (input.dueDate ?? null) || readable.project_reference !== projectReference || readable.cost_center_reference !== costCenterReference || !isDeepStrictEqual(JSON.parse(readable.line_items), JSON.parse(JSON.stringify(input.lineItems ?? []))) || readable.evidence !== (input.evidence || null) || existing.document_hash !== (input.documentHash ?? null)) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
+    if (existing.amount !== value || existing.max_fee !== fee || readable.title !== input.title || existing.due_date !== (input.dueDate ?? null) || readable.project_reference !== projectReference || readable.cost_center_reference !== costCenterReference || existing.vendor_commitment_id !== purchase.id || existing.commitment_date !== purchase.date || existing.commitment_scope_confirmed !== purchase.confirmed || !isDeepStrictEqual(JSON.parse(readable.line_items), JSON.parse(JSON.stringify(input.lineItems ?? []))) || readable.evidence !== (input.evidence || null) || existing.document_hash !== (input.documentHash ?? null)) throw new ApiError(409, "This invoice reference already has different terms", "DUPLICATE_INVOICE");
     return readableBill(existing);
   }
   if (input.documentHash && row("SELECT id FROM bills WHERE organization_id = ? AND document_hash = ?", access.organizationId, input.documentHash)) {
@@ -85,6 +88,7 @@ export function createBill(access: AccessContext, input: {
       .run(id, access.organizationId, input.recipientId, input.reference, encrypt(input.title), value, fee, input.dueDate ?? null, encrypt(JSON.stringify(input.lineItems ?? [])), input.evidence ? encrypt(input.evidence) : null, input.documentHash ?? null, access.userId, now, now, projectReference ? encrypt(projectReference) : null, costCenterReference ? encrypt(costCenterReference) : null);
     const payment = createPayment(access, { recipientId: input.recipientId, reference: `bill:${id}`, amount: value, maxFee: fee, kind: "invoice", scheduledFor: input.dueDate, metadata: { billId: id, displayReference: input.reference } });
     db.prepare("UPDATE bills SET payment_id = ? WHERE id = ?").run(payment.id, id);
+    db.prepare("UPDATE bills SET vendor_commitment_id=?,commitment_date=?,commitment_scope_confirmed=? WHERE id=?").run(purchase.id, purchase.date, purchase.confirmed, id);
     activity(access, "bill.created", id);
     return readableBill(row<Bill>("SELECT * FROM bills WHERE id = ?", id)!);
   });
@@ -99,6 +103,7 @@ export function approveBill(access: AccessContext, id: string) {
   if (!bill.payment_id) throw new ApiError(409, "Ask the preparer to finish this bill's payment draft", "PAYMENT_DRAFT_REQUIRED");
   return transaction((db) => {
     assertNoActiveClearing(access.organizationId, bill.payment_id!);
+    consumeBillCommitment(access, id);
     db.prepare("UPDATE bills SET status = 'approved', accepted_at = COALESCE(accepted_at,?), updated_at = ? WHERE id = ?")
       .run(new Date().toISOString(), new Date().toISOString(), id);
     const approved = approvePayment(access, bill.payment_id!);
