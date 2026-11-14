@@ -23,7 +23,7 @@ Compare two builds of the current shared architecture with:
 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$PWD/.tools/cargo-target" cargo run --locked --jobs 1 --manifest-path contracts/wasm-checks/Cargo.toml -- --shared-compare /absolute/baseline-directory /absolute/optimized-directory
 ```
 
-Each directory must contain `razor_treasury.wasm`, `razor_clearing.wasm` and `razor_billing.wasm` from the same contract revision and ABI. A factory is not required. Run this only when no other contract build, application build or development server is active. The existing `--shared DIRECTORY` mode still checks one current build, and `contracts/check.sh BASELINE` keeps its historical four-artifact behavior.
+Each directory must contain `razor_treasury.wasm`, `razor_clearing.wasm` and `razor_billing.wasm` with compatible shared storage layouts and the same public ABI. A factory is not required. Run this only when no other contract build, application build or development server is active. The existing `--shared DIRECTORY` mode still checks one current build, and `contracts/check.sh BASELINE` keeps its historical four-artifact behavior.
 
 The shared comparator executes the same shared treasury, standing mandate, claim distribution, shared clearing, cash-backed clearing and billing scenarios against both artifacts. Every call must preserve return bytes and return kind, errors, raw event logs, promise actions and exact persisted trie contents. Host imports and exported function signatures must match. Existing scenario assertions still check financial counters, company authority, duplicate/callback replay handling and unresolved-transfer holds. This covers these fixtures, not every possible input or a complete network simulation.
 
