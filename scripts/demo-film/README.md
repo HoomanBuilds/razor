@@ -33,9 +33,15 @@ The browser port must be unused. The script launches and closes its own isolated
 
 ```sh
 node scripts/demo-film/render.mjs --plan-only
-node scripts/demo-film/render.mjs --name razor-company-demo-v1-sarah.mp4
+node scripts/demo-film/render.mjs --name razor-company-demo-v2-sarah.mp4
 ```
 
-Assembly uses brief chapter cards and preserves action speed. Optional `keep` ranges remove idle footage; `pauses` add silence at cached narration sentence boundaries so approvals and results match the spoken explanation. `captureSeconds` can preserve a longer raw take when its edited cut is shorter. Sarah is not accelerated. The script refuses a timeline longer than 240 seconds or stale narration, and verifies the final dimensions, frame rate, duration and audio stream. No music or subtitle layer is added.
+Assembly uses brief chapter cards and preserves action speed. Optional `keep` ranges remove idle footage; `pauses` add silence at cached narration sentence boundaries so approvals and results match the spoken explanation. `captureSeconds` can preserve a longer raw take when its edited cut is shorter. Sarah is not accelerated. The script refuses a timeline longer than 240 seconds or stale narration, and verifies the final dimensions, frame rate, duration and audio stream. Sarah captions are generated from the cached character timestamps, shifted by the same sentence pauses and cut offsets, then burned into the final MP4. Matching SRT and ASS sidecars use the output filename. Captions stay within two lines, use a compact navy background, and clear during longer narration pauses. Set `captionPosition: 'top'` on a cut when bottom placement would cover its controls. No music is added.
 
 Review the whole MP4 at normal speed, particularly approval, simulated delivery, recipient identity changes, the clearing calculation and the comparison notes. Retain `cuts/`, `audio/`, `capture/`, `timeline.json` and `verification.json` as the rebuild and evidence kit. Use a new output name for a new approved edition. The current master is not evidence of real token delivery or completed private inference.
+
+Caption timing and formatting can be checked without rendering:
+
+```sh
+node --test scripts/demo-film/captions.test.mjs
+```

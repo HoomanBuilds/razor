@@ -2,12 +2,14 @@ import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {cachedFingerprint, directory, digest, fileHash, loadStory, output, probe, run, voice} from './lib.mjs';
+import {segmentCaptions, subtitleFilter, toAss, toSrt} from './captions.mjs';
 
-const {values} = parseArgs({options: {story: {type: 'string'}, only: {type: 'string'}, 'plan-only': {type: 'boolean', default: false}, name: {type: 'string', default: 'razor-company-demo-v1-sarah.mp4'}}});
+const {values} = parseArgs({options: {story: {type: 'string'}, only: {type: 'string'}, 'plan-only': {type: 'boolean', default: false}, name: {type: 'string', default: 'razor-company-demo-v2-sarah.mp4'}}});
 if (!/^[a-z0-9-]+\.mp4$/.test(values.name)) throw new Error('Output name must be a simple lowercase MP4 filename');
 const story = await loadStory(values.story);
 const rendererHash = digest(readFileSync(new URL(import.meta.url)));
 const timeline = [];
+const captions = [];
 let cursor = 0;
 for (const segment of story.segments) {
   const audio = resolve(directory('audio'), `${segment.id}.mp3`);
@@ -36,11 +38,16 @@ for (const segment of story.segments) {
   const tail = segment.type === 'card' ? 1.4 : 0.55;
   const duration = Math.ceil(Math.max(segment.seconds, audioSeconds + lead + tail, sourceSeconds + (segment.overview ?? 0)) * 30) / 30;
   timeline.push({...segment, startSeconds: cursor, durationSeconds: duration, audioSeconds, rawAudioSeconds, pauses, voiceOffset: lead, sourceSeconds, rawSourceSeconds, audio, source, card});
+  captions.push(...segmentCaptions(timeline.at(-1), metadata.alignment));
   cursor += duration;
 }
 if (cursor > Math.min(story.maxSeconds ?? 240, 240)) throw new Error(`Film measures ${cursor.toFixed(2)} seconds; trim the story below 240 seconds before rendering`);
 writeFileSync(resolve(output, 'timeline.json'), JSON.stringify({title: story.title, durationSeconds: cursor, voice, segments: timeline}, null, 2) + '\n');
-console.log(`Timeline: ${cursor.toFixed(2)} seconds`);
+const captionBase = resolve(output, values.name.replace(/\.mp4$/, ''));
+const assPath = `${captionBase}.ass`, srtPath = `${captionBase}.srt`;
+writeFileSync(assPath, toAss(captions));
+writeFileSync(srtPath, toSrt(captions));
+console.log(`Timeline: ${cursor.toFixed(2)} seconds, ${captions.length} captions`);
 if (values['plan-only']) process.exit(0);
 
 for (const segment of timeline) {
@@ -81,12 +88,12 @@ const metadataPath = resolve(directory('render'), 'chapters.ffmeta');
 const escaped = (text) => text.replace(/[=;#\\]/g, '\\$&').replace(/\n/g, ' ');
 writeFileSync(metadataPath, `;FFMETADATA1\ntitle=${escaped(story.title)}\ncomment=Local product demo. Transfers are simulated.\n` + timeline.map((segment) => `[CHAPTER]\nTIMEBASE=1/1000\nSTART=${Math.round(segment.startSeconds * 1000)}\nEND=${Math.round((segment.startSeconds + segment.durationSeconds) * 1000)}\ntitle=${escaped(segment.title)}\n`).join(''));
 const destination = resolve(output, values.name);
-run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', master, '-i', metadataPath, '-map', '0:v', '-map', '0:a', '-map_metadata', '1', '-map_chapters', '1', '-c:v', 'copy', '-af', 'alimiter=limit=0.891:level=false', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-t', String(cursor), '-movflags', '+faststart', destination]);
+run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', master, '-i', metadataPath, '-map', '0:v', '-map', '0:a', '-map_metadata', '1', '-map_chapters', '1', '-vf', subtitleFilter(assPath), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-threads', '2', '-filter_threads', '2', '-pix_fmt', 'yuv420p', '-af', 'alimiter=limit=0.891:level=false', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-t', String(cursor), '-movflags', '+faststart', destination]);
 const final = probe(destination);
 const video = final.streams.find((stream) => stream.codec_type === 'video');
 const audio = final.streams.find((stream) => stream.codec_type === 'audio');
 if (Number(final.format.duration) > 240 || video?.width !== 1920 || video?.height !== 1080 || video.r_frame_rate !== '30/1' || !audio) throw new Error('Final media verification failed');
-writeFileSync(resolve(output, 'verification.json'), JSON.stringify({file: destination, durationSeconds: Number(final.format.duration), width: video.width, height: video.height, frameRate: video.r_frame_rate, audioCodec: audio.codec_name, sha256: await fileHash(destination), simulatedTransfers: true}, null, 2) + '\n');
+writeFileSync(resolve(output, 'verification.json'), JSON.stringify({file: destination, durationSeconds: Number(final.format.duration), width: video.width, height: video.height, frameRate: video.r_frame_rate, audioCodec: audio.codec_name, sha256: await fileHash(destination), simulatedTransfers: true, captions: {burnedIn: true, count: captions.length, srt: srtPath, ass: assPath}}, null, 2) + '\n');
 console.log(`Complete: ${destination}`);
 
 function footage(filters, input, segment, duration, output) {
