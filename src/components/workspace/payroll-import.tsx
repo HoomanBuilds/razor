@@ -13,6 +13,7 @@ export interface ImportSelection { id: string; version: number; reviewToken: str
 interface Draft extends ImportSelection { source: string; filename: string; settings: ImportSettings; resolutions: Record<string, string>; corrections: Record<string, Partial<Record<ImportField, string>>>; preview: PayrollImportPreview; runId: string | null; expiresAt: string }
 interface Template { id: string; name: string; version: number; headers: string[]; settings: ImportSettings }
 interface DraftSummary { id: string; filename: string; version: number; runId: string | null; expired: boolean; updatedAt: string }
+interface MappingSuggestion { mapping: ImportSettings["mapping"]; confidence: Partial<Record<ImportField, number>>; warnings: string[]; requiresReview: true; verification: { provider: string; model: string; ok: boolean }; retained: false }
 const labels: Record<ImportField, string> = { recipientId: "Recipient ID", email: "Email", name: "Name (display only)", amount: "Final net USDC", baseAmount: "Base net USDC", bonusAmount: "Bonus", adjustmentAmount: "Signed correction", currency: "Currency", note: "Note / explanation", maxFee: "Maximum routing cost" };
 
 export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (items: Record<string, PayrollCsvItem>, selection: ImportSelection) => void; onInvalidated: () => void; onOpenRun: (id: string) => void }) {
@@ -25,6 +26,7 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
   const [dirty, setDirty] = useState(false), [formatConfirmed, setFormatConfirmed] = useState(false), [reviewConfirmed, setReviewConfirmed] = useState(false);
   const [templateId, setTemplateId] = useState(""), [templateName, setTemplateName] = useState(""), [page, setPage] = useState(1), [notice, setNotice] = useState("");
   const [invitation, setInvitation] = useState("");
+  const [suggestion, setSuggestion] = useState<MappingSuggestion | null>(null), [suggestionConfirmed, setSuggestionConfirmed] = useState(false);
   const templates = useResource<{ templates: Template[] }>(`${base}/payroll-import/templates`, revision);
   const drafts = useResource<{ drafts: DraftSummary[] }>(`${base}/payroll-import/drafts`, revision + workspaceRevision);
   const table = useMemo<{ headers: string[]; rows: Record<string, string>[]; error: string }>(() => {
@@ -33,7 +35,7 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
     catch (cause) { return { headers: [], rows: [], error: (cause as Error).message }; }
   }, [source, settings.delimiter]);
   function invalidate(format = false) { setDirty(true); setReviewConfirmed(false); setNotice(""); onInvalidated(); if (format) setFormatConfirmed(false); }
-  function changeSettings(next: ImportSettings) { setSettings(next); invalidate(true); }
+  function changeSettings(next: ImportSettings) { setSettings(next); setSuggestion(null); setSuggestionConfirmed(false); invalidate(true); }
   async function savePreview() {
     if (!formatConfirmed) throw new Error("Confirm the mapped columns and number format before previewing.");
     const payload = { source, filename, settings, resolutions, corrections };
@@ -42,7 +44,7 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
     return response.draft;
   }
   function restore(saved: Draft) {
-    setSource(saved.source); setFilename(saved.filename); setSettings(saved.settings); setResolutions(saved.resolutions); setCorrections(saved.corrections); setDraft(saved); setFormatConfirmed(false); setReviewConfirmed(false); setDirty(true); setPage(1); setNotice("Resumed a saved import. Confirm its format and refresh the preview against current payees."); onInvalidated();
+    setSource(saved.source); setFilename(saved.filename); setSettings(saved.settings); setResolutions(saved.resolutions); setCorrections(saved.corrections); setDraft(saved); setSuggestion(null); setSuggestionConfirmed(false); setFormatConfirmed(false); setReviewConfirmed(false); setDirty(true); setPage(1); setNotice("Resumed a saved import. Confirm its format and refresh the preview against current payees."); onInvalidated();
   }
   const selectedTemplate = templates.data?.templates.find(value => value.id === templateId);
   const committedRunId = draft?.runId || drafts.data?.drafts.find(value => value.id === draft?.id)?.runId;
@@ -62,7 +64,7 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
             catch { throw new Error("Export the spreadsheet as UTF-8 CSV, then upload it again."); }
             const next = { ...defaultImportSettings, mapping: {} };
             try { next.mapping = suggestPayrollColumns(parsePayrollTable(text, next.delimiter).headers); } catch {}
-            setSource(text); setFilename(file.name); setSettings(next); setDraft(null); setRequestKey(crypto.randomUUID()); setResolutions({}); setCorrections({}); setTemplateId(""); setTemplateName(""); setFormatConfirmed(false); setReviewConfirmed(false); setDirty(true); setNotice(""); onInvalidated(); input.value = "";
+            setSource(text); setFilename(file.name); setSettings(next); setDraft(null); setSuggestion(null); setSuggestionConfirmed(false); setRequestKey(crypto.randomUUID()); setResolutions({}); setCorrections({}); setTemplateId(""); setTemplateName(""); setFormatConfirmed(false); setReviewConfirmed(false); setDirty(true); setNotice(""); onInvalidated(); input.value = "";
           });
         }} /></Field>
         <Field label="Resume a saved import"><select className={control} value="" disabled={!!busy || drafts.loading} onChange={event => {
@@ -86,6 +88,22 @@ export function PayrollImport({ onUse, onInvalidated, onOpenRun }: { onUse: (ite
             try { validateImportSettings(value.settings, table.headers); setTemplateName(value.name); changeSettings(value.settings); if (JSON.stringify(value.headers) !== JSON.stringify(table.headers)) setNotice("These headers differ from the saved mapping. Review every selected column before confirming."); }
             catch (cause) { setError((cause as Error).message); }
           }}><option value="">Manual mapping</option>{templates.data?.templates.map(template => <option key={template.id} value={template.id}>{template.name} (v{template.version})</option>)}</select></Field><Action type="button" disabled={!!busy} onClick={() => changeSettings({ ...settings, mapping: suggestPayrollColumns(table.headers) })}>Match familiar headers</Action></div>
+          {organization.permissions?.includes("documents:manage") && <details className="rounded-lg border p-4 text-sm"><summary className="cursor-pointer font-medium">Optional private column suggestions</summary><div className="mt-3 grid gap-3">
+            <p className="text-xs leading-5 text-muted-foreground">Send only this file's column headers to verified NEAR AI Cloud. CSV data rows, recipient records and the filename are excluded. Header names themselves may contain sensitive information, so review them before requesting suggestions. This uses one company private-AI attempt. Manual mapping and Match familiar headers remain available.</p>
+            <p className="break-words text-xs">Headers to send: {table.headers.join("; ")}</p>
+            <div><Action type="button" disabled={!!busy || !table.headers.length} busy={busy === "suggest-columns"} onClick={() => void run("suggest-columns", async () => {
+              setSuggestion(null); setSuggestionConfirmed(false);
+              const result = await api<{ suggestion: MappingSuggestion }>(`${base}/payroll-import/suggest-mapping`, { headers: table.headers, requestKey: crypto.randomUUID() });
+              setSuggestion(result.suggestion);
+            })}>Suggest columns privately</Action></div>
+            {suggestion && <div className="grid gap-3" role="status">
+              <p className="text-xs text-muted-foreground">Verified {suggestion.verification.provider} response. Confidence is a model estimate, not a correctness guarantee. Suggestions are held in this page until you apply them; no saved import or financial record has changed.</p>
+              {Object.keys(suggestion.mapping).length ? <DataTable columns={["Payroll field", "Suggested source column", "Model confidence"]}>{Object.entries(suggestion.mapping).map(([field, column]) => <tr key={field}><td>{labels[field as ImportField]}</td><td className="break-words">{column}</td><td>{Math.round((suggestion.confidence[field as ImportField] ?? 0) * 100)}%</td></tr>)}</DataTable> : <p>No reliable columns were suggested. Map them manually.</p>}
+              {suggestion.warnings.map(warning => <p key={warning} className="text-xs text-amber-900">{warning}</p>)}
+              {Object.keys(suggestion.mapping).length > 0 && <><label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={suggestionConfirmed} disabled={!!busy} onChange={event => setSuggestionConfirmed(event.target.checked)} />I reviewed these column suggestions. I will confirm number formats, payees and exact amounts separately.</label><div><Action type="button" disabled={!!busy || !suggestionConfirmed} onClick={() => { changeSettings({ ...settings, mapping: suggestion.mapping }); setNotice("Reviewed suggestions applied. Confirm the mapping and number format, then refresh the exact row preview."); }}>Apply reviewed suggestions</Action></div></>}
+              <div><button type="button" className="text-xs text-primary" disabled={!!busy} onClick={() => { setSuggestion(null); setSuggestionConfirmed(false); }}>Dismiss suggestions</button></div>
+            </div>}
+          </div></details>}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{importFields.map(field => <Field key={field} label={labels[field]}><select className={control} value={settings.mapping[field] ?? ""} disabled={!!busy} onChange={event => changeSettings({ ...settings, mapping: { ...settings.mapping, [field]: event.target.value } })}><option value="">Not mapped{field === "currency" ? " (explicit USDC)" : ""}</option>{table.headers.map(header => <option key={header} value={header}>{header}</option>)}</select></Field>)}</div>
           <details className="text-sm"><summary className="cursor-pointer text-primary">Preview original columns</summary><div className="mt-3"><DataTable columns={table.headers}>{table.rows?.slice(0, 3).map((record, index) => <tr key={index}>{table.headers.map(header => <td key={header} className="max-w-64 break-words">{record[header]}</td>)}</tr>)}</DataTable></div></details>
           <div className="flex flex-wrap items-end gap-3"><Field label="Mapping name"><input className={control} value={templateName} maxLength={120} onChange={event => setTemplateName(event.target.value)} /></Field><Action type="button" disabled={!!busy || !templateName.trim()} busy={busy === "save-mapping"} onClick={() => void run("save-mapping", async () => {
