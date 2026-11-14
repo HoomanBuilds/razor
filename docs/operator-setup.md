@@ -181,3 +181,8 @@ Company owners can update spend limits, approval tiers, roles, recipient destina
 Add `--upgrade-policy owner_controlled` to the unsigned planner command. After creating the fresh contract accounts, inspect their public full-access keys and record an explicit account-to-public-key JSON object in the ignored local setting `NEAR_CONTRACT_UPGRADE_KEYS`. Keep `NEAR_CONTRACT_UPGRADE_POLICY=owner_controlled`. Public-key pins are review decisions, not an automatically adopted RPC response. Check each key against the operator's secure keychain before recording it. Normal worker keys remain separate and narrowly scoped. No private deployment key belongs in `.env.local`.
 
 New subscription prices and access limits still use versioned application billing offers. Owner-controlled code replacement is only needed for actual implementation changes. Future replacements require compatible storage or a specifically reviewed migration and updated code pins. No generic populated-state migration is currently provided.
+
+
+## Current mainnet deployment
+
+See the [14 November mainnet registry](deployments/mainnet-2026-11-14.md) for actual accounts, reviewed code hashes, upgrade authority, final transaction receipts and remaining company activation. Do not redeploy or reinitialize those funded accounts as part of the fresh-account examples above. Pure constructor initialization uses 10 Tgas in the current planner. Mainnet action receipts can reserve gas above the current burn quote, so funding headroom must cover that temporary reservation as well as final code/state backing. No fixed receipt-price multiplier is a runtime source of truth.
