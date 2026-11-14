@@ -1,7 +1,17 @@
 "use client";
 
 import { usd } from "@/lib/format";
+import { networkIdentity } from "@/lib/asset-identity";
+import { AssetIdentity } from "./assets/asset-identity";
 import type { CommercialTerms } from "@/server/procurement/commercial";
+
+export interface QuoteAsset { assetId: string; symbol: string; blockchain: string }
+
+export function QuotedPayoutIdentity({ asset, network, assets, size = 28 }: { asset: string; network: string; assets: readonly QuoteAsset[]; size?: number }) {
+  const selected = assets.find(value => value.assetId === asset && networkIdentity(value.blockchain).key === networkIdentity(network).key);
+  const symbol = selected?.symbol ?? (/^[A-Za-z0-9]{1,12}$/.test(asset) ? asset : "Selected receiving asset");
+  return <AssetIdentity symbol={symbol} network={network} assetId={asset} showAssetId={!selected && symbol === "Selected receiving asset"} size={size} />;
+}
 
 export function ProcurementCommercialTerms({ terms }: { terms: CommercialTerms | null }) {
   if (!terms) return <p className="text-xs text-muted-foreground">Legacy all-inclusive unit price. A separate tax, fixed-charge and delivery breakdown was not captured. Historical totals and awards are unchanged.</p>;
