@@ -38,6 +38,8 @@ test("workspace navigation matches readable permissions and encodes company and 
   assert(canOpenSection("distributions", viewer));
   assert(!canOpenSection("accounting", viewer));
   assert(canOpenSection("accounting", [...viewer, "company:manage"]));
+  assert(canOpenSection("support", ["company:read"]));
+  assert(!canOpenSection("support", []));
   assert(canOpenSection("settings", ["company:read"]));
   assert(canOpenSection("billing", ["company:read"]));
   assert(!canOpenSection("billing", []));

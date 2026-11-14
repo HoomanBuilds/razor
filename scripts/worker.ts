@@ -4,6 +4,7 @@ import { processPendingInvoiceEvents } from "../src/server/invoice-channels/serv
 import { dispatchIntegrationWebhooks } from "../src/server/integrations";
 import { monitorDistributions } from "../src/server/distributions/service";
 import { dispatchAccountingJobs } from "../src/server/accounting";
+import { expireSupportCases } from "../src/server/support";
 
 const args = process.argv.slice(2);
 const organizationId = args.find((arg) => arg.startsWith("--organization="))?.slice("--organization=".length);
@@ -20,6 +21,7 @@ do {
     ["invoiceIntake", () => processPendingInvoiceEvents({ organizationId, maxEvents: 1 })],
     ["distributions", () => monitorDistributions({ organizationId, maxPools: 1 })],
     ["accounting", () => dispatchAccountingJobs({ organizationId, maxJobs: 1 })],
+    ["supportRetention", () => organizationId ? { skipped: true, scope: "global_housekeeping" } : expireSupportCases()],
     ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],
   ] as const;
   for (const [name, tick] of tasks) {

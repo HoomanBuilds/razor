@@ -10,6 +10,7 @@ import {
   CreditCard,
   Gift,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Menu,
   ReceiptText,
@@ -55,6 +56,7 @@ import { VendorCommitments } from "./vendor-commitments";
 import { DistributionsPanel } from "./distributions";
 import { CompanyPrivateProcessing } from "./company-private";
 import { AccountingPanel } from "./accounting";
+import { SupportPanel } from "./support";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -74,6 +76,7 @@ const navigation = [
   { id: "accounting", title: "Accounting", icon: BookOpen },
   { id: "billing", title: "Billing & plans", icon: CreditCard },
   { id: "settings", title: "Company settings", icon: Settings2 },
+  { id: "support", title: "Help & support", icon: LifeBuoy },
 ] as const;
 
 export function WorkspaceApp() {
@@ -450,6 +453,8 @@ function CompanyWorkspace({
         <DistributionsPanel />
       ) : section === "accounting" ? (
         <AccountingPanel />
+      ) : section === "support" ? (
+        <SupportPanel />
       ) : section === "procurement" ? (
         <div className="grid gap-6"><ProcurementPanel /><VendorCommitments /></div>
       ) : section === "bills" ? (

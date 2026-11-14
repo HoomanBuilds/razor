@@ -37,6 +37,7 @@ import { procurementRoutes, supplierProcurementRoutes } from "./procurement";
 import { distributionRoutes, recipientDistributionRoutes } from "./distributions";
 import { companyPrivateRoutes } from "./company-private";
 import { accountingRoutes, accountingOAuthRoutes } from "./accounting";
+import { supportRoutes } from "./support";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -100,6 +101,7 @@ app.route("/personal-expenses", personalExpenseRoutes);
 app.route("/supplier-procurement", supplierProcurementRoutes);
 app.route("/recipient-distributions", recipientDistributionRoutes);
 app.route("/accounting-oauth", accountingOAuthRoutes);
+app.route("/support", supportRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/account", accountRecoveryRoutes);
 app.route("/funding-requests", publicFundingRoutes);
