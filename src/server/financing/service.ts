@@ -6,7 +6,6 @@ import { decrypt, encrypt } from "../identity/crypto";
 import { audit, getAccess } from "../identity/session";
 import { getRecipientVersion } from "../identity/recipients";
 import {
-  contractCodeHash,
   deriveSharedCompanyId,
   tokenReceiptIdentity,
   verifySharedDeposit,
@@ -16,6 +15,12 @@ import {
 import { syncTreasury } from "../payments/service";
 import { reviewedArtifactHash } from "../near-artifacts";
 import { NATIVE_USDC } from "../../lib/native-usdc";
+import {
+  finalizedDeployment,
+  finalizedContractView,
+  type DeploymentAnchor,
+} from "./deployment";
+import { requireNotOlder, requireMonotonicLoan } from "./observations";
 import type { TreasuryConfig, WalletTransaction } from "../payments/types";
 import {
   acceptInput,
@@ -149,41 +154,44 @@ function event(
 function target(scope: Scope) {
   return { near_account_id: scope.contract_id, network: scope.network };
 }
-async function configured(scope: Scope) {
-  const expected = reviewedArtifactHash(
-    "NEAR_CREDIT_CODE_HASH",
-    "razor_credit.wasm",
-  );
-  if (
-    scope.code_hash !== expected ||
-    (await contractCodeHash(target(scope))) !== expected
-  )
+async function configured(scope: Scope, accepted = false) {
+  const expected = accepted
+    ? scope.code_hash
+    : reviewedArtifactHash("NEAR_CREDIT_CODE_HASH", "razor_credit.wasm");
+  if (scope.code_hash !== expected)
     throw new ApiError(
       409,
-      "The reviewed native credit contract is not deployed at the published code identity",
+      "The published scope does not match the reviewed deployment pin",
       "FINANCING_DEPLOYMENT_REQUIRED",
     );
-  const config = await view<{
+  const anchor = await finalizedDeployment(
+    scope.network,
+    scope.contract_id,
+    expected,
+  );
+  const config = await finalizedContractView<{
     version: number;
     network: string;
     token_contract: string;
     treasury_id: string;
     paused: boolean;
     minimum_registration_deposit: string;
-  }>(target(scope), "get_config");
+  }>(anchor, "get_config");
   if (
     config.version !== 1 ||
     config.network !== scope.network ||
     config.token_contract !== scope.token_contract ||
     config.treasury_id !== scope.treasury_id ||
+    typeof config.paused !== "boolean" ||
+    !/^\d+$/.test(config.minimum_registration_deposit) ||
     (scope.network === "mainnet" && scope.token_contract !== NATIVE_USDC.near)
   )
     throw new ApiError(
       409,
-      "The credit contract configuration differs from the published scope",
+      "The finalized credit configuration differs from its frozen operating scope",
       "FINANCING_DEPLOYMENT_MISMATCH",
     );
-  return config;
+  return { ...config, anchor };
 }
 function treasury(value: RequestRow, scope: Scope) {
   const config = row<TreasuryConfig>(
@@ -204,23 +212,22 @@ function treasury(value: RequestRow, scope: Scope) {
     );
   return config;
 }
+async function immutableTreasury(value: RequestRow, scope: Scope) {
+  const expected =
+    value.terms_hash && scope.treasury_code_hash
+      ? scope.treasury_code_hash
+      : reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm");
+  return finalizedDeployment(scope.network, scope.treasury_id, expected);
+}
 async function borrowerTarget(value: RequestRow, scope: Scope) {
-  const config = treasury(value, scope);
-  if (
-    (await contractCodeHash(config)) !==
-    reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")
-  )
-    throw new ApiError(
-      409,
-      "The shared treasury code identity changed",
-      "FINANCING_TREASURY_MISMATCH",
-    );
-  const live = await view<{
+  const config = treasury(value, scope),
+    anchor = await immutableTreasury(value, scope);
+  const live = await finalizedContractView<{
     company_id: string;
     owner_id: string;
     token_contract: string;
     paused: boolean;
-  }>(config, "get_config");
+  }>(anchor, "get_config", { company_id: config.company_id });
   linked(value.borrower_user_id, scope.network, live.owner_id);
   if (
     live.paused ||
@@ -234,7 +241,7 @@ async function borrowerTarget(value: RequestRow, scope: Scope) {
       "The current treasury owner or company binding requires review",
       "FINANCING_OWNER_CHANGED",
     );
-  return { config, owner: live.owner_id };
+  return { config, owner: live.owner_id, anchor };
 }
 function termsFor(value: RequestRow) {
   if (!value.terms_ciphertext || !value.terms_hash)
@@ -250,11 +257,15 @@ function termsFor(value: RequestRow) {
   };
 }
 async function chainFor(value: RequestRow, scope: Scope) {
-  await configured(scope);
+  const deployment = await configured(scope, !!value.terms_hash);
   if (!value.loan_id) return null;
-  const loan = await view<ChainLoan | null>(target(scope), "get_loan", {
-    loan_id: value.loan_id,
-  });
+  const loan = await finalizedContractView<ChainLoan | null>(
+    deployment.anchor,
+    "get_loan",
+    {
+      loan_id: value.loan_id,
+    },
+  );
   if (loan) {
     const frozen = termsFor(value);
     if (
@@ -269,7 +280,7 @@ async function chainFor(value: RequestRow, scope: Scope) {
         "FINANCING_TERMS_MISMATCH",
       );
   }
-  return loan;
+  return loan ? { ...loan, observation: deployment.anchor } : null;
 }
 function visible(userId: string, value: RequestRow) {
   const selected = value.accepted_offer_id
@@ -816,6 +827,17 @@ export async function acceptFinancingOffer(
       wire = JSON.stringify(terms),
       termsHash = hash(wire);
     db.prepare(
+      "UPDATE financing_requests SET scope_ciphertext=? WHERE id=?",
+    ).run(
+      encrypt(
+        JSON.stringify({
+          ...scope,
+          treasury_code_hash: destination.anchor.codeHash,
+        }),
+      ),
+      id,
+    );
+    db.prepare(
       "UPDATE financing_requests SET state='accepted',accepted_offer_id=?,loan_id=?,terms_ciphertext=?,terms_hash=?,updated_at=? WHERE id=? AND state='open'",
     ).run(offer.id, loanId, encrypt(wire), termsHash, now(), id);
     db.prepare(
@@ -841,6 +863,15 @@ export async function acceptFinancingOffer(
     return summary(request(id), live.userId, true);
   });
 }
+function preparedDeposit(ciphertext: string) {
+  const decoded = decode<
+    | WalletTransaction[]
+    | { walletActions: WalletTransaction[]; observation: DeploymentAnchor }
+  >(ciphertext);
+  return Array.isArray(decoded)
+    ? { walletActions: decoded, observation: null }
+    : decoded;
+}
 export async function reconcileFinancing(
   userId: string,
   id: string,
@@ -850,26 +881,78 @@ export async function reconcileFinancing(
   if (!access) visible(userId, value);
   const scope = scopeFor(value),
     loan = await chainFor(value, scope);
-  if (loan) {
-    for (const action of rows<{ id: string; deposit_id: string }>(
-      "SELECT id,deposit_id FROM financing_actions WHERE request_id=? AND stage='signing'",
-      id,
-    )) {
-      if (
-        await view<boolean>(target(scope), "deposit_seen", {
-          loan_id: value.loan_id,
-          deposit_id: action.deposit_id,
-        })
+  const pending = loan
+    ? rows<{ id: string; deposit_id: string }>(
+        "SELECT id,deposit_id FROM financing_actions WHERE request_id=? AND stage='signing'",
+        id,
       )
-        getDb()
-          .prepare(
-            "UPDATE financing_actions SET stage='observed',updated_at=? WHERE id=? AND stage='signing'",
-          )
-          .run(now(), action.id);
-    }
-  }
+    : [];
+  const markers = loan
+    ? await Promise.all(
+        pending.map(async (action) => ({
+          ...action,
+          seen: await finalizedContractView<boolean>(
+            loan.observation!,
+            "deposit_seen",
+            { loan_id: value.loan_id, deposit_id: action.deposit_id },
+          ),
+        })),
+      )
+    : [];
   return transaction((db) => {
+    const fresh = access ? own(access, id).value : request(id);
+    if (!access) visible(userId, fresh);
+    if (
+      fresh.terms_hash !== value.terms_hash ||
+      fresh.loan_id !== value.loan_id ||
+      fresh.scope_ciphertext !== value.scope_ciphertext
+    )
+      throw new ApiError(
+        409,
+        "Accepted loan terms or deployment changed during reconciliation",
+        "FINANCING_TERMS_MISMATCH",
+      );
     if (loan) {
+      const previous = fresh.chain_ciphertext
+        ? decode<ChainLoan>(fresh.chain_ciphertext)
+        : null;
+      requireMonotonicLoan(previous, loan);
+      for (const action of rows<{ wallet_ciphertext: string }>(
+        "SELECT wallet_ciphertext FROM financing_actions WHERE request_id=? AND stage IN ('signing','observed')",
+        id,
+      ))
+        requireNotOlder(
+          loan.observation!,
+          preparedDeposit(action.wallet_ciphertext).observation,
+        );
+      const credited = row<{ amount: string; metadata_ciphertext: string }>(
+        "SELECT amount,metadata_ciphertext FROM financing_advance_credits WHERE request_id=?",
+        id,
+      );
+      if (credited) {
+        const evidence = decode<{ loanObservation?: DeploymentAnchor }>(
+          credited.metadata_ciphertext,
+        );
+        requireNotOlder(loan.observation!, evidence.loanObservation);
+        if (
+          loan.advanced !== credited.amount ||
+          ["funding", "advance_pending", "cancelled"].includes(loan.stage)
+        )
+          throw new ApiError(
+            409,
+            "Reconciliation cannot reopen an advance with a verified immutable treasury credit",
+            "FINANCING_OBSERVATION_REGRESSION",
+          );
+      }
+      if (
+        previous?.observation?.blockHeight === loan.observation!.blockHeight &&
+        JSON.stringify(previous) !== JSON.stringify(loan)
+      )
+        throw new ApiError(
+          409,
+          "The same finalized block returned conflicting loan state",
+          "FINANCING_OBSERVATION_CONFLICT",
+        );
       db.prepare(
         "UPDATE financing_requests SET chain_ciphertext=?,reconciled_at=?,state=?,updated_at=? WHERE id=? AND terms_hash=?",
       ).run(
@@ -880,18 +963,20 @@ export async function reconcileFinancing(
         id,
         value.terms_hash,
       );
+      for (const marker of markers)
+        if (marker.seen === true)
+          db.prepare(
+            "UPDATE financing_actions SET stage='observed',updated_at=? WHERE id=? AND request_id=? AND deposit_id=? AND stage='signing'",
+          ).run(now(), marker.id, id, marker.deposit_id);
       if (["cancelled", "repaid"].includes(loan.stage))
         db.prepare(
           "UPDATE financing_assignments SET state='released',released_at=? WHERE request_id=? AND state='held'",
         ).run(now(), id);
-      if (
-        !value.chain_ciphertext ||
-        JSON.stringify(decode<ChainLoan>(value.chain_ciphertext)) !==
-          JSON.stringify(loan)
-      )
-        event(value, userId, "chain_reconciled", {
+      if (!previous || JSON.stringify(previous) !== JSON.stringify(loan))
+        event(fresh, userId, "chain_reconciled", {
           stage: loan.stage,
           nonce: loan.nonce,
+          observation: loan.observation,
         });
     }
     return summary(request(id), userId, !!access);
@@ -910,6 +995,48 @@ function wallet(
       { type: "FunctionCall", params: { methodName, args, gas, deposit } },
     ],
   };
+}
+function retainObservationFence(userId: string, id: string, chain: ChainLoan) {
+  const observation = chain.observation;
+  if (!observation)
+    throw new ApiError(
+      409,
+      "A finalized deployment block is required for this loan review",
+      "FINANCING_OBSERVATION_REQUIRED",
+    );
+  transaction(() => {
+    const current = request(id);
+    requireMonotonicLoan(
+      current.chain_ciphertext
+        ? decode<ChainLoan>(current.chain_ciphertext)
+        : null,
+      chain,
+    );
+    const fenceId = `observation:${userId}`,
+      previous = row<{ wallet_ciphertext: string }>(
+        "SELECT wallet_ciphertext FROM financing_actions WHERE request_id=? AND deposit_id=?",
+        id,
+        fenceId,
+      );
+    requireNotOlder(
+      observation,
+      previous ? preparedDeposit(previous.wallet_ciphertext).observation : null,
+    );
+    getDb()
+      .prepare(
+        "INSERT INTO financing_actions(id,request_id,user_id,kind,amount,deposit_id,review_hash,wallet_ciphertext,stage,created_at,updated_at) VALUES(?,?,?,'observation','0',?,?,?,'observed',?,?) ON CONFLICT(request_id,deposit_id) DO UPDATE SET review_hash=excluded.review_hash,wallet_ciphertext=excluded.wallet_ciphertext,updated_at=excluded.updated_at",
+      )
+      .run(
+        randomUUID(),
+        id,
+        userId,
+        fenceId,
+        hash(observation),
+        encrypt(JSON.stringify({ walletActions: [], observation })),
+        now(),
+        now(),
+      );
+  });
 }
 export async function prepareFinancingAction(
   userId: string,
@@ -935,7 +1062,7 @@ export async function prepareFinancingAction(
   if (!access) visible(userId, value);
   const scope = scopeFor(value),
     frozen = termsFor(value),
-    config = await configured(scope),
+    config = await configured(scope, true),
     chain = await chainFor(value, scope),
     selected = row<OfferRow>(
       "SELECT * FROM financing_offers WHERE id=?",
@@ -972,6 +1099,9 @@ export async function prepareFinancingAction(
         "FINANCING_SCOPE_CHANGED",
       );
   }
+  if (["principal", "collateral"].includes(input.action))
+    await borrowerTarget(value, scope);
+  if (input.action === "recover_advance") await immutableTreasury(value, scope);
   const actions: WalletTransaction[] = [],
     args = { loan_id: frozen.terms.id, terms_hash: frozen.hash };
   const unresolved = row<{
@@ -996,10 +1126,25 @@ export async function prepareFinancingAction(
         "Reconcile or permanently void your original unresolved deposit before changing its amount or purpose",
         "FINANCING_TRANSFER_HELD",
       );
+    if (access)
+      own(
+        access,
+        id,
+        [
+          "register",
+          "advance",
+          "cancel",
+          "default",
+          "dispute",
+          "resume",
+        ].includes(input.action),
+      );
+    if (chain) retainObservationFence(userId, id, chain);
     return {
       actionId: unresolved.id,
       requestId: id,
-      walletActions: decode<WalletTransaction[]>(unresolved.wallet_ciphertext),
+      walletActions: preparedDeposit(unresolved.wallet_ciphertext)
+        .walletActions,
       network: scope.network,
       eligibleSigners: [account],
       reviewHash: unresolved.review_hash,
@@ -1244,7 +1389,12 @@ export async function prepareFinancingAction(
         input.amount!,
         input.depositId!,
         reviewHash,
-        encrypt(JSON.stringify(actions)),
+        encrypt(
+          JSON.stringify({
+            walletActions: actions,
+            observation: chain!.observation!,
+          }),
+        ),
         now(),
         now(),
       );
@@ -1261,6 +1411,7 @@ export async function prepareFinancingAction(
       );
     actionId = saved.id;
   }
+  if (chain) retainObservationFence(userId, id, chain);
   return {
     actionId,
     requestId: id,
@@ -1322,16 +1473,8 @@ export async function financingAdvanceEvidence(
     proof,
     `loan:${value.loan_id}`,
   );
-  await configured(scope);
-  if (
-    (await contractCodeHash(config)) !==
-    reviewedArtifactHash("NEAR_TREASURY_CODE_HASH", "razor_treasury.wasm")
-  )
-    throw new ApiError(
-      409,
-      "The treasury code identity changed while verifying financing credit",
-      "FINANCING_TREASURY_MISMATCH",
-    );
+  await configured(scope, true);
+  await immutableTreasury(value, scope);
   const receiptIdentity = tokenReceiptIdentity(proof),
     evidence = {
       loanId: value.loan_id,
@@ -1339,6 +1482,7 @@ export async function financingAdvanceEvidence(
       proof,
       credit,
       classification: "financing_liability_not_revenue",
+      loanObservation: loan.observation,
     };
   const assertCurrent = () => {
     const fresh = own(access, id),

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { DeploymentAnchor } from "./deployment";
 import { validNearAccount } from "../payments/near";
 export const hash = (value: unknown) =>
   createHash("sha256")
@@ -93,6 +94,7 @@ export interface Scope {
   token_contract: string;
   treasury_id: string;
   code_hash: string;
+  treasury_code_hash?: string;
   allowed_organizations_json: string;
   allowed_lenders_json: string;
   active: number;
@@ -153,6 +155,7 @@ export interface LoanTerms {
   dispute_rule: "bilateral_resume_no_repricing";
 }
 export interface ChainLoan {
+  observation?: DeploymentAnchor;
   terms: LoanTerms;
   terms_json: string;
   terms_hash: string;

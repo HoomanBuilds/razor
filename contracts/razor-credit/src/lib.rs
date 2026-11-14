@@ -84,6 +84,7 @@ struct Deposit {
 }
 #[near(serializers=[json])]
 struct TreasuryCredit {
+    credited_at_ms: U64,
     company_id: String,
     deposit_id: String,
     token_contract: AccountId,
@@ -500,17 +501,24 @@ impl Credit {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Option<TreasuryCredit>>(&bytes).ok())
             .flatten();
-        if !credit.is_some_and(|credit| {
-            credit.company_id == loan.terms.company_id
-                && credit.deposit_id == format!("loan:{loan_id}")
-                && credit.token_contract == self.token_contract
-                && credit.sender_id == env::current_account_id()
-                && credit.amount == loan.terms.principal
-                && credit.kind == "funding"
-        }) {
+        let Some(credit) = credit else { return false };
+        if !(credit.company_id == loan.terms.company_id
+            && credit.deposit_id == format!("loan:{loan_id}")
+            && credit.token_contract == self.token_contract
+            && credit.sender_id == env::current_account_id()
+            && credit.amount == loan.terms.principal
+            && credit.kind == "funding"
+            && credit.credited_at_ms.0 > 0
+            && credit.credited_at_ms.0 <= now()
+            && credit
+                .credited_at_ms
+                .0
+                .checked_add(loan.terms.tenor_ms.0)
+                .is_some())
+        {
             return false;
         }
-        activate(&mut loan);
+        activate_at(&mut loan, credit.credited_at_ms.0);
         self.loans.insert(loan_id.clone(), loan);
         emit(
             "loan_advanced_recovered",
@@ -713,9 +721,12 @@ fn party(loan: &Loan) {
     )
 }
 fn activate(loan: &mut Loan) {
+    activate_at(loan, now());
+}
+fn activate_at(loan: &mut Loan, advanced_at_ms: u64) {
     loan.advanced = loan.terms.principal;
-    loan.activated_at_ms = Some(U64(now()));
-    loan.due_at_ms = Some(U64(now()
+    loan.activated_at_ms = Some(U64(advanced_at_ms));
+    loan.due_at_ms = Some(U64(advanced_at_ms
         .checked_add(loan.terms.tenor_ms.0)
         .expect("TIME_OVERFLOW")));
     loan.pending = None;
