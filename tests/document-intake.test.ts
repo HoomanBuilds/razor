@@ -60,7 +60,7 @@ test("document validation checks actual content, image dimensions and file limit
   assert.throws(() => validateDocument(huge), /megapixels/);
   assert.throws(() => validateDocument(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 1])), /header/);
   assert.equal(documentFilename("../../private\ninvoice.pdf"), "privateinvoice.pdf");
-  assert.throws(() => documentRetentionDays({ DOCUMENT_RETENTION_DAYS: "0" }), /1 to 30/);
+  assert.throws(() => documentRetentionDays({ NODE_ENV: "test", DOCUMENT_RETENTION_DAYS: "0" }), /1 to 30/);
 });
 
 test("PDF metadata rejects encrypted, excessive and unverified page counts", () => {

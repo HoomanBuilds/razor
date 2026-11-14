@@ -22,7 +22,7 @@ async function tool(name: string, args: string[], deadline: number, outputBytes 
   return new Promise<string>((resolve, reject) => {
     execFile(limiter, ["--as=" + DOCUMENT_LIMITS.memoryBytes, "--cpu=15", "--fsize=" + DOCUMENT_LIMITS.renderedBytes, "--nofile=64", "--", executable, ...args], {
       timeout: remaining, killSignal: "SIGKILL", maxBuffer: outputBytes,
-      env: { PATH: "/usr/bin:/bin:/usr/sbin", LANG: "C.UTF-8" },
+      env: { PATH: "/usr/bin:/bin:/usr/sbin", LANG: "C.UTF-8", NODE_ENV: "production" },
       encoding: "utf8", windowsHide: true,
     }, (error, stdout) => {
       if (error) {

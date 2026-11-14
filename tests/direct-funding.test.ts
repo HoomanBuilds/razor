@@ -54,7 +54,7 @@ function fixture() {
   db.prepare("INSERT INTO organization_roles(id,organization_id,name,permissions_json,is_owner,created_at) VALUES(?,?,?, ?,1,?)").run(role, id, "Owner", JSON.stringify(PERMISSIONS), at);
   db.prepare("INSERT INTO memberships(organization_id,user_id,role_id,created_at) VALUES(?,?,?,?)").run(id, id, role, at);
   db.prepare("INSERT INTO linked_wallets(id,user_id,family,address,network,created_at) VALUES(?,?,'near',?,'mainnet',?)").run(randomUUID(), id, owner, at);
-  const config: TreasuryConfig = { organization_id: id, near_account_id: "shared.near", network: "mainnet", token_contract: DIRECT_USDC_TOKEN.contractAddress!, architecture: "shared_v1", company_id: deriveSharedCompanyId(id, owner), created_at: at };
+  const config = { organization_id: id, near_account_id: "shared.near", network: "mainnet", token_contract: DIRECT_USDC_TOKEN.contractAddress!, architecture: "shared_v1", company_id: deriveSharedCompanyId(id, owner) } satisfies TreasuryConfig;
   db.prepare("INSERT INTO treasury_config(organization_id,near_account_id,network,token_contract,architecture,company_id,created_at) VALUES(?,?,?,?,?,?,?)").run(id, config.near_account_id, config.network, config.token_contract, config.architecture, config.company_id, at);
   db.prepare("INSERT INTO treasury_balances(organization_id,balance,reserved,onchain_reserved,updated_at) VALUES(?,'0','0','0',?)").run(id, at);
   db.prepare("INSERT INTO recipients(id,organization_id,name,kind,primary_asset,primary_network,primary_address,preference_status,confirmed_at,created_at,updated_at) VALUES(?,?,?,'vendor','USDC','near',?,'confirmed',?,?,?)").run(recipientId, id, "Supplier", `supplier-${id.slice(0, 8)}.near`, at, at, at);
