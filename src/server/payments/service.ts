@@ -8,6 +8,7 @@ import { assertCanStartDeposit, assertSameQuote, checkStatus, getSupportedTokens
 import { BACKUP_NETWORKS, canUseBackup, checkBudget, providerOutcome } from "./policy";
 import { contractCodeHash, deriveSharedCompanyId, isCompanyBinding, sharedFundingMessage, tokenReceiptIdentity, treasuryAction, validNearAccount, verifyTokenReceipt, view } from "./near";
 import { reviewedArtifactHash } from "../near-artifacts";
+import { describeContractUpgradePolicy } from "../near-upgrade-policy";
 import type { ApprovalStatus, ChainPayment, FundingLeg, Payment, PayoutAttempt, RecipientSnapshot, TreasuryConfig, WalletTransaction } from "./types";
 import { retainPrivateEvidence } from "../reconciliation/evidence";
 import { executionTerms, hasProvenPrimaryFailure, isDirectExecution, type DirectExecution, type ExecutionRecord } from "../reconciliation/direct";
@@ -102,8 +103,9 @@ export function getTreasury(access: AccessContext) {
   const linked = linkedFundingTotals(access.organizationId);
   const totalReserved = BigInt(current.effectiveReserved) + BigInt(clients.clientReserved) + BigInt(linked.linkedFundingReserved);
   const available = BigInt(current.balance) - totalReserved;
+  const config = row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null;
   return { settlementAsset: "USDC", decimals: 6, balance: current.balance, reserved: current.effectiveReserved, paymentReserved: current.paymentReserved, distributionLocalReserved: current.distributionLocalReserved, distributionChainReserved: current.distributionChainReserved, distributionReserved: current.distributionReserved, distributionPending: current.distributionPending, ...clients, ...linked,
-    totalReserved: totalReserved.toString(), reserveDeficit: (available < 0n ? -available : 0n).toString(), available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config: row<TreasuryConfig>("SELECT * FROM treasury_config WHERE organization_id = ?", access.organizationId) ?? null };
+    totalReserved: totalReserved.toString(), reserveDeficit: (available < 0n ? -available : 0n).toString(), available: (available > 0n ? available : 0n).toString(), lastSyncedAt: current.updated_at || null, config, upgradePolicy: config ? describeContractUpgradePolicy(config.near_account_id) : null };
 }
 
 export function listNetworks(access: AccessContext) {

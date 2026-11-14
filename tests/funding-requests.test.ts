@@ -63,7 +63,9 @@ test("funding authority is scoped to hashed links and public fields omit company
   assert.notEqual(stored.token_hash, created.link.token);
   assert.notEqual(stored.purpose_ciphertext, input.purpose);
   const publicView = getPublicFundingRequest(created.link.token);
-  assert.deepEqual(Object.keys(publicView).sort(), ["activeFunding", "amount", "companyName", "confirmedAmount", "expiresAt", "id", "purpose", "remainingAmount", "status"].sort());
+  assert.deepEqual(Object.keys(publicView).sort(), ["activeFunding", "amount", "companyName", "confirmedAmount", "expiresAt", "id", "purpose", "remainingAmount", "status", "upgradePolicy"].sort());
+  assert.equal(publicView.upgradePolicy.mode, "immutable");
+  assert.equal(publicView.upgradePolicy.upgradable, false);
   assert.ok(!JSON.stringify(publicView).includes(access.organizationId));
   assert.throws(() => getFundingRequest({ ...access, organizationId: randomUUID() }, created.request.id), /not found/);
   const replacement = rotateFundingLink(access, created.request.id);

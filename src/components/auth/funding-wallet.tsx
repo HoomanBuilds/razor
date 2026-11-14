@@ -1,5 +1,7 @@
 "use client";
 
+import { ContractUpgradeDisclosure } from "@/components/contract-upgrade-disclosure";
+import type { ContractUpgradePolicy } from "@/lib/contract-upgrade-policy";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPublicClient, createWalletClient, custom, decodeFunctionResult, encodeFunctionData, erc20Abi, formatUnits, getAddress, http, isAddress, type Chain, type EIP1193Provider } from "viem";
 import { mainnet, base, arbitrum, polygon, optimism, bsc, avalanche, gnosis, aurora, berachain, monad, plasma, scroll, linea, mantle, blast, celo, zkSync, abstract } from "viem/chains";
@@ -10,6 +12,7 @@ import { DIRECT_USDC_ASSET, isDirectFunding, validateDirectFunding } from "@/lib
 import { NATIVE_USDC } from "@/lib/native-usdc";
 
 export interface FundingWalletActionProps {
+  upgradePolicy?:ContractUpgradePolicy|null;
   funding:{id:string;origin_asset:string;amount_in:string;deposit_address:string;deposit_memo:string|null;quote:string|object;status:string;source_tx_hash?:string|null};
   token:{assetId:string;symbol:string;blockchain:string;decimals:number;contractAddress?:string|null};
   onSubmitted:(txHash:string)=>Promise<void>;
@@ -215,6 +218,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const tracking=props.depositAllowed===false||!!hash;
   const direct=quote&&isDirectFunding(quote)?quote:null;
   return <section className="space-y-4 rounded-lg border border-border bg-card p-4">
+    <ContractUpgradeDisclosure policy={props.upgradePolicy}/>
     <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><AssetIdentity symbol={token.symbol} network={token.blockchain} assetId={token.assetId} showAssetId className="my-3"/><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
     {props.depositAllowed===false&&<p role="status" className="text-sm">New deposits are blocked for this saved quote. Check wallet activity and track any submitted source transfer below.</p>}
     <dl className="grid gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Original deposit address</dt><dd className="mt-1 flex items-start gap-2"><code className="break-all">{funding.deposit_address}</code><button type="button" aria-label="Copy deposit address" className="shrink-0 p-1" onClick={async()=>{try{await navigator.clipboard.writeText(funding.deposit_address);setCopied(true);}catch{setError("Copy the deposit address manually from the instructions.");}}}><Copy size={14}/></button>{copied?<span className="text-xs">Copied</span>:null}</dd></div>{funding.deposit_memo?<div><dt className="text-xs text-muted-foreground">Required deposit memo</dt><dd><code className="break-all">{funding.deposit_memo}</code></dd></div>:null}</dl>

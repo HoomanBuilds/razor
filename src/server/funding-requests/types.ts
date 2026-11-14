@@ -1,4 +1,5 @@
 import type { Token } from "../payments/intents";
+import type { ContractUpgradePolicy } from "../../lib/contract-upgrade-policy";
 
 export interface FundingRequestRecord {
   id: string; organization_id: string; amount: string; purpose_ciphertext: string; expires_at: string;
@@ -22,6 +23,7 @@ export interface PublicFundingRequest {
   id: string; companyName: string; amount: string; purpose: string; expiresAt: string;
   confirmedAmount: string; remainingAmount: string; status: string;
   activeFunding: { id: string | null; status: string } | null;
+  upgradePolicy: ContractUpgradePolicy;
 }
 export interface PublicQuoteResult {
   funding: PublicFundingLeg; token: Token; request: PublicFundingRequest;
