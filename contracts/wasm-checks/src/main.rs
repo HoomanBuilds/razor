@@ -9,7 +9,11 @@ use near_primitives_core::{
 };
 use near_vm_runner::{
     ContractCode, MockContractRuntimeCache,
-    logic::{ReturnData, VMContext, mocks::mock_external::MockedExternal, types::PromiseResult},
+    logic::{
+        ReturnData, VMContext,
+        mocks::mock_external::{MockAction, MockedExternal},
+        types::PromiseResult,
+    },
     prepare, run,
 };
 use serde_json::{Value, json};
@@ -88,6 +92,8 @@ struct Instance {
     cache: MockContractRuntimeCache,
     account: String,
     storage_usage: u64,
+    now_ms: u64,
+    signer_account_pk: Vec<u8>,
 }
 
 struct CallResult {
@@ -105,6 +111,8 @@ impl Instance {
         config.vm_kind = VMKind::Wasmtime;
         Self {
             storage_usage: code.len() as u64 + 100,
+            now_ms: NOW_MS,
+            signer_account_pk: vec![0; 33],
             external: MockedExternal::with_code(ContractCode::new(code, None)),
             config: Arc::new(config),
             fees: runtime.fees.clone(),
@@ -126,7 +134,7 @@ impl Instance {
         let context = VMContext {
             current_account_id: self.account.parse().unwrap(),
             signer_account_id: caller.parse().unwrap(),
-            signer_account_pk: vec![0; 33],
+            signer_account_pk: self.signer_account_pk.clone(),
             predecessor_account_id: caller.parse().unwrap(),
             refund_to_account_id: caller.parse().unwrap(),
             input: serde_json::to_vec(args).unwrap().into(),
@@ -139,7 +147,7 @@ impl Instance {
                 .collect::<Vec<_>>()
                 .into(),
             block_height: 100,
-            block_timestamp: NOW_MS * 1_000_000,
+            block_timestamp: self.now_ms * 1_000_000,
             epoch_height: 1,
             account_balance: Balance::from_yoctonear(100 * YOCTO),
             account_locked_balance: Balance::ZERO,
@@ -848,7 +856,338 @@ fn check_shared_treasury(directory: &Path) -> Value {
         Some("private"),
         Some(Ok(b"\"999999999\"".to_vec())),
     );
-    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true})
+    let standing = check_native_standing(&mut instance, &mut calls, &a, &b);
+    json!({"contract":"shared_treasury","actual_wasm_calls":calls,"company_isolation":true,"deposit_credit_records_immutable":true,"withdrawal_callback_replay_protected":true,"native_standing":standing})
+}
+
+fn assert_native_transfer_actions(
+    instance: &Instance,
+    start: usize,
+    company: &str,
+    payment: &str,
+    attempt: &str,
+) {
+    let calls: Vec<_> = instance.external.action_log[start..]
+        .iter()
+        .filter_map(|action| match action {
+            MockAction::FunctionCallWeight {
+                receipt_index,
+                method_name,
+                args,
+                attached_deposit,
+                ..
+            } => Some((
+                *receipt_index,
+                method_name,
+                serde_json::from_slice::<Value>(args).unwrap(),
+                attached_deposit,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].1.as_slice(), b"ft_transfer");
+    assert_eq!(
+        calls[0].2,
+        json!({"receiver_id":"vendor.near","amount":"190000","memo":payment})
+    );
+    assert_eq!(*calls[0].3, Balance::from_yoctonear(1));
+    assert!(matches!(&instance.external.action_log[calls[0].0 as usize],
+        MockAction::CreateReceipt { receiver_id, .. } if receiver_id.as_str() == TOKEN));
+    assert_eq!(calls[1].1.as_slice(), b"on_transfer_result");
+    assert_eq!(
+        calls[1].2,
+        json!({"company_id":company,"payment_id":payment,"attempt_id":attempt})
+    );
+    assert!(matches!(&instance.external.action_log[calls[1].0 as usize],
+        MockAction::CreateReceipt { receiver_id, .. } if receiver_id.as_str() == "treasury.near"));
+}
+
+fn check_native_standing(
+    instance: &mut Instance,
+    calls: &mut usize,
+    company: &str,
+    other_company: &str,
+) -> Value {
+    let day_ms = 86_400_000;
+    let key = SigningKey::from_bytes(&[9; 32]);
+    let public_key = format!(
+        "ed25519:{}",
+        bs58::encode(key.verifying_key().to_bytes()).into_string()
+    );
+    let mut actor_key = vec![0];
+    actor_key.extend(key.verifying_key().to_bytes());
+    macro_rules! invoke {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr, $promise:expr) => {{
+            let args = if $method == "get_pool_liability" { $args } else {
+                let mut scoped = json!({"company_id":company});
+                scoped.as_object_mut().unwrap().extend($args.as_object().unwrap().clone());
+                scoped
+            };
+            actual_call(instance, calls, $caller, $method, args, $deposit, $error, $promise)
+        }};
+    }
+    macro_rules! ok {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr) => {
+            invoke!($caller, $method, $args, $deposit, None, None)
+        };
+    }
+    macro_rules! read {
+        ($method:expr, $args:expr) => {
+            ok!("reader.near", $method, $args, 0)
+        };
+    }
+    macro_rules! reject {
+        ($caller:expr, $method:expr, $args:expr, $deposit:expr, $error:expr) => {
+            invoke!($caller, $method, $args, $deposit, Some($error), None)
+        };
+    }
+    macro_rules! callback {
+        ($args:expr, $success:expr) => {
+            invoke!(
+                "treasury.near",
+                "on_transfer_result",
+                $args,
+                0,
+                None,
+                Some(if $success { Ok(Vec::new()) } else { Err(()) })
+            )
+        };
+    }
+    let balance_before = read!("get_balance", json!({}))["balance"]
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .unwrap();
+    let other_balance = read!("get_balance", json!({"company_id":other_company}));
+    let pool_before = read!("get_pool_liability", json!({"token_contract":TOKEN}))
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .unwrap();
+    ok!("alice.near", "add_storage", json!({}), YOCTO);
+    for (account, role) in [("agent.near", "executor"), ("finance.near", "approver")] {
+        ok!(
+            "alice.near",
+            "set_role",
+            json!({"account_id":account,"role":role,"enabled":true}),
+            1
+        );
+    }
+    let policy = read!("get_config", json!({}));
+    ok!(
+        "alice.near",
+        "set_approval_policy",
+        json!({"expected_policy_version":policy["policy_version"],
+        "tiers":[{"up_to":"1000000","required_approvals":1},{"up_to":"200000000","required_approvals":2}]}),
+        1
+    );
+    ok!(
+        "alice.near",
+        "set_recipient",
+        json!({"recipient_id":"standing-vendor",
+        "primary":{"asset_id":format!("nep141:{TOKEN}"),"network":"near","address":"vendor.near"},
+        "backup":null,"backup_consent":false,"active":true}),
+        1
+    );
+    let terms = json!({"id":"native-vendor-grant","recipient_id":"standing-vendor","recipient_version":"1",
+        "supplier_profile_hash":"a".repeat(64),"actor_id":"agent.near","actor_public_key":public_key,
+        "per_payment_max_input":"200000","period_max_input":"300000","lifetime_max_input":"450000",
+        "period_ms":day_ms.to_string(),"valid_from_ms":NOW_MS.to_string(),
+        "expires_at_ms":(NOW_MS+10*day_ms).to_string(),"invoice_condition":"accepted_vendor_bill_application_gate"});
+    reject!(
+        "agent.near",
+        "grant_standing_mandate",
+        json!({"terms":terms}),
+        1,
+        "ONLY_OWNER"
+    );
+    let grant = ok!(
+        "alice.near",
+        "grant_standing_mandate",
+        json!({"terms":terms}),
+        1
+    );
+    assert_eq!(grant["terms"], terms);
+    assert_eq!(grant["required_approvals"], 2);
+    assert_eq!(grant["approvals"], json!(["alice.near"]));
+    assert!(
+        read!(
+            "get_standing_mandate",
+            json!({"company_id":other_company,"mandate_id":"native-vendor-grant"})
+        )
+        .is_null()
+    );
+    let execute = |payment: &str, attempt: &str, amount: &str| {
+        json!({"mandate_id":"native-vendor-grant",
+        "payment_id":payment,"attempt_id":attempt,"amount":amount,"max_fee":"10000",
+        "reference":format!("bill:{payment}"),"expected_terms_hash":grant["terms_hash"],"execution_hash":"b".repeat(64)})
+    };
+    instance.signer_account_pk = actor_key.clone();
+    instance.now_ms = NOW_MS + day_ms - 1;
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("cooldown", "cooldown-attempt", "190000"),
+        0,
+        "RECIPIENT_COOLDOWN"
+    );
+    instance.now_ms += 1;
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("quorum", "quorum-attempt", "190000"),
+        0,
+        "MANDATE_QUORUM_NOT_MET"
+    );
+    let approved = ok!(
+        "finance.near",
+        "approve_standing_mandate",
+        json!({"mandate_id":"native-vendor-grant","expected_terms_hash":grant["terms_hash"]}),
+        1
+    );
+    assert_eq!(approved["approvals"], json!(["alice.near", "finance.near"]));
+    reject!(
+        "stranger.near",
+        "execute_standing_payment",
+        execute("actor", "actor-attempt", "190000"),
+        0,
+        "MANDATE_ACTOR_KEY_MISMATCH"
+    );
+    instance.signer_account_pk = vec![0; 33];
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("key", "key-attempt", "190000"),
+        0,
+        "MANDATE_ACTOR_KEY_MISMATCH"
+    );
+    instance.signer_account_pk = actor_key;
+    let first = execute("standing-old", "standing-old-attempt", "190000");
+    let action_start = instance.external.action_log.len();
+    ok!("agent.near", "execute_standing_payment", first.clone(), 0);
+    assert_native_transfer_actions(
+        instance,
+        action_start,
+        company,
+        "standing-old",
+        "standing-old-attempt",
+    );
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        first,
+        0,
+        "PAYMENT_EXISTS"
+    );
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("payment-limit", "payment-limit-attempt", "200000"),
+        0,
+        "MANDATE_PAYMENT_LIMIT"
+    );
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("period-limit", "period-limit-attempt", "100001"),
+        0,
+        "MANDATE_PERIOD_LIMIT"
+    );
+    let payment = read!("get_payment", json!({"payment_id":"standing-old"}));
+    assert_eq!(payment["approvals"], json!([]));
+    assert_eq!(payment["attempts"][0]["route"]["kind"], "direct");
+    assert_eq!(
+        payment["attempts"][0]["route"]["source_receiver"],
+        "vendor.near"
+    );
+    assert_eq!(payment["attempts"][0]["route"]["input_amount"], "190000");
+    assert_eq!(payment["attempts"][0]["route"]["output_amount"], "190000");
+    let usage = read!(
+        "get_standing_mandate",
+        json!({"mandate_id":"native-vendor-grant"})
+    );
+    assert_eq!(usage["period_used_input"], "200000");
+    assert_eq!(usage["lifetime_used_input"], "200000");
+    assert_eq!(usage["pending_input"], "200000");
+    instance.now_ms = NOW_MS + 2 * day_ms;
+    let action_start = instance.external.action_log.len();
+    ok!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("standing-new", "standing-new-attempt", "190000"),
+        0
+    );
+    assert_native_transfer_actions(
+        instance,
+        action_start,
+        company,
+        "standing-new",
+        "standing-new-attempt",
+    );
+    let pending = read!("get_balance", json!({}));
+    assert_eq!(pending["balance"], (balance_before - 380000).to_string());
+    assert_eq!(pending["in_flight"], "380000");
+    assert_eq!(
+        read!("get_pool_liability", json!({"token_contract":TOKEN})),
+        pool_before.to_string()
+    );
+    let old_callback = json!({"payment_id":"standing-old","attempt_id":"standing-old-attempt"});
+    assert_eq!(callback!(old_callback.clone(), false), false);
+    assert_eq!(callback!(old_callback, false), false);
+    let returned = read!("get_balance", json!({}));
+    assert_eq!(returned["balance"], (balance_before - 190000).to_string());
+    assert_eq!(returned["reserved"], "200000");
+    assert_eq!(returned["in_flight"], "190000");
+    let usage = read!(
+        "get_standing_mandate",
+        json!({"mandate_id":"native-vendor-grant"})
+    );
+    assert_eq!(usage["period_index"], "2");
+    assert_eq!(usage["period_used_input"], "200000");
+    assert_eq!(usage["lifetime_used_input"], "400000");
+    assert_eq!(usage["pending_input"], "200000");
+    reject!(
+        "agent.near",
+        "execute_standing_payment",
+        execute("lifetime-limit", "lifetime-limit-attempt", "40001"),
+        0,
+        "MANDATE_LIFETIME_LIMIT"
+    );
+    let new_callback = json!({"payment_id":"standing-new","attempt_id":"standing-new-attempt"});
+    assert_eq!(callback!(new_callback.clone(), true), true);
+    let final_balance = read!("get_balance", json!({}));
+    assert_eq!(callback!(new_callback, true), false);
+    assert_eq!(read!("get_balance", json!({})), final_balance);
+    assert_eq!(
+        final_balance["balance"],
+        (balance_before - 190000).to_string()
+    );
+    assert_eq!(final_balance["in_flight"], "0");
+    assert_eq!(
+        read!("get_pool_liability", json!({"token_contract":TOKEN})),
+        (pool_before - 190000).to_string()
+    );
+    assert_eq!(
+        read!("get_balance", json!({"company_id":other_company})),
+        other_balance
+    );
+    let usage = read!(
+        "get_standing_mandate",
+        json!({"mandate_id":"native-vendor-grant"})
+    );
+    assert_eq!(usage["pending_input"], "0");
+    assert_eq!(usage["lifetime_used_input"], "400000");
+    assert_eq!(
+        read!("get_payment", json!({"payment_id":"standing-old"}))["status"],
+        "held"
+    );
+    assert_eq!(
+        read!("get_payment", json!({"payment_id":"standing-new"}))["status"],
+        "paid"
+    );
+    json!({"owner_grant_highest_quorum_and_actor_key":true,"recipient_cooldown_boundary":true,
+        "native_transfer_duplicate_and_budget_holds":true,"late_callback_conservation_and_replay":true})
 }
 
 fn check_shared_clearing(directory: &Path) -> Value {
