@@ -206,7 +206,7 @@ Acceptance: the dedicated NEAR billing contract accepts each signed invoice once
 
 ## Later extensions
 
-Receivable financing and lender auctions, fiat bank payouts, tax engines, statutory payroll, full ERP synchronization and general agent procurement remain separate from the initial core completion count. Their requested expansion is now explicitly tracked, together with company services and private tenders, in [competitive extension requirements](competitive-gap-checklist.md). They require their stated contracts, partner/service scope and integration evidence before appearing as supported functionality; inclusion in the checklist alone does not enable them.
+Receivable financing and lender auctions, full ERP synchronization and bounded agent procurement remain active competitive extensions separate from the initial core completion count. Fiat bank funding/payouts and off-ramps, tax engines, statutory payroll, employer services and legal company formation are deferred outside this crypto release. Their requested expansion is now explicitly tracked, together with company services and private tenders, in [competitive extension requirements](competitive-gap-checklist.md). They require their stated contracts, partner/service scope and integration evidence before appearing as supported functionality; inclusion in the checklist alone does not enable them.
 
 See [NEAR track alignment](near-track-alignment.md) for the evidence these product features must provide in a hackathon demonstration.
 

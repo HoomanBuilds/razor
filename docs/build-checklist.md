@@ -2,9 +2,11 @@
 
 Use this document to compare the actual build with the intended product throughout development.
 
-Track the separately authorized competitive improvements in the [competitive feature checklist](specs/competitive-gap-checklist.md). Its 22 workstreams preserve every identified gap with granular acceptance IDs and their own evidence log. Review it alongside this checklist throughout implementation; no existing verified box changes merely because scope expands.
+Track the separately authorized competitive improvements in the [competitive feature checklist](specs/competitive-gap-checklist.md). It preserves 22 workstreams with granular acceptance IDs and an evidence log; 19 are active for this crypto release, while banking, statutory services and legal formation are explicitly deferred. Review it alongside this checklist throughout implementation; no existing verified box changes merely because scope expands.
 
 The 14 November extension review records 42 verified acceptance checks in that companion. Final app `ba5101f` passes 543 application checks, full typecheck and memory-capped production build. Five latest browser journeys cover supplier credits, stale-review protection, commercial quote comparison, full-quantity matching and company cost reports; all six new mobile views measure 390 px. Contract source `893e470` subsequently passed 89 native checks and 178 differential WASM scenario calls per artifact set, plus 11 application artifact/deployment/storage checks. Storage layout and financial behavior match the preserved baseline; only measured local optimization is claimed. Real provider/private inference, deployed owner wallets, canonical-token funding and settlement remain open. The baseline verification count below is unchanged; every remaining competitive workstream stays tracked in the companion.
+
+Release scope: crypto operations only. Local-currency bank payments, fiat funding/off-ramps, statutory tax/payroll services and legal formation are deferred and excluded from release completion. USDC accounting and backup payouts do not imply USD bank delivery.
 
 Product: a NEAR-based company payments and payroll platform with easy onboarding, connected source wallets, supported-asset funding, recipient preferences, USDC backup, private financial analysis and optional business netting.
 
@@ -226,7 +228,7 @@ These checks support claims described in [NEAR track alignment](specs/near-track
 
 ## Later extensions
 
-Receivable financing, fiat bank payouts, tax and statutory payroll services, full ERP synchronization and general agent procurement remain outside the current core completion count. These and the other competitive extensions now have approved tracking scope and acceptance criteria in the [competitive feature checklist](specs/competitive-gap-checklist.md). Leave every unverified extension open until its stated behavior and required provider/contract evidence are demonstrated; planning alone cannot establish availability.
+Receivable financing, full ERP synchronization and bounded agent procurement remain active competitive extensions outside the original core completion count. Fiat bank funding/payouts and off-ramps, statutory payroll/tax and employer services, and legal company formation are deferred by the explicit crypto-only release decision. The [competitive feature checklist](specs/competitive-gap-checklist.md) preserves their 21 IDs as deferred reference, excluded from its 146 active release checks. Leave every unverified active extension open until its stated behavior and required integration/contract evidence are demonstrated; a scope change does not establish availability.
 
 ## Review log and evidence
 

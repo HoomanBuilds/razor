@@ -154,7 +154,7 @@ Before committing to a provider, demonstrate a new user login, a real NEAR-autho
 
 ## Scope boundaries
 
-Payroll means payroll payment operations and payment records. Tax calculation, statutory filing, employer-of-record services and fiat bank payouts require separate products or integrations.
+Payroll means crypto payroll payment operations and payment records using company-supplied amounts. This release does not offer INR/USD bank payouts, fiat funding/off-ramps, tax calculation or filing, employer-of-record services or legal company formation. Those services are explicitly deferred outside release completion. USDC is a crypto settlement/accounting asset, not a promise of USD bank delivery.
 
 Confidential application data does not imply every blockchain transfer is hidden. Confidential settlement is claimed only for verified supported routes. Reserved company payment funds are not allocated to speculative trading or yield strategies.
 
