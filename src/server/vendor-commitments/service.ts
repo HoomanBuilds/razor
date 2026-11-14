@@ -23,7 +23,7 @@ type CommitmentInput = z.infer<typeof commitmentInput>;
 export type BillCommitmentInput = z.infer<z.ZodObject<typeof billCommitmentFields>>;
 interface Commitment { id: string; organization_id: string; recipient_id: string; reference: string; state: string; current_version: number | null; pending_version: number | null; created_at: string; updated_at: string }
 interface Version { commitment_id: string; version: number; settlement_unit: string; supplier_version: number; supplier_user_id: string | null; supplier_name_ciphertext: string; scope_ciphertext: string; allowance: string; cadence: "total" | "monthly"; starts_on: string; ends_on: string; target_state: string; reason_ciphertext: string; proposed_by: string; proposed_at: string; approved_by: string | null; approved_at: string | null; withdrawn_by: string | null; withdrawn_at: string | null }
-interface Bill { id: string; recipient_id: string; amount: string; status: string; accepted_at: string | null; vendor_commitment_id: string | null; commitment_date: string | null; commitment_scope_confirmed: number; payment_id: string | null; setoff_amount: string }
+interface Bill { id: string; recipient_id: string; amount: string; status: string; accepted_at: string | null; vendor_commitment_id: string | null; commitment_date: string | null; commitment_scope_confirmed: number; payment_id: string | null; setoff_amount: string; funded_clearing_amount: string }
 interface Use { bill_id: string; commitment_id: string; version: number; period_key: string; amount: string; accepted_by: string; accepted_at: string }
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
@@ -65,11 +65,11 @@ function settlement(billId: string) {
 export function getCommitment(access: AccessContext, id: string) {
   requirePermission(access, "payments:read");
   const value = commitment(access.organizationId, id), terms = value.current_version ? version(id, value.current_version) : null;
-  const uses = useRows(id).map(use => ({ ...use, paid: settlement(use.bill_id).toString(), setoff: bill(access.organizationId, use.bill_id).setoff_amount }));
+  const uses = useRows(id).map(use => { const invoice = bill(access.organizationId, use.bill_id); return { ...use, paid: settlement(use.bill_id).toString(), setoff: invoice.setoff_amount, fundedClearingAmount: invoice.funded_clearing_amount }; });
   const period = terms ? periodFor(terms, today()) : "total", used = usedIn(id, period);
   return { ...value, current: terms ? readable(terms) : null, versions: rows<Version>("SELECT * FROM vendor_commitment_versions WHERE commitment_id=? ORDER BY version DESC", id).map(readable), uses,
     period, used: used.toString(), remaining: terms ? (BigInt(terms.allowance) - used).toString() : "0", totalInvoiced: uses.reduce((sum, use) => sum + BigInt(use.amount), 0n).toString(),
-    paid: uses.reduce((sum, use) => sum + BigInt(use.paid), 0n).toString(), setoff: uses.reduce((sum, use) => sum + BigInt(use.setoff), 0n).toString(),
+    paid: uses.reduce((sum, use) => sum + BigInt(use.paid), 0n).toString(), setoff: uses.reduce((sum, use) => sum + BigInt(use.setoff), 0n).toString(), fundedClearingAmount: uses.reduce((sum, use) => sum + BigInt(use.fundedClearingAmount), 0n).toString(),
     supplierProfile: supplier(access.organizationId, value.recipient_id), policy: "payments:approve", enforcement: "application_review_gate", timeBasis: "UTC invoice service date; calendar-month reset; no rollover", cancellationRule: "Accepted invoice value is retained permanently, including after cancellation, dispute, route failure or setoff. Cancellation blocks new invoice commitments.",
   };
 }
@@ -213,7 +213,7 @@ export function matchBillCommitment(access: AccessContext, billId: string, input
     assertProcurementRematch(access.organizationId, billId, resolved.id);
     if (invoice.vendor_commitment_id && invoice.vendor_commitment_id !== resolved.id) requirePermission(access, "payments:approve");
     if (invoice.payment_id) assertNoActiveClearing(access.organizationId, invoice.payment_id);
-    if (invoice.accepted_at || invoice.setoff_amount !== "0" || row("SELECT bill_id FROM vendor_commitment_uses WHERE bill_id=?", billId) || row("SELECT p.id FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND (p.approved_at IS NOT NULL OR p.status NOT IN ('draft','cancelled') OR p.reserved_amount!='0' OR p.total_spent!='0' OR p.delivered_amount!='0' OR EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id))", billId)) throw new ApiError(409, "Only an invoice that has never been accepted or funded can change its purchase match", "COMMITMENT_MATCH_LOCKED");
+    if (invoice.accepted_at || invoice.setoff_amount !== "0" || invoice.funded_clearing_amount !== "0" || row("SELECT bill_id FROM clearing_funded_discharges WHERE organization_id=? AND bill_id=?", access.organizationId, billId) || row("SELECT bill_id FROM vendor_commitment_uses WHERE bill_id=?", billId) || row("SELECT p.id FROM bill_installments i JOIN payments p ON p.id=i.payment_id WHERE i.bill_id=? AND (p.approved_at IS NOT NULL OR p.status NOT IN ('draft','cancelled') OR p.reserved_amount!='0' OR p.total_spent!='0' OR p.delivered_amount!='0' OR EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id))", billId)) throw new ApiError(409, "Only an invoice that has never been accepted or funded can change its purchase match", "COMMITMENT_MATCH_LOCKED");
     db.prepare("UPDATE bills SET vendor_commitment_id=?,commitment_date=?,commitment_scope_confirmed=?,updated_at=? WHERE id=?").run(resolved.id, resolved.date, resolved.confirmed, now(), billId);
     audit(access, "commitment.invoice_matched", resolved.id, { billId, previousCommitmentId: invoice.vendor_commitment_id, reasonCiphertext: encrypt(reason) });
     return billCommitmentReview(access.organizationId, billId);
@@ -227,7 +227,7 @@ export function commitmentExport(access: AccessContext) {
     if (/^[\s\u0000-\u001f\u007f\uFEFF]*[=+@-]/.test(text)) text = "'" + text;
     return `"${text.replaceAll('"', '""')}"`;
   };
-  const headers = ["record_type", "commitment_id", "reference", "supplier_id", "supplier_name", "supplier_profile_version", "version", "state", "allowance_micro_usdc", "cadence", "starts_on_utc", "ends_on_utc", "scope", "reason", "proposed_by", "proposed_at", "approved_by", "approved_at", "withdrawn_by", "withdrawn_at", "bill_id", "period", "invoiced_micro_usdc", "paid_micro_usdc", "setoff_micro_usdc", "classification"];
+  const headers = ["record_type", "commitment_id", "reference", "supplier_id", "supplier_name", "supplier_profile_version", "version", "state", "allowance_micro_usdc", "cadence", "starts_on_utc", "ends_on_utc", "scope", "reason", "proposed_by", "proposed_at", "approved_by", "approved_at", "withdrawn_by", "withdrawn_at", "bill_id", "period", "invoiced_micro_usdc", "paid_micro_usdc", "setoff_micro_usdc", "classification", "funded_clearing_discharge_micro_usdc"];
   return transaction(() => {
     const records: Record<string, unknown>[] = [];
     for (const value of rows<Commitment>("SELECT * FROM vendor_commitments WHERE organization_id=? ORDER BY created_at,id", access.organizationId)) {
@@ -238,7 +238,7 @@ export function commitmentExport(access: AccessContext) {
           proposed_by: terms.proposed_by, proposed_at: terms.proposed_at, approved_by: terms.approved_by, approved_at: terms.approved_at, withdrawn_by: terms.withdrawn_by, withdrawn_at: terms.withdrawn_at, classification: "application_review_gate; not cash or delivered payment" });
       }
       for (const use of useRows(value.id)) records.push({ ...common, record_type: "accepted_invoice", version: use.version, state: value.state, approved_by: use.accepted_by, approved_at: use.accepted_at,
-        bill_id: use.bill_id, period: use.period_key, invoiced_micro_usdc: use.amount, paid_micro_usdc: settlement(use.bill_id).toString(), setoff_micro_usdc: bill(access.organizationId, use.bill_id).setoff_amount, classification: "permanent commercial use; microUSDC" });
+        bill_id: use.bill_id, period: use.period_key, invoiced_micro_usdc: use.amount, paid_micro_usdc: settlement(use.bill_id).toString(), setoff_micro_usdc: bill(access.organizationId, use.bill_id).setoff_amount, funded_clearing_discharge_micro_usdc: bill(access.organizationId, use.bill_id).funded_clearing_amount, classification: "permanent commercial use; microUSDC" });
     }
     return [headers.map(cell).join(","), ...records.map(record => headers.map(header => cell(record[header])).join(","))].join("\n");
   });

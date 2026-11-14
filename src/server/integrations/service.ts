@@ -123,16 +123,17 @@ export function canonicalTerms(value: unknown): string {
 
 function paymentView(access: AccessContext, id: string) {
   const item = getPayment(access, id);
+  const retired = row<{ round_id: string; amount: string; mode: "cash_backed_native_v1" }>("SELECT round_id,amount,mode FROM clearing_funded_discharges WHERE original_payment_id=? AND organization_id=?", id, access.organizationId);
   return { id: item.id, recipientId: item.recipient_id, reference: item.reference, amount: item.amount, maxFee: item.max_fee, status: item.status,
-    deliveredAmount: item.delivered_amount, scheduledFor: item.scheduled_for, createdAt: item.created_at, updatedAt: item.updated_at };
+    deliveredAmount: item.delivered_amount, fundedDischarge: retired ? { roundId: retired.round_id, amount: retired.amount, mode: retired.mode } : null, scheduledFor: item.scheduled_for, createdAt: item.created_at, updatedAt: item.updated_at };
 }
 function invoiceView(access: AccessContext, id: string) {
   const item = row<{ id: string; recipient_id: string; reference: string; title: string; amount: string; max_fee: string; due_date: string | null; status: string; payment_id: string | null; created_at: string; updated_at: string }>("SELECT id,recipient_id,reference,title,amount,max_fee,due_date,status,payment_id,created_at,updated_at FROM bills WHERE id=? AND organization_id=?", id, access.organizationId);
   if (!item) throw new ApiError(404, "Invoice not found", "NOT_FOUND");
-  const terms = getBillTerms(access, id), delivered = BigInt(terms.paid), setoff = BigInt(terms.setoffAmount), remaining = BigInt(terms.remainingLiability);
-  const status = item.status === "disputed" ? "disputed" : remaining === 0n ? setoff > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : setoff > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : item.status;
+  const terms = getBillTerms(access, id), delivered = BigInt(terms.paid), setoff = BigInt(terms.setoffAmount), funded = BigInt(terms.fundedClearingAmount), discharged = setoff + funded, remaining = BigInt(terms.remainingLiability);
+  const status = item.status === "disputed" ? "disputed" : remaining === 0n ? discharged > 0n ? delivered > 0n ? "settled" : "cleared" : "paid" : discharged > 0n ? "partially_settled" : delivered > 0n ? "partially_paid" : item.status;
   return { id: item.id, recipientId: item.recipient_id, reference: item.reference, title: decrypt(item.title), amount: item.amount, maxFee: item.max_fee,
-    dueDate: item.due_date, status, paymentId: item.payment_id, deliveredAmount: terms.paid, setoffAmount: terms.setoffAmount, remainingLiability: terms.remainingLiability, createdAt: item.created_at, updatedAt: [item.updated_at, ...terms.installments.map(payment => payment.updated_at)].sort().at(-1)! };
+    dueDate: item.due_date, status, paymentId: item.payment_id, deliveredAmount: terms.paid, setoffAmount: terms.setoffAmount, fundedClearingAmount: terms.fundedClearingAmount, remainingLiability: terms.remainingLiability, createdAt: item.created_at, updatedAt: [item.updated_at, ...terms.installments.map(payment => payment.updated_at)].sort().at(-1)! };
 }
 function recipientView(access: AccessContext, id: string) {
   const item = getRecipient(access.organizationId, id);

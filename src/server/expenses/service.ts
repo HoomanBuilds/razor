@@ -126,10 +126,10 @@ function reimbursement(expense: Expense) {
   if (!expense.bill_id) return null;
   const terms = getBillTerms({ userId: expense.submitted_by, organizationId: expense.organization_id, permissions: ["payments:read"] }, expense.bill_id);
   const paid = BigInt(terms.paid), remaining = BigInt(terms.remainingLiability), latest = terms.installments.at(-1);
-  const status = paid >= BigInt(terms.amount) ? "paid" : terms.status === "disputed" ? "disputed" : remaining === 0n ? "discharged_by_setoff" : paid > 0n ? "partially_paid" : latest?.status ?? terms.status;
-  return { billId: expense.bill_id, status, billStatus: terms.status, amount: terms.amount, deliveredAmount: terms.paid, setoffAmount: terms.setoffAmount, remainingLiability: terms.remainingLiability,
+  const status = paid >= BigInt(terms.amount) ? "paid" : terms.status === "disputed" ? "disputed" : remaining === 0n ? BigInt(terms.fundedClearingAmount) > 0n ? "discharged_to_escrow" : "discharged_by_setoff" : paid > 0n ? "partially_paid" : latest?.status ?? terms.status;
+  return { billId: expense.bill_id, status, billStatus: terms.status, amount: terms.amount, deliveredAmount: terms.paid, setoffAmount: terms.setoffAmount, fundedClearingAmount: terms.fundedClearingAmount, remainingLiability: terms.remainingLiability,
     installments: terms.installments.map(item => ({ id: item.id, amount: item.amount, deliveredAmount: item.delivered_amount, status: item.status })),
-    needsReview: terms.amount !== expense.amount || BigInt(terms.setoffAmount) > 0n || terms.installments.some(item => item.status === "cancelled") };
+    needsReview: terms.amount !== expense.amount || BigInt(terms.setoffAmount) > 0n || BigInt(terms.fundedClearingAmount) > 0n || terms.installments.some(item => item.status === "cancelled") };
 }
 function projection(expense: Expense, sourceText = false) {
   return { id: expense.id, organizationId: expense.organization_id, companyName: row<{ name: string }>("SELECT name FROM organizations WHERE id=?", expense.organization_id)!.name,

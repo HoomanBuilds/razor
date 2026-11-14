@@ -79,6 +79,7 @@ function accountingSnapshot(access:AccessContext):string {
     project_reference: string | null;
     cost_center_reference: string | null;
     setoff_amount: string;
+    funded_clearing_amount: string;
   }>(
     "SELECT * FROM bills WHERE organization_id=? ORDER BY created_at,id",
     access.organizationId,
@@ -358,7 +359,7 @@ function accountingSnapshot(access:AccessContext):string {
     });
   }
   for (const bill of bills){
-    const related=installments.filter(item=>item.bill_id===bill.id).flatMap(item=>{const payment=paymentById.get(item.payment_id);return payment?[payment]:[];}),totals=liabilityTotals(bill.amount,related,bill.setoff_amount);
+    const related=installments.filter(item=>item.bill_id===bill.id).flatMap(item=>{const payment=paymentById.get(item.payment_id);return payment?[payment]:[];}),totals=liabilityTotals(bill.amount,related,bill.setoff_amount,bill.funded_clearing_amount);
     records.push({
       ...common(bill.payment_id ? paymentById.get(bill.payment_id) : undefined),
       record_type: "invoice",
@@ -376,6 +377,8 @@ function accountingSnapshot(access:AccessContext):string {
       entitlement_micro_usdc: bill.amount,
       setoff_usdc: usdc(bill.setoff_amount),
       setoff_micro_usdc: bill.setoff_amount,
+      funded_discharge_usdc: usdc(bill.funded_clearing_amount),
+      funded_discharge_micro_usdc: bill.funded_clearing_amount,
       max_cost_usdc: usdc(bill.max_fee),
       max_cost_micro_usdc: bill.max_fee,
       delivered_entitlement_usdc:usdc(totals.delivered.toString()),
@@ -533,6 +536,22 @@ function accountingSnapshot(access:AccessContext):string {
     "company_usdc_credit",
     "confirmed_by",
     "confirmed_at",
+    "funded_discharge_usdc",
+    "funded_discharge_micro_usdc",
+    "mode",
+    "stage",
+    "fixed_owner_destination",
+    "original_net_debit_micro_usdc",
+    "original_net_credit_micro_usdc",
+    "accepted_deposits_micro_usdc",
+    "creditor_credit_available_micro_usdc",
+    "creditor_credit_withdrawn_micro_usdc",
+    "cancellation_refund_available_micro_usdc",
+    "cancellation_refund_withdrawn_micro_usdc",
+    "pending_transfer",
+    "withdrawal_nonce",
+    "observed_block_height",
+    "observed_block_hash",
   ];
   return [
     headers.map(csvCell).join(","),

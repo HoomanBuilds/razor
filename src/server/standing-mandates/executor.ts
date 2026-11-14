@@ -32,8 +32,8 @@ export function assertStandingBill(access: AccessContext, payment: Payment, mand
   if (payment.scheduled_for && Date.parse(payment.scheduled_for) > Date.now()) throw new ApiError(409, "The bill is not due", "STANDING_NOT_DUE");
   assertNoActiveClearing(access.organizationId, payment.id);
   assertPaymentLiabilityApproved(access, payment);
-  const bill = row<{ id: string; accepted_at: string | null; amount: string; setoff_amount: string; vendor_commitment_id: string | null }>("SELECT id,accepted_at,amount,setoff_amount,vendor_commitment_id FROM bills WHERE payment_id=? AND organization_id=? AND recipient_id=? AND status='approved'", payment.id, access.organizationId, payment.recipient_id);
-  if (!bill?.accepted_at || bill.amount !== payment.amount || bill.setoff_amount !== "0") throw new ApiError(409, "A complete accepted vendor invoice is required. Cleared and partial bills use exact review", "STANDING_BILL_REQUIRED");
+  const bill = row<{ id: string; accepted_at: string | null; amount: string; setoff_amount: string; funded_clearing_amount: string; vendor_commitment_id: string | null }>("SELECT id,accepted_at,amount,setoff_amount,funded_clearing_amount,vendor_commitment_id FROM bills WHERE payment_id=? AND organization_id=? AND recipient_id=? AND status='approved'", payment.id, access.organizationId, payment.recipient_id);
+  if (!bill?.accepted_at || bill.amount !== payment.amount || bill.setoff_amount !== "0" || bill.funded_clearing_amount !== "0") throw new ApiError(409, "A complete accepted vendor invoice is required. Cleared and partial bills cannot use standing autopay", "STANDING_BILL_REQUIRED");
   const commitment = billCommitmentReview(access.organizationId, bill.id);
   if (commitment && (!commitment.accepted || commitment.problems.length)) throw new ApiError(409, "The named purchase commitment needs application review", "STANDING_COMMITMENT_REQUIRED");
   if (BigInt(payment.reserved_amount) < BigInt(payment.amount) + BigInt(payment.max_fee)) throw new ApiError(409, "Fund and reserve the complete accepted budget first", "STANDING_UNFUNDED");
