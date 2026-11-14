@@ -9,6 +9,7 @@ import { accountingExport } from "../reconciliation/export";
 import { liabilityPayments } from "../partial-settlement/model";
 import { assertNoActiveClearing } from "../clearing/locks";
 import { billCommitmentReview, consumeBillCommitment, resolveBillCommitment, type BillCommitmentInput } from "../vendor-commitments/service";
+import { assertOrdinaryExpenseSourceReview } from "../expenses/guard";
 
 type Bill = {
   id: string; organization_id: string; recipient_id: string; reference: string; title: string;
@@ -67,6 +68,7 @@ export function createBill(access: AccessContext, input: {
 } & BillCommitmentInput) {
   requirePermission(access, "payments:prepare");
   recipient(access, input.recipientId);
+  if (input.documentHash) assertOrdinaryExpenseSourceReview(access, input.documentHash);
   const value = amount(input.amount);
   const fee = amount(input.maxFee ?? "1000000", true);
   const purchase = resolveBillCommitment(access, input);

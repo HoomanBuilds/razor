@@ -13,6 +13,7 @@ import { getAssistantConfig, requirePrivateAiConfig } from "../assistant/config"
 import { parseUnits } from "../../lib/money";
 import { DOCUMENT_LIMITS, documentFilename, documentRetentionDays, mediaTypes, validateDocument, type DocumentKind } from "./limits";
 import { documentImages, extractDocumentText, processorReadiness } from "./processor";
+import { assertOrdinaryExpenseDocumentReview } from "../expenses/guard";
 
 interface StoredDocument {
   id: string; organization_id: string; created_by: string; filename_ciphertext: string;
@@ -183,6 +184,7 @@ export function reviewDocument(access: AccessContext, id: string, input: z.infer
   const parsed = documentReviewInput.parse(input);
   return transaction(db => {
     const value = getStored(access, id);
+    assertOrdinaryExpenseDocumentReview(access, id);
     if (value.source_hash !== parsed.sourceHash) throw new ApiError(409, "The reviewed source does not match this file", "DOCUMENT_CHANGED");
     const { revision: _revision, ...terms } = parsed;
     if (value.bill_id) {

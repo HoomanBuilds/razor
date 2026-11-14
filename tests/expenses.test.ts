@@ -15,6 +15,7 @@ import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import { deleteDocument, getDocument, reviewDocument, saveDocumentText, uploadDocument } from "../src/server/document-intake/service";
 import { assertOrdinaryExpenseDocumentReview, assertOrdinaryExpenseSourceReview } from "../src/server/expenses/guard";
 import { personalExpenseRoutes } from "../src/server/expenses";
+import { createBill } from "../src/server/business/service";
 import { cancelExpense, companyExpense, companyExpenseOriginal, correctExpense, expenseInput, getExpensePolicy, listCompanyExpenses, ownExpense, ownExpenseOriginal, personalExpenseOverview, reviewExpense, saveExpensePolicy, submitExpense } from "../src/server/expenses/service";
 
 process.env.DATABASE_PATH = ":memory:";
@@ -156,6 +157,8 @@ test("the ordinary document guard protects the source-hash extraction window bef
   const source = row<{ id: string }>("SELECT id FROM invoice_documents WHERE organization_id=? AND source_hash=?", f.organizationId, pending.source_hash)!;
   assert.throws(() => assertOrdinaryExpenseDocumentReview(f.access, source.id), hasCode("EXPENSE_REVIEW_REQUIRED"));
   assert.throws(() => assertOrdinaryExpenseSourceReview(f.access, pending.source_hash), hasCode("EXPENSE_REVIEW_REQUIRED"));
+  assert.throws(() => createBill(f.access, { recipientId: f.recipientId, reference: "ordinary-expense-bypass", title: "Ordinary receipt bill", amount: "1", documentHash: pending.source_hash }), hasCode("EXPENSE_REVIEW_REQUIRED"));
+  assert.throws(() => reviewDocument(f.access, source.id, { revision: 1, sourceHash: pending.source_hash, recipientId: f.recipientId, reference: "document-expense-bypass", title: "Ordinary receipt review", agreedUSDC: "1", maxFee: "0", reviewConfirmed: true }), hasCode("EXPENSE_REVIEW_REQUIRED"));
   const result = await promise;
   assert.throws(() => assertOrdinaryExpenseDocumentReview(f.access, source.id), hasCode("EXPENSE_REVIEW_REQUIRED"));
   review({ ...f, fields: input(), source: file(), expense: result.expense }, "accept");

@@ -17,10 +17,10 @@ function ExpenseFields({ value }: { value?: Expense }) {
   return <><Field label="Merchant"><input name="merchant" className={control} required maxLength={160} defaultValue={value?.fields.merchant} /></Field><Field label="Receipt number or reference"><input name="reference" className={control} required maxLength={120} defaultValue={value?.fields.receiptReference} /></Field><Field label="Receipt date"><input name="date" type="date" className={control} required defaultValue={value?.fields.expenseDate ?? new Date().toISOString().slice(0, 10)} /></Field><Field label="Requested reimbursement (USDC)" hint="Explicitly agree this amount. Receipt currencies are never converted automatically."><input name="amount" className={control} required inputMode="decimal" defaultValue={value?.fields.amountUSDC} /></Field><Field label="Cost centre"><input name="center" className={control} maxLength={120} defaultValue={value?.fields.costCenter} /></Field><div className="sm:col-span-2"><Field label="Business purpose"><textarea name="purpose" className={control} required minLength={3} maxLength={2000} rows={2} defaultValue={value?.fields.purpose} /></Field></div></>;
 }
 
-export function PersonalExpenses() {
+export function PersonalExpenses({ refreshRevision = 0 }: { refreshRevision?: number }) {
   const [revision, setRevision] = useState(0), [page, setPage] = useState(1), [requestKey, setRequestKey] = useState("");
   const [profileId, setProfileId] = useState(""), [replacementId, setReplacementId] = useState("");
-  const resource = useResource<Overview>(`/personal-expenses?page=${page}`, revision), { busy, error, run } = useAction();
+  const resource = useResource<Overview>(`/personal-expenses?page=${page}`, revision + refreshRevision), { busy, error, run } = useAction();
   const [notice, setNotice] = useState("");
   const refresh = () => setRevision(value => value + 1), data = resource.data;
   const replacing = data?.expenses.find(expense => expense.id === replacementId);

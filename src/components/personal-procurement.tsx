@@ -21,9 +21,9 @@ function QuoteForm({ request, busy, onSubmit }: { request: Request; busy: boolea
   </form>;
 }
 
-export function PersonalProcurement({ basePath = "/supplier-procurement" }: { basePath?: string }) {
+export function PersonalProcurement({ basePath = "/supplier-procurement", refreshRevision = 0 }: { basePath?: string; refreshRevision?: number }) {
   const [revision, setRevision] = useState(0), [notice, setNotice] = useState("");
-  const { data, loading, error: loadError } = useResource<{ requests: Request[] }>(basePath, revision), { busy, error, run } = useAction();
+  const { data, loading, error: loadError } = useResource<{ requests: Request[] }>(basePath, revision + refreshRevision), { busy, error, run } = useAction();
   return <Panel title="Supplier sourcing invitations" description="Only RFQs addressed to your currently confirmed business profiles appear here. Other suppliers' bids and company finances remain private.">
     <div className="grid min-w-0 grid-cols-1 gap-4">
       {loading ? <Empty>Loading your eligible sourcing requests...</Empty> : !data?.requests.length ? <Empty>No eligible supplier requests. A company must add and authorize your confirmed business profile first.</Empty> : data.requests.map(request => <article key={`${request.id}:${request.recipientId}`} className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">

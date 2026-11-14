@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
+  Boxes,
+  BookOpen,
   Building2,
   CalendarDays,
   CreditCard,
+  Gift,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -46,6 +49,12 @@ import { OperationsPanel } from "./operations";
 import { PaymentManagementPanel } from "./payment-management";
 import { CompanySettings, ActivityLog, Assistant } from "./settings";
 import { Billing, BillingAccessNotice } from "./billing";
+import { ExpensesPanel } from "./expenses";
+import { ProcurementPanel } from "./procurement";
+import { VendorCommitments } from "./vendor-commitments";
+import { DistributionsPanel } from "./distributions";
+import { CompanyPrivateProcessing } from "./company-private";
+import { AccountingPanel } from "./accounting";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -54,11 +63,15 @@ const navigation = [
   { id: "payments", title: "Payments", icon: Wallet },
   { id: "payroll", title: "Payroll", icon: CalendarDays },
   { id: "bills", title: "Bills", icon: ReceiptText },
+  { id: "expenses", title: "Expenses", icon: CreditCard },
+  { id: "procurement", title: "Purchasing", icon: Boxes },
+  { id: "distributions", title: "Distributions", icon: Gift },
   { id: "clearing", title: "Business clearing", icon: Building2 },
   { id: "recipients", title: "Payees", icon: Users },
   { id: "treasury", title: "Treasury", icon: Building2 },
   { id: "assistant", title: "Private assistant", icon: Sparkles },
   { id: "activity", title: "Activity & reports", icon: Activity },
+  { id: "accounting", title: "Accounting", icon: BookOpen },
   { id: "billing", title: "Billing & plans", icon: CreditCard },
   { id: "settings", title: "Company settings", icon: Settings2 },
 ] as const;
@@ -431,6 +444,14 @@ function CompanyWorkspace({
         </div>
       ) : section === "payroll" ? (
         <Payroll />
+      ) : section === "expenses" ? (
+        <ExpensesPanel />
+      ) : section === "distributions" ? (
+        <DistributionsPanel />
+      ) : section === "accounting" ? (
+        <AccountingPanel />
+      ) : section === "procurement" ? (
+        <div className="grid gap-6"><ProcurementPanel /><VendorCommitments /></div>
       ) : section === "bills" ? (
         <div className="grid gap-6">
           <InvoiceInbox />
@@ -449,7 +470,7 @@ function CompanyWorkspace({
           <FundingRequestsPanel />
         </div>
       ) : section === "assistant" ? (
-        <Assistant />
+        <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
       ) : section === "activity" ? (
         <div className="grid gap-6"><ActivityLog /><ProjectReportsPanel /></div>
       ) : section === "billing" ? (

@@ -32,6 +32,11 @@ import { invoiceChannelRoutes, invoiceIngressRoutes } from "./invoice-channels";
 import { vendorCommitmentRoutes } from "./vendor-commitments";
 import { integrationMachineRoutes, integrationManagementRoutes } from "./integrations";
 import { standingMandateRoutes } from "./standing-mandates";
+import { companyExpenseRoutes, personalExpenseRoutes } from "./expenses";
+import { procurementRoutes, supplierProcurementRoutes } from "./procurement";
+import { distributionRoutes, recipientDistributionRoutes } from "./distributions";
+import { companyPrivateRoutes } from "./company-private";
+import { accountingRoutes, accountingOAuthRoutes } from "./accounting";
 
 export const app = new Hono<AppEnv>().basePath("/api");
 app.use("*", async (c, next) => {
@@ -53,6 +58,7 @@ const defaultBodyLimit = bodyLimit({
 });
 app.use("*", async (c, next) => {
   if (c.req.path.startsWith("/api/invoice-ingress/")) return next();
+  if (c.req.method === "POST" && /^\/api\/personal-expenses\/profiles\/[^/]+\/upload$/.test(c.req.path)) return next();
   if (c.req.method === "POST" && /^\/api\/organizations\/[^/]+\/documents\/upload$/.test(c.req.path)) return next();
   return defaultBodyLimit(c, next);
 });
@@ -90,6 +96,10 @@ app.use("/assets", requireUser);
 app.use("/assets/*", requireUser);
 app.route("/assets", assetRoutes);
 app.route("/recipient-workspace", recipientWorkspaceRoutes);
+app.route("/personal-expenses", personalExpenseRoutes);
+app.route("/supplier-procurement", supplierProcurementRoutes);
+app.route("/recipient-distributions", recipientDistributionRoutes);
+app.route("/accounting-oauth", accountingOAuthRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/account", accountRecoveryRoutes);
 app.route("/funding-requests", publicFundingRoutes);
@@ -125,6 +135,11 @@ app.route("/organizations/:orgId/invoice-channels", invoiceChannelRoutes);
 app.route("/organizations/:orgId/vendor-commitments", vendorCommitmentRoutes);
 app.route("/organizations/:orgId/integrations", integrationManagementRoutes);
 app.route("/organizations/:orgId/standing-mandates", standingMandateRoutes);
+app.route("/organizations/:orgId/expenses", companyExpenseRoutes);
+app.route("/organizations/:orgId/procurement", procurementRoutes);
+app.route("/organizations/:orgId/distributions", distributionRoutes);
+app.route("/organizations/:orgId/company-private", companyPrivateRoutes);
+app.route("/organizations/:orgId/accounting", accountingRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),
 );
