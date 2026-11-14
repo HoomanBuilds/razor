@@ -34,7 +34,7 @@ function InvoiceSubmission({profiles,onSubmitted}:{profiles:Profile[];onSubmitte
     event.preventDefault();if(lock.current)return;lock.current=true;setPending(true);setError(null);setSuccess(false);
     const form=event.currentTarget,values=new FormData(form);
     try {
-      await identityRequest("/recipient-workspace/invoices",{recipientId:selected,reference:values.get("reference"),amount:values.get("amount"),currency,dueDate:values.get("dueDate") || undefined,lineItems,text:values.get("text") || undefined});
+      await identityRequest("/recipient-workspace/invoices",{recipientId:selected,reference:values.get("reference"),amount:values.get("amount"),currency,dueDate:values.get("dueDate") || undefined,commitmentReference:values.get("commitmentReference") || undefined,commitmentDate:values.get("commitmentDate") || undefined,lineItems,text:values.get("text") || undefined});
       await onSubmitted();form.reset();setLineItems([{description:"",quantity:"1",unitPrice:""}]);setSuccess(true);
     }catch(error){setError(walletErrorMessage(error));}finally{lock.current=false;setPending(false);}
   }
@@ -44,6 +44,8 @@ function InvoiceSubmission({profiles,onSubmitted}:{profiles:Profile[];onSubmitte
     <Field label="Invoice amount"><input name="amount" required inputMode="decimal" className={control} placeholder="0.00"/></Field>
     <Field label="Original invoice currency"><input required value={currency} onChange={event=>setCurrency(event.target.value.trim().toUpperCase())} pattern="[A-Z]{3,8}" maxLength={8} className={control} placeholder="USD, EUR, USDC..."/></Field>
     <Field label="Due date (optional)"><input type="date" name="dueDate" className={control}/></Field>
+    <Field label="Purchase commitment reference (optional)" hint="A named PO is preserved for company review."><input name="commitmentReference" className={control} maxLength={120}/></Field>
+    <Field label="Invoice service date (UTC)" hint="Required when naming a purchase commitment."><input name="commitmentDate" type="date" className={control}/></Field>
     <div className="sm:col-span-2 space-y-3"><p className="text-sm font-medium">Line items in {currency}</p>{lineItems.map((item,index)=><div key={index} className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[2fr_1fr_1fr_auto]">
       <Field label="Description"><input required maxLength={500} className={control} value={item.description} onChange={event=>setLineItems(current=>current.map((value,key)=>key===index?{...value,description:event.target.value}:value))}/></Field>
       <Field label="Quantity"><input required inputMode="decimal" className={control} value={item.quantity} onChange={event=>setLineItems(current=>current.map((value,key)=>key===index?{...value,quantity:event.target.value}:value))}/></Field>
