@@ -222,7 +222,7 @@ export function Bills() {
                     (recipient) => recipient.id === bill.recipient_id,
                   ))}
                 </td>
-                <td className="tabular-nums">{usd(bill.amount)}{BigInt(bill.setoffAmount) > 0n && <p className="mt-1 text-xs text-muted-foreground">{usd(bill.setoffAmount)} debt discharged<br/>{usd(bill.remainingLiability)} remains</p>}</td>
+                <td className="tabular-nums">{usd(bill.amount)}{BigInt(bill.setoffAmount) > 0n && <p className="mt-1 text-xs text-muted-foreground">Noncash setoff {usd(bill.setoffAmount)}</p>}{BigInt(bill.fundedClearingAmount ?? "0") > 0n && <p className="mt-1 text-xs text-muted-foreground">Escrow-backed settlement {usd(bill.fundedClearingAmount!)}<br/>Company credit rights are separate from delivered tokens.</p>}{(BigInt(bill.setoffAmount) > 0n || BigInt(bill.fundedClearingAmount ?? "0") > 0n) && <p className="mt-1 text-xs text-muted-foreground">Delivered {usd(bill.deliveredAmount)} · remaining {usd(bill.remainingLiability)}</p>}</td>
                 <td>{dateLabel(bill.due_date, organization.timezone)}</td>
                 <td>
                   <Status
