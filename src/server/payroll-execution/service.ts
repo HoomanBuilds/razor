@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
@@ -225,11 +226,11 @@ export async function beginRunBatch(access: AccessContext, runId: string, batchI
   return publicBatch(getBatch(access, runId, batchId));
 }
 
-function exactReceipt(result: FinalTransaction, expected: WalletTransaction) {
-  if (!result.status || !("SuccessValue" in result.status || "Failure" in result.status) || result.transaction?.receiver_id !== expected.receiverId || result.transaction.actions?.length !== expected.actions.length) return false;
+function exactReceipt(result: FinalTransaction, expected: WalletTransaction, hash: string, signer: string) {
+  if (result.final_execution_status !== "FINAL" || result.transaction?.hash !== hash || result.transaction.signer_id !== signer || !result.status || !("SuccessValue" in result.status || "Failure" in result.status) || result.transaction.receiver_id !== expected.receiverId || result.transaction.actions?.length !== expected.actions.length) return false;
   return result.transaction.actions.every((value, index) => {
     const action = value.FunctionCall as { method_name: string; args: string; gas?: string | number; deposit?: string } | undefined, expectedAction = expected.actions[index].params;
-    try { return !!action && action.method_name === expectedAction.methodName && String(action.gas) === expectedAction.gas && action.deposit === expectedAction.deposit && digest(JSON.parse(Buffer.from(action.args, "base64").toString())) === digest(expectedAction.args); } catch { return false; }
+    try { return !!action && action.method_name === expectedAction.methodName && String(action.gas) === expectedAction.gas && action.deposit === expectedAction.deposit && isDeepStrictEqual(JSON.parse(Buffer.from(action.args, "base64").toString()), expectedAction.args); } catch { return false; }
   });
 }
 
@@ -243,7 +244,7 @@ export async function reconcileRunBatch(access: AccessContext, runId: string, ba
       if (!Number.isInteger(receipt.index) || receipt.index < 0 || receipt.index >= data.transactions.length || !/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(receipt.hash)) throw new ApiError(422, "Supply a valid transaction index and NEAR hash", "BATCH_RECEIPT_INVALID");
       const previous = known.find(value => value.index === receipt.index);
       if (previous && previous.hash !== receipt.hash) throw new ApiError(409, "This action already has another transaction hash", "BATCH_RECEIPT_CONFLICT");
-      if (!previous) known.push(receipt);
+      if (!previous) known.push({ index: receipt.index, hash: receipt.hash });
     }
     db.prepare("UPDATE payroll_execution_batches SET status='reconciling',receipts_ciphertext=?,updated_at=? WHERE id=?").run(encrypt(JSON.stringify(known)), now(), batchId);
     return known;
@@ -256,7 +257,7 @@ export async function reconcileRunBatch(access: AccessContext, runId: string, ba
       try {
         if (!receipt.verified) {
           const result = await dependencies.receipt(config, receipt.hash, batch.signer_account);
-          if (!exactReceipt(result, entry.action)) throw new ApiError(409, "The final receipt does not match the reviewed wallet action", "BATCH_RECEIPT_MISMATCH");
+          if (!exactReceipt(result, entry.action, receipt.hash, batch.signer_account)) throw new ApiError(409, "The final receipt does not match the reviewed wallet action", "BATCH_RECEIPT_MISMATCH");
           receipt.verified = true; receipt.failed = !!result.status && "Failure" in result.status;
         }
         const attempt = getAttempt(access, entry.attemptId);

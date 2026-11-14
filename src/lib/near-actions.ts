@@ -13,6 +13,12 @@ export interface NearBatchResult {
   complete: boolean;
 }
 
+function canonicalArguments(value: unknown) {
+  return JSON.stringify(value, (_key, entry: unknown) => entry && typeof entry === "object" && !Array.isArray(entry)
+    ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, (entry as Record<string, unknown>)[key]]))
+    : entry);
+}
+
 export function nearBatchReceipts(transactions: readonly NearWalletAction[], signer: string, outcomes: readonly unknown[]): NearBatchResult["receipts"] {
   const used = new Set<number>();
   return outcomes.flatMap(value => {
@@ -21,7 +27,7 @@ export function nearBatchReceipts(transactions: readonly NearWalletAction[], sig
     if (actual?.signer_id !== signer || !actual.hash) return [];
     const index = transactions.findIndex((transaction, candidate) => !used.has(candidate) && transaction.receiverId === actual.receiver_id && transaction.actions.length === actual.actions?.length && transaction.actions.every((action, actionIndex) => {
       const recorded = actual.actions?.[actionIndex].FunctionCall;
-      try { return !!recorded && recorded.method_name === action.params.methodName && JSON.stringify(JSON.parse(atob(recorded.args))) === JSON.stringify(action.params.args); } catch { return false; }
+      try { return !!recorded && recorded.method_name === action.params.methodName && canonicalArguments(JSON.parse(atob(recorded.args))) === canonicalArguments(action.params.args); } catch { return false; }
     }));
     if (index < 0) return [];
     used.add(index);

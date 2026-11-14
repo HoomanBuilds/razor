@@ -144,6 +144,9 @@ test("G03-07 wallet receipts bind their actual actions instead of partial outcom
   assert.deepEqual(nearBatchReceipts(transactions, "owner.near", [outcome(1), outcome(0, "other.near")]), [{ index: 1, hash: "2".repeat(44), succeeded: true }]);
   assert.deepEqual(nearBatchReceipts(transactions, "owner.near", [outcome(0, "owner.near", { Failure: {} }), outcome(0)]), [{ index: 0, hash: "1".repeat(44), succeeded: false }]);
   assert.deepEqual(nearBatchReceipts(transactions, "owner.near", [{ transaction: { ...outcome(0).transaction, receiver_id: "wrong.near" } }]), []);
+  const reordered = outcome(0);
+  reordered.transaction.actions[0].FunctionCall.args = Buffer.from(JSON.stringify({ attempt_id: "attempt-a", payment_id: "payment-a" })).toString("base64");
+  assert.deepEqual(nearBatchReceipts(transactions, "owner.near", [reordered]), [{ index: 0, hash: "1".repeat(44), succeeded: true }]);
 });
 
 test("G03-04/G03-05 a blocked route and different signer do not hide ready exact actions", async () => {
@@ -230,10 +233,27 @@ test("G03-07 receipt hashes are durable, final action identity is verified and f
   await assert.rejects(reconcileRunBatch(f.access, f.run.id, batch.id, { receipts: [{ index: 0, hash: "2".repeat(44) }] }, m.dependencies), /another transaction hash/);
   m.dependencies.receipt = async () => ({ final_execution_status: "FINAL", status: { Failure: {} }, transaction: { hash, signer_id: "owner.near", receiver_id: "different.near", actions: [{ FunctionCall: { method_name: "execute_payment", gas: "100000000000000", deposit: "0", args: Buffer.from(JSON.stringify({ payment_id: paymentId, attempt_id: batch.entries[0].attemptId })).toString("base64") } }] } });
   assert.equal((await reconcileRunBatch(f.access, f.run.id, batch.id, {}, m.dependencies)).batch.status, "reconciling");
-  m.dependencies.receipt = async () => ({ final_execution_status: "FINAL", status: { Failure: {} }, transaction: { hash, signer_id: "owner.near", receiver_id: "treasury.near", actions: [{ FunctionCall: { method_name: "execute_payment", gas: "100000000000000", deposit: "0", args: Buffer.from(JSON.stringify({ payment_id: paymentId, attempt_id: batch.entries[0].attemptId })).toString("base64") } }] } });
+  m.dependencies.receipt = async () => ({ final_execution_status: "FINAL", status: { Failure: {} }, transaction: { hash, signer_id: "owner.near", receiver_id: "treasury.near", actions: [{ FunctionCall: { method_name: "execute_payment", gas: "100000000000000", deposit: "0", args: Buffer.from(JSON.stringify({ attempt_id: batch.entries[0].attemptId, payment_id: paymentId })).toString("base64") } }] } });
   const failed = await reconcileRunBatch(f.access, f.run.id, batch.id, {}, m.dependencies);
   assert.equal(failed.batch.status, "closed"); assert.equal(failed.batch.receipts[0].verified, true); assert.equal(failed.batch.receipts[0].failed, true);
   assert.equal(m.calls.quote, 1);
+});
+
+test("G03-07 direct receipt submissions cannot forge verified failure state", async () => {
+  const f = fixture(1); f.approve(); const m = mocks(f.access), paymentId = f.paymentIds[0];
+  const prepared = await prepareRunBatch(f.access, f.run.id, { stage: "prepare", selections: [{ paymentId }] }, m.dependencies);
+  cancelRunBatch(f.access, f.run.id, prepared.id); m.stages.set(paymentId, "execute");
+  const batch = await prepareRunBatch(f.access, f.run.id, { stage: "execute", selections: [{ paymentId }] }, m.dependencies);
+  await beginRunBatch(f.access, f.run.id, batch.id, { reviewHash: batch.reviewHash!, signerAccount: "owner.near" }, m.dependencies);
+  let lookups = 0;
+  m.dependencies.receipt = async () => { lookups++; throw new ApiError(503, "RPC unavailable", "NEAR_UNAVAILABLE"); };
+  const forged = { index: 0, hash: "1".repeat(44), verified: true, failed: true };
+  const result = await reconcileRunBatch(f.access, f.run.id, batch.id, { receipts: [forged] }, m.dependencies);
+  assert.equal(lookups, 1);
+  assert.equal(result.batch.status, "reconciling");
+  assert.equal(result.requiresReceipt, true);
+  assert.deepEqual(result.batch.receipts, [{ index: 0, hash: forged.hash }]);
+  assert.equal(result.blocked[0].code, "NEAR_UNAVAILABLE");
 });
 
 test("G03-07 conclusive terminal NEAR closure releases an unknown group without a second source send", async () => {
