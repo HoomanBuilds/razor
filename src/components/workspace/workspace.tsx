@@ -18,6 +18,7 @@ import {
   LifeBuoy,
   LogOut,
   Menu,
+  MoreHorizontal,
   ReceiptText,
   RefreshCw,
   Settings2,
@@ -292,6 +293,13 @@ function Workspace() {
   };
   const currentTitle = visibleSection === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : navigation.find(item => item.id === visibleSection)?.title;
   const allowedNavigation = navigation.filter(item => canOpenSection(item.id, organization.permissions));
+  const compactNavigation = ["overview", "payments", "payroll", "bills", "recipients", "treasury", "activity"].flatMap(id => allowedNavigation.filter(item => item.id === id));
+  const advanced = allowedNavigation.find(item => item.id === visibleSection && !compactNavigation.some(primary => primary.id === item.id));
+  if (advanced) compactNavigation.push(advanced);
+  const navigationButton = (item: (typeof navigation)[number]) => <button type="button" key={item.id} title={item.title} onClick={() => navigate(item.id)} aria-current={visibleSection === item.id ? "page" : undefined} aria-label={item.title} className={`group flex min-h-10 items-center rounded-xl text-left text-[13px] transition-colors ${sidebar ? "gap-3 px-3" : "justify-center lg:mx-auto lg:size-11 lg:w-11"} ${visibleSection === item.id ? "bg-secondary font-medium text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
+                <item.icon size={19} strokeWidth={visibleSection === item.id ? 2 : 1.7} className="shrink-0" aria-hidden="true"/>
+                <span className={sidebar ? "" : "lg:sr-only"}>{item.id === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : item.title}</span>
+              </button>;
   const matches = allowedNavigation.filter(item => `${item.title} ${descriptions[item.id]}`.toLowerCase().includes(searchTerm.toLowerCase().trim()));
   const userName = session.user.name || session.user.email || "Your account";
   return (
@@ -342,17 +350,14 @@ function Workspace() {
         </div>
         {!sidebar && <button data-dock-company type="button" className="mt-4 hidden size-11 shrink-0 self-center place-items-center rounded-xl bg-muted text-sm font-medium lg:grid" title={`${organization.name}: switch company`} aria-label={`Switch company from ${organization.name}`} onClick={() => setSidebar(true)}>{organization.name.slice(0,2).toUpperCase()}</button>}
         <nav aria-label="Workspace sections" className="dashboard-dock-nav dashboard-nav-scroll mt-5 min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4 [scrollbar-width:thin]">
-          {navigationGroups.map(group => {
+          {sidebar ? navigationGroups.map(group => {
             const items = allowedNavigation.filter(item => group.sections.includes(item.id));
             if (!items.length) return null;
             return <div key={group.title}>
               <p className={`${sidebar ? "" : "lg:sr-only"} mb-2 px-3 text-[10px] font-medium uppercase tracking-[.12em] text-muted-foreground`}>{group.title}</p>
-              <div className="grid gap-1">{items.map(item => <button type="button" key={item.id} title={item.title} onClick={() => navigate(item.id)} aria-current={visibleSection === item.id ? "page" : undefined} aria-label={item.title} className={`group flex min-h-10 items-center rounded-xl text-left text-[13px] transition-colors ${sidebar ? "gap-3 px-3" : "justify-center lg:mx-auto lg:size-11 lg:w-11"} ${visibleSection === item.id ? "bg-secondary font-medium text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
-                <item.icon size={19} strokeWidth={visibleSection === item.id ? 2 : 1.7} className="shrink-0" aria-hidden="true"/>
-                <span className={sidebar ? "" : "lg:sr-only"}>{item.id === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : item.title}</span>
-              </button>)}</div>
+              <div className="grid gap-1">{items.map(navigationButton)}</div>
             </div>;
-          })}
+          }) : <div className="grid gap-1">{compactNavigation.map(navigationButton)}<button type="button" title="All workspace tools" aria-label="All workspace tools" className="mx-auto mt-1 grid size-11 place-items-center rounded-xl text-muted-foreground hover:bg-white" onClick={() => { setSidebar(true); requestAnimationFrame(() => document.querySelector<HTMLElement>('#company-navigation [aria-current="page"]')?.focus()); }}><MoreHorizontal size={21}/><span className="sr-only">All workspace tools</span></button></div>}
         </nav>
         <div className={`dashboard-account-dock shrink-0 space-y-2 border-t border-border/60 pt-3 ${sidebar ? "px-2" : "flex flex-col items-center"}`}>
           <a href="/receive" title="My personal payments" aria-label="My personal payments" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "px-2" : "size-10 justify-center"}`}><Wallet size={18}/><span className={sidebar ? "" : "lg:sr-only"}>My personal payments</span></a>
