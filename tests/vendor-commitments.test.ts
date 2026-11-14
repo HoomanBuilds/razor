@@ -35,7 +35,7 @@ function approved(f = fixture()) {
   approveCommitment(f.access, draft.id, reviewCommitment(f.access, draft.id).reviewToken);
   return { ...f, id: draft.id };
 }
-function invoice(f: ReturnType<typeof fixture>, reference = randomUUID(), amount = "60000000", extra = {}) {
+function invoice(f: ReturnType<typeof fixture>, reference: string = randomUUID(), amount = "60000000", extra = {}) {
   return createBill(f.access, { recipientId: f.recipientId, title: "Supplier invoice", reference, amount, commitmentReference: f.terms.reference, commitmentDate: date, commitmentScopeConfirmed: true, ...extra });
 }
 function hasCode(code: string) { return (error: unknown) => error instanceof ApiError && error.code === code; }
