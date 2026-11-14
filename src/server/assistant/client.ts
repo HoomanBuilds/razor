@@ -1,10 +1,12 @@
-import { InferenceClient, getSdkError, type AttestationVerificationResult } from "@nearai/inference-sdk/node";
+import { getSdkError, type AttestationVerificationResult } from "@nearai/inference-sdk/node";
 import { createHash } from "node:crypto";
 import { ApiError } from "../context";
 import { requirePrivateAiConfig } from "./config";
 import { INVOICE_SYSTEM_PROMPT, parseExtraction, reviewExtraction } from "./extraction";
 import { FINANCE_SYSTEM_PROMPT } from "./finance/prompt";
 import { approveDeployment, assertFreshDeployment, publicVerification, requireModelReceipt, sha256 } from "./verification";
+import { EvidenceInferenceClient } from "./capture";
+import { encodeBase64, hashBytes } from "../../lib/verification/verify";
 
 export interface InvoiceImage { mimeType: "image/png" | "image/jpeg"; data: string }
 
@@ -18,7 +20,7 @@ export async function runVerifiedPrivateInference(task: "invoice" | "finance", t
   if (task !== "invoice" && images.length) throw new ApiError(422, "Images are only accepted for invoice review", "INVOICE_IMAGES_INVALID");
   const content = invoiceMessageContent(text, images);
   const config = requirePrivateAiConfig();
-  const client = new InferenceClient({
+  const client = new EvidenceInferenceClient({
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     e2ee: true,
@@ -54,13 +56,14 @@ export async function runVerifiedPrivateInference(task: "invoice" | "finance", t
     stage = "response";
     const receipt = await client.verifyResponse(completion.id);
     requireModelReceipt(receipt, completion.id);
+    const wire = await client.capturedWire(completion.id);
     assertFreshDeployment(deployment, config.maxAttestationAgeMs);
     const output = completion.choices[0]?.message.content;
     if (!output || completion.choices[0]?.finish_reason !== "stop") throw new ApiError(502, task === "invoice" ? "The verified response did not finish an invoice extraction" : "The verified response did not finish a finance proposal", task === "invoice" ? "INVOICE_EXTRACTION_INCOMPLETE" : "FINANCE_PLAN_INCOMPLETE");
     return {
       content: output,
       verification: publicVerification(config.model, deployment, receipt),
-      evidence: { deployment, receipt, inputSha256: sha256(typeof content === "string" ? content : JSON.stringify(content)), responseSha256: sha256(output), ...(images.length ? { imageSha256: images.map(image => createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex")), inputFormat: "image_parts" } : {}) },
+      evidence: { deployment, receipt, wire: { request: { sha256: hashBytes(wire.requestBody), base64: encodeBase64(wire.requestBody) }, response: { sha256: hashBytes(wire.responseBody), base64: encodeBase64(wire.responseBody) } }, inputSha256: sha256(typeof content === "string" ? content : JSON.stringify(content)), responseSha256: sha256(output), ...(images.length ? { imageSha256: images.map(image => createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex")), inputFormat: "image_parts" } : {}) },
     };
   } catch (error) {
     if (error instanceof ApiError) throw error;

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { ApiError, type AppEnv } from "../context";
 import * as service from "./service";
+import { packetDisclosure } from "./packet";
 
 export * from "./service";
 export const assistantRoutes = new Hono<AppEnv>();
@@ -12,6 +13,13 @@ assistantRoutes.get("/drafts/:id/evidence", (c) => {
   c.header("Cache-Control","no-store");
   if(c.req.query("download")==="1")c.header("Content-Disposition",'attachment; filename="razor-private-invoice.json"');
   return c.json(evidence);
+});
+assistantRoutes.get("/drafts/:id/packet", c => {
+  const { disclosure } = packetDisclosure.parse(c.req.query());
+  const packet = service.exportDraftPacket(c.get("access"), c.req.param("id"), disclosure);
+  c.header("Cache-Control", "private, no-store");
+  c.header("Content-Disposition", 'attachment; filename="razor-invoice-evidence-v1.json"');
+  return c.json(packet);
 });
 assistantRoutes.delete("/drafts/:id", (c) => c.json(service.deleteDraft(c.get("access"), c.req.param("id"))));
 assistantRoutes.post("/analyze", async (c) => {
