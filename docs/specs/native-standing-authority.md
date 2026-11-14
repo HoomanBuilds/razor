@@ -34,6 +34,6 @@ Owners can stop local execution immediately and prepare explicit onchain pause, 
 
 ## Deployment boundary
 
-The shared treasury remains one code deployment for separate company ledgers. Its state-version-2 company layout adds standing mandate, standing payment and recipient activation collections. It cannot deserialize populated version-1 company state as an upgrade. No funded-state migration is implemented.
+The shared treasury remains one code deployment for separate company ledgers. Standing authority added mandate, payment and recipient activation collections in state version 2. The current state-version-3 layout also includes claimable distributions and creation tombstones. It cannot deserialize populated version-1 or version-2 company state as an upgrade. No funded-state migration is implemented.
 
-Rebuild reviewed artifacts before deployment. The artifact manifest and unsigned deployment plan require `treasuryStateVersion: 2`; stale manifests are rejected. Deployment plans are for fresh empty accounts with atomic initialization only. They neither inspect target accounts nor authorize replacing populated state. Existing funded deployments require a separately designed migration. Compilation and local NEAR runtime checks do not establish mainnet deployment or delivery.
+Rebuild reviewed artifacts before deployment. The artifact manifest and unsigned deployment plan require `treasuryStateVersion: 3`; stale manifests are rejected. Deployment plans are for fresh empty accounts with atomic initialization only. They neither inspect target accounts nor authorize replacing populated state. Existing funded deployments require a separately designed migration. Compilation and local NEAR runtime checks do not establish mainnet deployment or delivery.

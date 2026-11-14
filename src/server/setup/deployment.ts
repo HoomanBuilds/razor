@@ -56,7 +56,7 @@ export function prepareDeployment(input: DeploymentInput) {
   const directory = resolve(input.artifactDirectory ?? ".tools/wasm");
   const manifest = JSON.parse(readFileSync(resolve(directory, "manifest.json"), "utf8")) as { architecture?: string; treasuryStateVersion?: number; artifacts?: Artifact[] };
   if (manifest.architecture !== "shared_v1" || !Array.isArray(manifest.artifacts)) throw new Error("Rebuild shared treasury contracts to generate their shared_v1 artifact manifest");
-  if (manifest.treasuryStateVersion !== 2) throw new Error("Rebuild the treasury state-version-2 artifact manifest. Standing mandates require fresh deployment accounts; no populated-state migration is supported");
+  if (manifest.treasuryStateVersion !== 3) throw new Error("Rebuild the treasury state-version-3 artifact manifest. Claimable pools and standing mandates require fresh deployment accounts; no populated-state migration is supported");
   const treasury = artifact(directory, "razor_treasury.wasm", "NEAR_TREASURY_CODE_HASH", manifest.artifacts);
   const clearing = artifact(directory, "razor_clearing.wasm", "NEAR_CLEARING_CODE_HASH", manifest.artifacts);
   const billing = input.billingAccount ? artifact(directory, "razor_billing.wasm", "RAZOR_BILLING_CODE_HASH", manifest.artifacts) : null;
@@ -72,7 +72,7 @@ export function prepareDeployment(input: DeploymentInput) {
   return {
     mode: "unsigned_deployment_plan" as const,
     architecture: "shared_v1" as const,
-    treasuryStateVersion: 2,
+    treasuryStateVersion: 3,
     freshAccountsOnly: true,
     populatedStateMigrationSupported: false,
     network: input.network,
@@ -80,7 +80,7 @@ export function prepareDeployment(input: DeploymentInput) {
     tokenContract: token,
     deployed: false,
     accountsVerified: false,
-    requirements: ["Create and fund fresh deployment accounts with owner-controlled signing access.", "Verify each target has no contract code or application state. Treasury state version 2 adds company collections and is incompatible with populated version-1 company state. This plan does not migrate existing contracts.", "Review storage stake and gas costs with the CLI before signing. Code is deployed once; each company later funds only its shared-state allowance and transaction gas.", "Deploy and initialize each contract atomically, then run the remote setup check before registering companies."],
+    requirements: ["Create and fund fresh deployment accounts with owner-controlled signing access.", "Verify each target has no contract code or application state. Treasury state version 3 adds distribution and cancellation collections and is incompatible with populated version-1 or version-2 company state. This plan does not migrate existing contracts.", "Review storage stake and gas costs with the CLI before signing. Code is deployed once; each company later funds only its shared-state allowance and transaction gas.", "Deploy and initialize each contract atomically, then run the remote setup check before registering companies."],
     artifacts: [treasury, clearing, ...(billing ? [billing] : [])],
     steps,
     keyRetirement: deployments.map(step => ({accountId:step.accountId, required:true, verified:false, action:"remove_all_access_keys_after_verification", prerequisites:["Verify deployed code and atomic initialization against this plan.", "Register token storage and configure required recoverable owner roles.", "Back up the reviewed artifacts and ownership details."], verification:{request_type:"view_access_key_list",account_id:step.accountId,finality:"final",expected_keys:[]}, consequence:"Removing every access key makes this deployed code immutable. Contract owner roles remain available through their separate owner accounts; code upgrades and account deletion are unavailable."})),
