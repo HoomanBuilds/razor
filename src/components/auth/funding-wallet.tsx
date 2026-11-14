@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPublicClient, createWalletClient, custom, decodeFunctionResult, encodeFunctionData, erc20Abi, formatUnits, getAddress, http, isAddress, type Chain, type EIP1193Provider } from "viem";
 import { mainnet, base, arbitrum, polygon, optimism, bsc, avalanche, gnosis, aurora, berachain, monad, plasma, scroll, linea, mantle, blast, celo, zkSync, abstract } from "viem/chains";
 import { Copy, ExternalLink, Wallet } from "lucide-react";
-import { connectNearWallet, getNearConnector, walletErrorMessage } from "./wallets";
+import { connectNearWallet, identityRequest, walletErrorMessage, type AuthConfig } from "./wallets";
 import { AssetIdentity } from "@/components/assets/asset-identity";
 import { DIRECT_USDC_ASSET, isDirectFunding, validateDirectFunding } from "@/lib/direct-funding";
 import { NATIVE_USDC } from "@/lib/native-usdc";
@@ -94,9 +94,9 @@ async function transferEvm(props:FundingWalletActionProps,quote:BoundQuote,onHas
 }
 
 async function transferNear(props:FundingWalletActionProps,quote:BoundQuote,onHash:(hash:string,sender:string)=>void):Promise<SourceReceipt> {
-  const connector=await getNearConnector();
-  if(connector.network!=="mainnet") throw new Error("This deposit uses NEAR mainnet. Your Razor wallet connection is on testnet. Use the mainnet deposit instructions below.");
-  const {wallet,accounts}=await connectNearWallet(),sender=selectFundingAccount(accounts.map(account=>account.accountId),quote.quoteRequest.refundTo),contract=props.token.contractAddress;
+  const config=await identityRequest<AuthConfig>("/auth/config");
+  if(config.nearNetwork!=="mainnet") throw new Error("This deposit uses NEAR mainnet. Your Razor wallet connection is on testnet. Use the mainnet deposit instructions below.");
+  const {wallet,accounts}=await connectNearWallet({accountId:quote.quoteRequest.refundTo}),sender=selectFundingAccount(accounts.map(account=>account.accountId),quote.quoteRequest.refundTo),contract=props.token.contractAddress;
   if(sender!==quote.quoteRequest.refundTo) throw new Error("Connect the NEAR account entered as this quote's refund address, or create a new funding request.");
   if(props.funding.deposit_memo || !contract || !NEAR_ACCOUNT.test(contract) || !NEAR_ACCOUNT.test(props.funding.deposit_address)) throw new Error("Use a NEAR wallet that can follow these exact token deposit instructions.");
   const {JsonRpcProvider}=await import("near-api-js"),rpc=new JsonRpcProvider({url:process.env.NEXT_PUBLIC_NEAR_RPC_URL || "https://rpc.mainnet.near.org"});

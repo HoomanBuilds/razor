@@ -5,9 +5,10 @@ import type { WalletProvider } from "@/components/account/types";
 import { createWalletClient, custom, type EIP1193Provider } from "viem";
 import { walletFailureMessage } from "@/lib/client-errors";
 import { api } from "@/lib/api";
+import { embeddedNearConnection, type NearWalletConnection } from "@/lib/embedded-near-signer";
 
 export type WalletFamily = "near" | "evm" | "solana";
-export interface AuthConfig { socialEnabled:boolean; privyAppId:string|null; nearNetwork:"mainnet"|"testnet"; origin:string; walletFamilies:WalletFamily[];ownerWalletSetup?:{providers:WalletProvider[];preferredProvider:string|null;nativeEmbeddedNear:false} }
+export interface AuthConfig { socialEnabled:boolean; privyAppId:string|null; nearNetwork:"mainnet"|"testnet"; origin:string; walletFamilies:WalletFamily[];ownerWalletSetup?:{providers:WalletProvider[];preferredProvider:string|null;nativeEmbeddedNear:boolean} }
 interface Challenge {challengeId:string;message:string;nonce:string;recipient:string;network:string}
 interface SolanaProvider { connect:()=>Promise<{publicKey:{toString:()=>string}}>; signMessage:(message:Uint8Array,encoding?:string)=>Promise<{signature:Uint8Array;publicKey:{toString:()=>string}}> }
 
@@ -26,7 +27,9 @@ export async function getNearConnector():Promise<NearConnector> {
   return connectorPromise;
 }
 
-export async function connectNearWallet(options:{walletId?:string;chooseWallet?:boolean}={}) {
+export async function connectNearWallet(options:{walletId?:string;chooseWallet?:boolean;accountId?:string}={}):Promise<NearWalletConnection> {
+  const embedded=await embeddedNearConnection(options);
+  if(embedded)return embedded;
   const connector=await getNearConnector();
   if(options.walletId){
     await connector.whenManifestLoaded;

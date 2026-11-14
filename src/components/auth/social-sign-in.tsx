@@ -1,6 +1,6 @@
 "use client";
 
-import { PrivyProvider, useLogin, usePrivy } from "@privy-io/react-auth";
+import { useLogin, usePrivy } from "@privy-io/react-auth";
 import { useRef, useState } from "react";
 import { identityRequest, walletErrorMessage } from "./wallets";
 
@@ -35,5 +35,5 @@ function SocialButton({onComplete,link=false,reauth=false}:{onComplete:()=>Promi
 }
 
 export default function SocialSignIn({appId,onComplete,link,reauth}:{appId:string;onComplete:()=>Promise<void>;link?:boolean;reauth?:boolean}) {
-  return <PrivyProvider appId={appId} config={{loginMethods:["google","email","passkey"],appearance:{theme:"light",accentColor:"#2463eb",walletList:[]},embeddedWallets:{ethereum:{createOnLogin:"off"},solana:{createOnLogin:"off"}}}}><SocialButton onComplete={onComplete} link={link} reauth={reauth}/></PrivyProvider>;
+  return appId?<SocialButton onComplete={onComplete} link={link} reauth={reauth}/>:null;
 }

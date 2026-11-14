@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ACCESS_CHANGED_EVENT, SESSION_EXPIRED_EVENT } from "@/lib/api";
 import { authenticateWallet, identityRequest, walletErrorMessage, type AuthConfig, type WalletFamily } from "./wallets";
+import { EmbeddedNearProvider } from "./embedded-near-provider";
+import { clearEmbeddedNearBridge } from "@/lib/embedded-near-signer";
 
 export interface IdentitySession {
   user:{id:string;email:string|null;name:string};
@@ -26,6 +28,7 @@ export function IdentityProvider({children}:{children:ReactNode}) {
   const pending=useRef<{promise:Promise<void>;controller:AbortController}|null>(null);
   sessionRef.current=session;
   const clearSession=useCallback((expired=false)=>{
+    clearEmbeddedNearBridge();
     epoch.current++;
     pending.current?.controller.abort();
     pending.current=null;
@@ -81,7 +84,7 @@ export function IdentityProvider({children}:{children:ReactNode}) {
   const signInWallet=useCallback(async(family:WalletFamily,link=false)=>{await authenticateWallet(family,{link});await refresh();},[refresh]);
   const signOut=useCallback(async()=>{await identityRequest("/auth/logout",{});clearSession();setError(null);},[clearSession]);
 
-  return <IdentityContext.Provider value={{config,session,loading,error,refresh,signInWallet,signOut}}>{children}</IdentityContext.Provider>;
+  return <IdentityContext.Provider value={{config,session,loading,error,refresh,signInWallet,signOut}}><EmbeddedNearProvider appId={config?.socialEnabled?config.privyAppId:null} userId={session?.user.id||null} network={config?.nearNetwork||"testnet"} onIdentityChanged={refresh}>{children}</EmbeddedNearProvider></IdentityContext.Provider>;
 }
 
 export function useIdentity() {
