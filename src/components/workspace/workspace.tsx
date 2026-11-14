@@ -361,7 +361,7 @@ function Workspace() {
         </div>
       </aside>
       {sidebar && <button className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] lg:hidden" aria-label="Close navigation overlay" onClick={() => setSidebar(false)}/>}
-      <div className={`min-w-0 ${sidebar ? "lg:ml-64" : "lg:ml-[104px]"}`}>
+      <div className={`min-w-0 ${sidebar ? "lg:ml-64" : "lg:ml-[84px]"}`}>
         <header className="dashboard-canvas flex min-h-18 items-center justify-between gap-3 px-5 sm:px-8 lg:px-10">
           <div className="flex min-w-0 items-center gap-3">
             <button className="rounded-full p-2 text-muted-foreground hover:bg-muted" aria-label={sidebar ? "Collapse navigation" : "Expand navigation"} aria-expanded={sidebar} aria-controls="company-navigation" onClick={() => setSidebar(value => !value)}><Menu size={19}/></button>
@@ -375,8 +375,8 @@ function Workspace() {
             <a href="/account" aria-label="Open account settings" className="ml-1 grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{userName[0].toUpperCase()}</a>
           </div>
         </header>
-        <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-8 sm:pt-6 lg:px-9">
-          <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
+        <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-6">
+          <div className="dashboard-page-heading mb-7 flex flex-wrap items-start justify-between gap-4">
             <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div>{visibleSection !== "overview" && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
             {visibleSection === "overview" && organization.permissions.includes("payments:prepare") && organization.permissions.includes("recipients:read") && <button className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-white transition-colors hover:bg-primary/90" onClick={() => { navigate("payments"); focusWorkspaceForm("payment-compose"); }}><Plus size={17}/>New payment</button>}
           </div>
