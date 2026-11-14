@@ -63,6 +63,7 @@ test("distribution amounts are exact, overflow bounded and each retry binds the 
   assert.equal(sumEntitlements([{ amount: "1" }, { amount: "99999999999999999999999999999999999" }]), "100000000000000000000000000000000000");
   assert.throws(() => sumEntitlements([{ amount: ((1n << 128n) - 1n).toString() }, { amount: "1" }]), code("DISTRIBUTION_AMOUNT_INVALID"));
   for (const amount of ["0", "-1", "1.1", "01", (1n << 128n).toString()]) assert.equal(distributionInput.safeParse({ ...data, items: [{ recipientId: f.recipientId, amount }] }).success, false);
+  for (const reference of ["line\nbreak", "界".repeat(60), "bad\u0080reference"]) assert.equal(distributionInput.safeParse({ ...data, reference }).success, false);
   assert.throws(() => createDistribution(f.access, { ...input(f), items: [data.items[0], data.items[0]] }), code("DISTRIBUTION_INPUT_INVALID"));
   assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM payments WHERE organization_id=?").get(f.access.organizationId)!.n, 0);
   assert.equal(saved(f, first.id).local_reserved, "0");

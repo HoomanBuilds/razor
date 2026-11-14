@@ -5,7 +5,7 @@ import { ApiError } from "../context";
 const MAX = (1n << 128n) - 1n;
 const canonicalAmount = /^[1-9]\d{0,38}$/;
 export const atomic = z.string().regex(canonicalAmount).refine(value => canonicalAmount.test(value) && BigInt(value) <= MAX);
-export const distributionInput = z.object({ reference: z.string().trim().min(1).max(100), deadline: z.iso.datetime(),
+export const distributionInput = z.object({ reference: z.string().trim().min(1).max(100).refine(value => Buffer.byteLength(value, "utf8") <= 128 && !/[\u0000-\u001f\u007f-\u009f]/.test(value), "Use a short reference without control characters"), deadline: z.iso.datetime(),
   requestKey: z.string().uuid(), items: z.array(z.object({ recipientId: z.string().uuid(), amount: atomic }).strict()).min(1).max(64) }).strict();
 export const pageInput = z.object({ page: z.coerce.number().int().min(1).max(100_000).default(1) }).strict();
 export interface Allocation { claimId: string; recipientId: string; recipientVersion: number; boundUserId: string; name: string; address: string; amount: string }
