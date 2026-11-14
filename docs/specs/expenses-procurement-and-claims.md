@@ -1,0 +1,33 @@
+# Expenses, purchasing and optional claim pools
+
+These workflows extend ordinary company payments. Expense acceptance and supplier awards create drafts or commitments, with normal bill approvals, recipient consent, funding and NEAR authority still required. They do not create company cash or prove delivery.
+
+## Staff receipts and reimbursements
+
+A recipient with an active, confirmed employee or contractor profile opens their personal receiving workspace and submits one PDF, PNG or JPEG receipt, an explicitly requested USDC amount, a business purpose and an optional company cost centre. No automatic currency conversion or invoice instruction can change a confirmed receiving destination. Uploads reuse bounded document workers, encrypted originals and company retention. Staff see their own requests; authorized company document managers with payment access can review them.
+
+The company's Expenses section manages submission availability, per-request and per-person UTC-month limits, and permitted cost centres. A reviewer can return, reject or accept the current request. Acceptance creates exactly one ordinary reimbursement bill draft. Its payment status, delivered amount, noncash setoff and remaining liability come from the existing bill lineage. Receipt extraction does not approve or send a payment. Ordinary invoice review and direct bill creation cannot bypass an expense source's review controls.
+
+Corrections retain earlier terms and decisions. A rejected or failed-upload request can have one linked replacement; superseded requests cannot be revived, and replacements keep the original allowance month. Accepted, partially paid and paid liabilities stay in their original bill lineage. A return or replacement is not a reversal of delivered funds. Dedicated paid-reimbursement chargebacks and reversal accounting are not implemented.
+
+## Supplier sourcing and receiving
+
+The Purchasing section creates an RFQ with a specification, whole-unit quantity, USDC budget, delivery window, quote deadline, receiving evidence requirement, eligible confirmed business suppliers and an active company role with preparation and approval permissions. That selected role publishes and reviews the request. Invitations bind the currently confirmed supplier user, rather than transferring access when a receiving profile is reassigned.
+
+Suppliers use their personal workspace to submit authenticated quote revisions. Each version keeps its price, complete commercial terms, delivery date, validity and receiving-profile version. Prices are USDC obligations; actual conversion and routing costs require the later payment quote. Historical suppliers retain their own quote submissions without gaining new bidding access or another supplier's terms.
+
+An exact human-reviewed award creates an independent purchase-order proposal. Approving that PO remains a separate company action. Named reviewers can then record partial acceptance, rejection and returns. These are human assertions, without an oracle or automatic proof of physical delivery. Invoice matching fixes the awarded supplier, unit price, quantity, invoice date and PO version. Unreceived quantities, changed versions, overruns and discrepancies hold ordinary invoice approval. Consumed quantities cannot authorize another full invoice. Returning previously invoiced goods preserves the existing liability for commercial dispute and payment recovery.
+
+Optional company inventory has durable stock adjustments, reviewed reorder quantities/budgets and current supplier/role choices. A low-stock threshold creates a bounded unpublished RFQ once per threshold cycle. It cannot automatically award, approve or fund a purchase. An awarded agreement cannot be silently cancelled or replaced; use its PO and dispute controls and create a newly reviewed RFQ for new terms.
+
+## Native claimable distributions
+
+Distributions are optional, independent grants or pools. Ordinary push payroll remains separate and does not make recipients claim wages. A preparer fixes up to 64 current native NEAR USDC receiving profiles, exact entitlements, a reference and a deadline within 366 days. Unfunded drafts can be cancelled without a transaction or treasury deployment. Funding review requires the immutable shared treasury, registered company, confirmed available cash, receiving-profile synchronization and sufficient prepaid company storage.
+
+The owner and highest configured approval quorum authorize the exact contract commitment. Its bytes bind the network, treasury, company, token, pool, receiving accounts, amounts, total, policy version, deadline and unused-fund rule. Local cash is fenced before opening a signing wallet. A missing wallet response or absent proposal does not release cash after signing begins. Unknown creation requires reconciliation or an owner-signed onchain void that permanently retires the creation identity. Only a never-signed review can release its local reservation without that transaction.
+
+Activation reserves the exact full pool from company cash. A claim can transfer only its fixed entitlement to its fixed receiving account. Recipient identity, gas payer and token-receiving account are separate. The application shows token registration, NEAR gas and attached-deposit requirements before signing; it provides no automatic subsidy. Short wallet-review leases prevent concurrent dialogs but never establish payment finality. Retrying an unknown result requires a fresh review of the same claim identity. Pending or paid claims cannot pay again, and a failed token callback restores only that claim's liability.
+
+At expiry the owner can reclaim genuinely unclaimed amounts. Pending transfers stay protected, including a delayed failed callback that restores a reclaimable remainder. Company withdrawals, ordinary payments and balance synchronization preserve pool reservations. Profile or financial-policy changes hold affected claims rather than redirecting them. Allocation accounts and amounts are public in NEAR data; personal application access shows only the signed-in recipient's allocations. Cross-chain claim routing is disabled; ordinary push payments retain their supported asset choices and USDC backup flow.
+
+Claim pools require fresh treasury state-version-3 artifacts. No funded version-1 or version-2 state migration is implemented. Contract and application checks use local execution, fixtures and the official local NEAR runtime. Actual configured wallet signing, canonical-token funding, callbacks and mainnet delivery remain separate live evidence requirements in the competitive checklist.
