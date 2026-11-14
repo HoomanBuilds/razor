@@ -34,7 +34,7 @@ export async function finalContext(blockHeight?: number) {
   };
   const [clearingCode, treasuryCode, clearing, platform] = await Promise.all([
     query<{ code_hash: string }>(config.contractId, { request_type: "view_account" }), query<{ code_hash: string }>(config.treasuryId, { request_type: "view_account" }),
-    view<{ treasury_id: string; token_contract: string; paused: boolean }>(config.contractId, "get_config"), view<{ architecture: string; token_contract: string }>(config.treasuryId, "get_platform_config"),
+    view<{ treasury_id: string; token_contract: string; paused: boolean; state_version?: number; cash_network?: "mainnet" | "testnet" | null; max_cash_deposits_per_company?: number }>(config.contractId, "get_config"), view<{ architecture: string; token_contract: string }>(config.treasuryId, "get_platform_config"),
   ]);
   if (clearingCode.code_hash !== config.codeHash || treasuryCode.code_hash !== config.treasuryHash || clearing.treasury_id !== config.treasuryId || clearing.token_contract !== platform.token_contract || platform.architecture !== "shared_v1") throw new ApiError(409, "Clearing code, shared treasury or settlement token differs from the reviewed deployment", "CLEARING_CODE_MISMATCH");
   if (config.network === "mainnet" && clearing.token_contract !== NATIVE_USDC.near) throw new ApiError(409, "Business clearing requires verified native USDC on NEAR mainnet", "CLEARING_ASSET_MISMATCH");
