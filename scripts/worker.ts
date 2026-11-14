@@ -2,6 +2,8 @@ import { tickOperations } from "../src/server/operations/worker";
 import { tickBilling } from "../src/server/billing/worker";
 import { processPendingInvoiceEvents } from "../src/server/invoice-channels/service";
 import { dispatchIntegrationWebhooks } from "../src/server/integrations";
+import { monitorDistributions } from "../src/server/distributions/service";
+import { dispatchAccountingJobs } from "../src/server/accounting";
 
 const args = process.argv.slice(2);
 const organizationId = args.find((arg) => arg.startsWith("--organization="))?.slice("--organization=".length);
@@ -16,6 +18,8 @@ do {
     ["operations", () => tickOperations({ organizationId, maxJobs: 20 })],
     ["billing", () => tickBilling(organizationId)],
     ["invoiceIntake", () => processPendingInvoiceEvents({ organizationId, maxEvents: 1 })],
+    ["distributions", () => monitorDistributions({ organizationId, maxPools: 1 })],
+    ["accounting", () => dispatchAccountingJobs({ organizationId, maxJobs: 1 })],
     ["webhooks", () => dispatchIntegrationWebhooks({ organizationId, limit: 5 })],
   ] as const;
   for (const [name, tick] of tasks) {

@@ -217,6 +217,7 @@ function chosenItem(connection: Connection, kind: CatalogItem["kind"], id: strin
 export function saveAccountingMapping(access: AccessContext, id: string, data: unknown) {
  const live = accountingAccess(access, true), input = mappingInput.parse(data), connection = connectionFor(live, id);
  if (connection.status !== "active" || !connection.entity_id || !connection.currency) throw new ApiError(409, "Select a verified company first", "ACCOUNTING_ENTITY_REQUIRED");
+ const functionalCurrency = connection.currency;
  return transaction(db => {
   if ((currentMapping(connection)?.version ?? 0) !== input.expectedVersion) throw new ApiError(409, "The account mapping changed. Review its latest version", "ACCOUNTING_MAPPING_CHANGED");
   const expense = chosenItem(connection, "account", input.expenseAccountId), bank = chosenItem(connection, "account", input.bankAccountId), tax = chosenItem(connection, "tax", input.taxCodeId);
@@ -228,7 +229,7 @@ export function saveAccountingMapping(access: AccessContext, id: string, data: u
    chosenItem(connection, "contact", contact.externalId); seen.add(contact.recipientId);
   }
   if (input.fxDate > now().slice(0, 10)) throw new ApiError(422, "Use a reviewed FX date that is not in the future", "ACCOUNTING_MAPPING_INVALID");
-  const value: Mapping = { ...input, functionalCurrency: connection.currency }, version = row<{version:number}>("SELECT COALESCE(MAX(version),0)+1 AS version FROM accounting_mappings WHERE connection_id=?", id)!.version;
+  const value: Mapping = { ...input, functionalCurrency }, version = row<{version:number}>("SELECT COALESCE(MAX(version),0)+1 AS version FROM accounting_mappings WHERE connection_id=?", id)!.version;
   db.prepare("INSERT INTO accounting_mappings(connection_id,version,entity_id,payload_ciphertext,created_by,created_at) VALUES(?,?,?,?,?,?)").run(id, version, connection.entity_id, encrypt(JSON.stringify(value)), live.userId, now());
   db.prepare("UPDATE accounting_jobs SET state='held',last_error='MAPPING_CHANGED',updated_at=? WHERE connection_id=? AND state IN ('review','queued')").run(now(), id);
   audit(live.userId, live.organizationId, "accounting.mapping_reviewed", id, { version, entityId: connection.entity_id }); return { version, value };
@@ -269,6 +270,7 @@ function sourceTerms(access: AccessContext, connection: Connection, kind: "bill"
 export function createAccountingPlan(access: AccessContext, id: string, data: unknown) {
  const live = accountingAccess(access), connection = connectionFor(live, id), input = z.object({ kind: z.enum(["bill", "settlement"]), sourceId: safeId, postingDate: z.iso.date(), dueDate:z.iso.date().optional() }).strict().parse(data);
  if (connection.status !== "active" || !connection.entity_id || !connection.currency) throw new ApiError(409, "Select an active accounting company", "ACCOUNTING_CONNECTION_REQUIRED");
+ const functionalCurrency = connection.currency;
  return transaction(db => {
   const mapping = currentMapping(connection);
   if (!mapping) throw new ApiError(409, "Review account, zero-tax and FX mappings first", "ACCOUNTING_MAPPING_REQUIRED");
@@ -281,7 +283,7 @@ export function createAccountingPlan(access: AccessContext, id: string, data: un
   if (previous?.attempts) throw new ApiError(409, "An attempted posting needs provider reconciliation. It cannot become a new request automatically", "ACCOUNTING_REQUEST_HELD");
   const jobId = previous?.id ?? randomUUID(), marker = previous?.marker ?? `RZ${digest(jobId).slice(0, 19)}`;
   const reference = `Razor ${source.kind} ${source.sourceId}; ${source.amount} microUSDC; FX ${mapping.value.fxNumerator}/${mapping.value.fxDenominator} ${connection.currency}/USDC; ${mapping.value.fxDate}; ${mapping.value.fxSource}; ${source.evidence.join(",")}`.slice(0, connection.provider === "xero" ? 255 : 1000);
-  const payload = postingPayload(connection.provider, input.kind, { amount: amount.value, date: input.postingDate, dueDate:source.dueDate, marker, title: source.title, contactId: contact.externalId, expenseAccountId: connection.provider === "xero" ? expense.code! : expense.id, bankAccountId: mapping.value.bankAccountId, taxCodeId: mapping.value.taxCodeId, currency: connection.currency, externalBillId: source.externalBillId, reference });
+  const payload = postingPayload(connection.provider, input.kind, { amount: amount.value, date: input.postingDate, dueDate:source.dueDate, marker, title: source.title, contactId: contact.externalId, expenseAccountId: connection.provider === "xero" ? expense.code! : expense.id, bankAccountId: mapping.value.bankAccountId, taxCodeId: mapping.value.taxCodeId, currency: functionalCurrency, externalBillId: source.externalBillId, reference });
   const posting = { payload, source, amount, functionalCurrency: connection.currency, fx: { numerator: mapping.value.fxNumerator, denominator: mapping.value.fxDenominator, source: mapping.value.fxSource, date: mapping.value.fxDate }, bankSettlementClaimed: false, payrollRowsIncluded: false };
   const reviewHash = digest({ jobId, connectionVersion: connection.version, entity: connection.entity_id, mappingVersion: mapping.version, posting });
   db.prepare("INSERT INTO accounting_jobs(id,organization_id,connection_id,entity_id,connection_version,mapping_version,kind,source_id,source_hash,marker,payload_ciphertext,review_hash,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,entity_id,kind,source_id) DO UPDATE SET connection_version=excluded.connection_version,mapping_version=excluded.mapping_version,source_hash=excluded.source_hash,payload_ciphertext=excluded.payload_ciphertext,review_hash=excluded.review_hash,state='review',created_by=excluded.created_by,approved_by=NULL,approved_at=NULL,last_error=NULL,updated_at=excluded.updated_at")
