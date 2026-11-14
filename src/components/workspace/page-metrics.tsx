@@ -10,6 +10,15 @@ export function focusWorkspaceForm(id: string) {
   let remaining = 8;
   const focus = () => {
     const form = document.getElementById(id);
+    if (form && !form.closest('[hidden], [aria-hidden="true"]')) {
+      const drawer = form.closest("dialog");
+      if (drawer && !drawer.open) drawer.showModal();
+      let ancestor = form.parentElement;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
+    }
     if (!form || !form.getClientRects().length) {
       if (remaining-- > 0) requestAnimationFrame(focus);
       return;
