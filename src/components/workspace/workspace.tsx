@@ -58,6 +58,7 @@ import { CompanyPrivateProcessing } from "./company-private";
 import { AccountingPanel } from "./accounting";
 import { SupportPanel } from "./support";
 import { CompanyInsightsPanel } from "./company-insights";
+import { WorkflowFeedback, WorkflowFeedbackSummary } from "./workflow-feedback";
 import type { BillingEntitlements } from "@/server/billing/types";
 import type { Organization, Recipient, Section } from "./types";
 
@@ -478,12 +479,13 @@ function CompanyWorkspace({
       ) : section === "assistant" ? (
         <div className="grid gap-6"><Assistant /><CompanyPrivateProcessing /></div>
       ) : section === "activity" ? (
-        <div className="grid gap-6"><CompanyInsightsPanel /><ActivityLog /><ProjectReportsPanel /></div>
+        <div className="grid gap-6"><CompanyInsightsPanel /><WorkflowFeedbackSummary /><ActivityLog /><ProjectReportsPanel /></div>
       ) : section === "billing" ? (
         <Billing />
       ) : (
         <div className="grid gap-6"><CompanySettings /><TreasuryRecoveryPanel /><NotificationInbox /></div>
       )}
+      <div className="mt-6"><WorkflowFeedback /></div>
     </WorkspaceContext.Provider>
   );
 }
