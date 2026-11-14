@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { TokenLogo } from "@/components/assets/asset-identity";
+import { PageMetrics } from "./page-metrics";
 import { api } from "@/lib/api";
 import { usdcInput, usd } from "@/lib/format";
 import type { companyExpense, listCompanyExpenses } from "@/server/expenses/service";
@@ -20,9 +22,13 @@ export function ExpensesPanel() {
   const detail = useResource<{ expense: Detail }>(allowed && selected ? `${base}/expenses/${selected}` : null, revision);
   const { busy, error, run } = useAction(), data = overview.data, current = detail.data?.expense;
   if (!allowed) return null;
-  return <Panel title="Staff expenses and reimbursements" description="Review private receipts and explicitly requested USDC amounts. Accepting an expense prepares a bill draft; ordinary payment approvals and funding still apply.">
+  return <div className="grid min-w-0 gap-7"><PageMetrics items={[
+    {label:"Expense requests",value:data?.total ?? (overview.error ? "Unavailable" : null)},
+    {label:"Per-expense limit",value:data ? data.policy.perExpenseLimit ? usd(data.policy.perExpenseLimit) : "No cap" : overview.error ? "Unavailable" : null,asset:"USDC"},
+    {label:"Submissions",value:data ? data.policy.enabled ? "Open" : "Paused" : overview.error ? "Unavailable" : null},
+  ]}/><Panel title="Expense requests" tone="white" description="Review receipts and prepare reimbursements." help="Accepting an expense prepares a bill draft; normal payment approvals and funding still apply. Private receipts follow the company inbox's encrypted storage and retention limits. Receipt amounts never create automatic FX or payment authority.">
     <div className="grid min-w-0 grid-cols-1 gap-5">
-      <p className="text-xs leading-5 text-muted-foreground">Receipts share the company file inbox's encrypted storage, retention and processing limits. Staff see their own requests. Company document managers with payment-read access can review receipts. Receipt amounts never create automatic FX or payment authority.</p>
+
       {manage && data && <details className="min-w-0 rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Company expense policy</summary><form key={data.policy.version} className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2" onSubmit={event => {
         event.preventDefault(); const values = new FormData(event.currentTarget);
         void run("policy", async () => {
@@ -40,13 +46,13 @@ export function ExpensesPanel() {
       </form></details>}
       {overview.loading ? <Empty>Loading company expenses...</Empty> : !data?.expenses.length ? <Empty>Confirmed employees and contractors can submit receipts from their personal payment workspace.</Empty> : <DataTable columns={["Staff / receipt", "Requested", "Review", "Reimbursement", "Action"]}>{data.expenses.map(expense => <tr key={expense.id}>
         <td><p>{expense.submitterName}</p><p className="text-xs">{expense.fields.merchant} · {expense.fields.receiptReference}</p><p className="text-xs text-muted-foreground">{expense.fields.expenseDate} · {expense.fields.costCenter || "No cost centre"}</p></td>
-        <td>{usd(expense.amount)} USDC</td><td><Status value={expense.supersededBy ? "superseded" : expense.status} /></td>
+        <td className="tabular-nums"><span className="inline-flex items-center gap-2"><TokenLogo symbol="USDC" size={17}/>{usd(expense.amount)}</span></td><td><Status value={expense.supersededBy ? "superseded" : expense.status} /></td>
         <td>{expense.reimbursement ? <><Status value={expense.reimbursement.status} /><p className="text-xs">Delivered {usd(expense.reimbursement.deliveredAmount)} · remaining {usd(expense.reimbursement.remainingLiability)}</p></> : <span className="text-xs text-muted-foreground">No reimbursement bill</span>}</td>
         <td><button type="button" className="text-sm text-primary" onClick={() => { setSelected(expense.id); setNotice(""); }}>Inspect expense</button></td>
       </tr>)}</DataTable>}
       {data && data.total > 0 && <div className="flex flex-wrap items-center justify-between gap-3"><Action type="button" disabled={page <= 1 || overview.refreshing} onClick={() => setPage(value => value - 1)}>Previous expenses</Action><span className="text-xs">Page {page} · {data.total} requests</span><Action type="button" disabled={!data.hasMore || overview.refreshing} onClick={() => setPage(value => value + 1)}>Next expenses</Action></div>}
       {detail.loading && <Empty>Loading the receipt and review history...</Empty>}
-      {current && <div className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4">
+      {current && <div className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border bg-muted p-5">
         <h3 className="font-medium">{current.submitterName}: {current.fields.merchant}</h3>
         <p className="text-sm">{usdcInput(current.amount)} USDC requested · {current.fields.expenseDate} · receipt {current.fields.receiptReference}</p>
         <p className="whitespace-pre-wrap break-words text-sm">Purpose: {current.fields.purpose}</p><p className="text-sm">Cost centre: {current.fields.costCenter || "Not supplied"}. Receiving profile version {current.recipientVersion}.</p>
@@ -69,7 +75,7 @@ export function ExpensesPanel() {
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {(error || overview.error || detail.error) && <p role="alert" className="text-sm text-destructive">{error || overview.error || detail.error}</p>}
     </div>
-  </Panel>;
+  </Panel></div>;
 }
 
 function CompanyPaidCorrection({expense,base,approve,onChanged}:{expense:Detail;base:string;approve:boolean;onChanged:()=>void}) {
