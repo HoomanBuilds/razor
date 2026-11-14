@@ -1,5 +1,4 @@
 /*
- * Session transport and report mapping adapted from @nearai/inference-sdk 0.3.0.
  * MIT License. Copyright (c) 2026 NEAR AI.
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal

@@ -1,4 +1,3 @@
-// Adapted from Setoff's MIT-licensed circulation solver. See circulation.NOTICE.
 interface Debt { debtor: string; creditor: string; capacity: bigint }
 interface Arc { from: number; to: number; debt: number; forward: boolean }
 export const maximumCirculationIterations = 1024;

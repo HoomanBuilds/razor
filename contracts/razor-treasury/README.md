@@ -161,9 +161,7 @@ A terminal partial releases no new funds, preserves the original face entitlemen
 
 NEAR's independent asynchronous receipts require explicit callback recovery, as described in the [official cross-contract documentation](https://docs.near.org/smart-contracts/anatomy/crosscontract).
 
-## Reused source
-
-The FT promise/callback pattern, confirmed-balance reconciliation and failure accounting adapt [Agent Treasury](https://github.com/iskander-kudashev-13/agent-treasury). Exact owner-authorized Intents deposit terms and zero default executor trust adapt [GetLeash](https://github.com/Onasachi/Getleash). Source is pinned to a compatible SDK rather than copying their newer dependency requirements. Required MIT notices are preserved in `NOTICE`.
+## Manual recovery
 
 The platform recovery reporter may attach zero or one yoctoNEAR to manual source or retained withdrawal recovery. This permits a function-call key restricted to the reviewed recovery methods. Ordinary company owners still require one yoctoNEAR and may only confirm successful transfer recovery; they cannot restore pooled credit after a failed transfer.
 

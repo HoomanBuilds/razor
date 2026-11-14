@@ -3,7 +3,6 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { getAddress, isAddress } from "viem";
 
-// XRP serialization is adapted from ripple-address-codec; see recipient-destination.NOTICE.
 
 const EVM = new Set(["eth", "base", "arb", "pol", "op", "avax", "bsc", "gnosis", "aurora", "bera", "plasma", "monad", "xlayer", "scroll", "adi", "hood", "hlevm", "hypercore", "linea", "mantle", "blast", "celo", "zksync", "abs"]);
 const ALIASES: Record<string, string> = { ethereum: "eth", arbitrum: "arb", polygon: "pol", solana: "sol", optimism: "op", avalanche: "avax", berachain: "bera", bitcoin: "btc", litecoin: "ltc", dogecoin: "doge", bitcoincash: "bch", xlm: "stellar", trx: "tron", bnb: "bsc", quantus: "qtc", pearl: "prl" };

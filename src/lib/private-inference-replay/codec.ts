@@ -1,4 +1,3 @@
-// Adapted from @nearai/inference-sdk 0.3.0 E2EE v3. See LICENSE.nearai-inference-sdk.
 import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";

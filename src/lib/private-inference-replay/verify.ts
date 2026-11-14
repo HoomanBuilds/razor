@@ -1,4 +1,3 @@
-// E2EE/signature framing adapted from NEAR AI SDK 0.3.0; see LICENSE.nearai-inference-sdk.
 import nacl from "tweetnacl";
 import { base64 } from "@scure/base";
 import { hexToBytes } from "@noble/hashes/utils.js";

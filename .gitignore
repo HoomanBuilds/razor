@@ -21,3 +21,6 @@ test-results/
 contracts/**/target/
 *.log
 *.tsbuildinfo
+THIRD_PARTY_NOTICES.md
+NOTICE
+*.NOTICE

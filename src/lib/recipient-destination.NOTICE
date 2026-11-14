@@ -1,5 +1,0 @@
-XRP X-address encoding and the XRP test vectors are adapted from XRPLF/xrpl.js, packages/ripple-address-codec.
-Source: https://github.com/XRPLF/xrpl.js/tree/main/packages/ripple-address-codec
-License: Apache-2.0, included at licenses/XRPL-APACHE-2.0.txt.
-Razor changes: encoding uses the existing @scure/base and @noble/hashes libraries; validation is restricted to canonical mainnet destinations and uint32 tags, and metadata mismatches fail closed.
-Other destination validation uses the existing libraries and published address-format rules.
