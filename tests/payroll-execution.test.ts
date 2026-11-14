@@ -236,6 +236,19 @@ test("G03-07 receipt hashes are durable, final action identity is verified and f
   assert.equal(m.calls.quote, 1);
 });
 
+test("G03-07 conclusive terminal NEAR closure releases an unknown group without a second source send", async () => {
+  const f = fixture(1); f.approve(); const m = mocks(f.access), paymentId = f.paymentIds[0];
+  const prepared = await prepareRunBatch(f.access, f.run.id, { stage: "prepare", selections: [{ paymentId }] }, m.dependencies);
+  cancelRunBatch(f.access, f.run.id, prepared.id); m.stages.set(paymentId, "execute");
+  const batch = await prepareRunBatch(f.access, f.run.id, { stage: "execute", selections: [{ paymentId }] }, m.dependencies);
+  await beginRunBatch(f.access, f.run.id, batch.id, { reviewHash: batch.reviewHash!, signerAccount: "owner.near" }, m.dependencies);
+  getDb().prepare("UPDATE payout_attempts SET state='closed_unfunded' WHERE id=?").run(batch.entries[0].attemptId);
+  assert.equal((await reconcileRunBatch(f.access, f.run.id, batch.id, {}, m.dependencies)).batch.status, "reconciling");
+  getDb().prepare("UPDATE payout_attempts SET reconciliation=? WHERE id=?").run(JSON.stringify({ chain: { attempts: [{ id: batch.entries[0].attemptId, status: "transfer_failed" }] } }), batch.entries[0].attemptId);
+  assert.equal((await reconcileRunBatch(f.access, f.run.id, batch.id, {}, m.dependencies)).batch.status, "closed");
+  assert.equal(m.calls.quote, 1);
+});
+
 test("G03-02 scheduling and stale quotes show distinct next actions", async () => {
   const f = fixture(1); f.approve(); const m = mocks(f.access), paymentId = f.paymentIds[0];
   const batch = await prepareRunBatch(f.access, f.run.id, { stage: "prepare", selections: [{ paymentId }] }, m.dependencies);

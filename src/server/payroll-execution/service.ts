@@ -270,7 +270,14 @@ export async function reconcileRunBatch(access: AccessContext, runId: string, ba
   const safe = !blocked.length && (batch.stage !== "execute" || data.transactions.every((entry, index) => {
     if (!entry.action.actions.some(action => action.params.methodName === "execute_payment")) return true;
     const attempt = getAttempt(access, entry.attemptId);
-    return verified.some(receipt => receipt.index === index && receipt.verified) || ["submitted", "processing", "delivered", "recovery_pending", "reported_delivered", "reported_partial", "partially_delivered", "refunded_verified"].includes(attempt.state);
+    let terminalClosure = false;
+    if (attempt.state === "closed_unfunded") {
+      try {
+        const evidence = JSON.parse(attempt.reconciliation ?? "{}") as { chain?: { attempts?: { id: string; status: string }[] } };
+        terminalClosure = !!evidence.chain?.attempts?.some(value => value.id === attempt.id && ["discarded", "transfer_failed", "refunded"].includes(value.status));
+      } catch {}
+    }
+    return terminalClosure || verified.some(receipt => receipt.index === index && receipt.verified) || ["submitted", "processing", "delivered", "recovery_pending", "reported_delivered", "reported_partial", "partially_delivered", "refunded_verified"].includes(attempt.state);
   }));
   transaction(db => {
     const latest = getBatch(access, runId, batchId), merged = receipts(latest);
