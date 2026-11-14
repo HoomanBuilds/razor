@@ -28,6 +28,7 @@ import { fundingRefundRoutes } from "./funding-refunds";
 import { partialSettlementRoutes } from "./partial-settlement";
 import { billingRoutes } from "./billing";
 import { documentRoutes } from "./document-intake";
+import { invoiceChannelRoutes, invoiceIngressRoutes } from "./invoice-channels";
 import { vendorCommitmentRoutes } from "./vendor-commitments";
 
 export const app = new Hono<AppEnv>().basePath("/api");
@@ -49,6 +50,7 @@ const defaultBodyLimit = bodyLimit({
     ),
 });
 app.use("*", async (c, next) => {
+  if (c.req.path.startsWith("/api/invoice-ingress/")) return next();
   if (c.req.method === "POST" && /^\/api\/organizations\/[^/]+\/documents\/upload$/.test(c.req.path)) return next();
   return defaultBodyLimit(c, next);
 });
@@ -88,6 +90,7 @@ app.route("/recipient-workspace", recipientWorkspaceRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/account", accountRecoveryRoutes);
 app.route("/funding-requests", publicFundingRoutes);
+app.route("/invoice-ingress", invoiceIngressRoutes);
 app.use(
   "/organizations/:orgId/*",
   requireUser,
@@ -115,6 +118,7 @@ app.route("/organizations/:orgId/funding-refunds", fundingRefundRoutes);
 app.route("/organizations/:orgId/partial-settlements", partialSettlementRoutes);
 app.route("/organizations/:orgId/billing", billingRoutes);
 app.route("/organizations/:orgId/documents", documentRoutes);
+app.route("/organizations/:orgId/invoice-channels", invoiceChannelRoutes);
 app.route("/organizations/:orgId/vendor-commitments", vendorCommitmentRoutes);
 app.notFound((c) =>
   c.json({ error: "Endpoint not found", code: "NOT_FOUND" }, 404),

@@ -2,19 +2,16 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { ApiError, requirePermission, type AppEnv } from "../context";
-import { DOCUMENT_LIMITS } from "./limits";
+import { DOCUMENT_LIMITS, boundedInvoiceRequest, withDocumentIngress } from "./limits";
 import * as service from "./service";
 
 export const documentRoutes = new Hono<AppEnv>();
-let activeUploads = 0;
 documentRoutes.use("*", async (c, next) => { requirePermission(c.get("access"), "documents:manage"); await next(); });
 const revision = z.object({ revision: z.number().int().positive() }).strict();
 documentRoutes.get("/config", c => c.json(service.documentConfiguration(c.get("access"))));
 documentRoutes.get("/", c => c.json(service.listDocuments(c.get("access"), c.req.query())));
 documentRoutes.post("/upload", async (c, next) => {
-  if (activeUploads >= 2) throw new ApiError(429, "The file inbox is receiving other uploads. Retry shortly", "DOCUMENT_UPLOAD_BUSY");
-  activeUploads++;
-  try { await next(); } finally { activeUploads--; }
+  return withDocumentIngress(async () => { c.req.raw = await boundedInvoiceRequest(c.req.raw, DOCUMENT_LIMITS.requestBytes); await next(); });
 }, bodyLimit({ maxSize: DOCUMENT_LIMITS.requestBytes, onError: c => c.json({ error: "Choose an invoice file no larger than 3 MB", code: "DOCUMENT_SIZE_INVALID" }, 413) }), async c => {
   if (!c.req.header("content-type")?.toLowerCase().startsWith("multipart/form-data;")) throw new ApiError(422, "Choose an invoice file using the upload control", "DOCUMENT_FILE_REQUIRED");
   let body: FormData;
