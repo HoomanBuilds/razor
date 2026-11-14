@@ -1,18 +1,23 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useIdentity } from "../auth/identity-provider";
 import { SignInPanel, WalletButtons } from "../auth/sign-in-panel";
+import { walletErrorMessage } from "../auth/wallets";
 
 const SocialSignIn=dynamic(()=>import("../auth/social-sign-in"),{ssr:false});
 
 export function PortalAuth({next,children}:{next:string;children:ReactNode}) {
-  const {loading,session,error}=useIdentity();
+  const {loading,session,error,refresh}=useIdentity();
+  const [retrying,setRetrying]=useState(false),[retryError,setRetryError]=useState("");
+  async function retry() {
+    setRetrying(true);setRetryError("");
+    try {await refresh();} catch(cause) {setRetryError(walletErrorMessage(cause));} finally {setRetrying(false);}
+  }
   if(loading)return <main className="mx-auto max-w-2xl p-8 text-sm text-muted-foreground">Loading your secure session...</main>;
   if(!session)return <SignInPanel next={next}/>;
-  if(error)return <p role="alert" className="p-8 text-sm text-destructive">{error}</p>;
-  return children;
+  return <>{error && <div role="alert" className="mx-5 my-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 lg:ml-28"><p>{retryError || error}</p><button type="button" disabled={retrying} onClick={()=>void retry()} className="rounded-full border border-amber-300 px-4 py-2 text-xs font-medium disabled:opacity-50">{retrying?"Checking session...":"Retry connection"}</button></div>}{children}</>;
 }
 
 export function LinkRecipientIdentity({onComplete,companyInvitation=false}:{onComplete:()=>Promise<void>;companyInvitation?:boolean}) {
