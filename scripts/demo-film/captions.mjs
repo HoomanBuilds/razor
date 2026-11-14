@@ -34,6 +34,14 @@ export function segmentCaptions(segment, alignment) {
     if (/[.!?]$/.test(word.text) || (group.length >= 3 && /[,;:]$/.test(word.text))) flush();
   }
   flush();
+  for (let index = 1; index < groups.length; index++) {
+    const previous = groups[index - 1], current = groups[index];
+    const combined = [...previous, ...current];
+    if (current.length <= 2 && !/[.!?]$/.test(previous.at(-1).text) && current[0].start - previous.at(-1).end <= 0.5 && current.at(-1).end - previous[0].start <= 5 && wrap(combined.map((word) => word.text).join(' '))) {
+      previous.push(...current);
+      groups.splice(index--, 1);
+    }
+  }
   return groups.map((items, index) => {
     const text = items.map((item) => item.text).join(' ');
     const lines = wrap(text);

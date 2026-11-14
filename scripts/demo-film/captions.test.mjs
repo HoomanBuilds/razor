@@ -41,6 +41,18 @@ test('alignment failures and impossible words are rejected', () => {
   assert.throws(() => segmentCaptions(...fixture('a'.repeat(90))), /two readable lines/);
 });
 
+test('short sentence endings stay with the preceding readable phrase', () => {
+  const text = 'An uncertain transfer must be reconciled before trying again.';
+  const [segment, alignment] = fixture(text);
+  segment.rawAudioSeconds *= 0.85;
+  alignment.character_start_times_seconds = alignment.character_start_times_seconds.map((time) => time * 0.85);
+  alignment.character_end_times_seconds = alignment.character_end_times_seconds.map((time) => time * 0.85);
+  const captions = segmentCaptions(segment, alignment);
+  assert.equal(captions.length, 1);
+  assert.equal(captions[0].lines.join(' '), text);
+  assert.ok(captions[0].lines.every((line) => line.length <= 44));
+});
+
 test('the final cue is clipped to the available segment and supports top placement', () => {
   const [segment, alignment] = fixture('Short.', {durationSeconds: 0.72, captionPosition: 'top'});
   const captions = segmentCaptions(segment, alignment);
