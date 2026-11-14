@@ -24,6 +24,9 @@ NEAR provides the application contracts, accounts and financial controls. Cross-
 | [Source funding refunds](specs/funding-refunds.md) | Exact original-asset recovery, final receipts and explicitly distinguished human attestations |
 | [Retained assets](specs/retained-assets.md) | Separate NEAR token holdings, owner controls and indicative valuations |
 | [Business clearing](specs/business-clearing.md) | Exact company consents, conserved setoff and residual payments |
+| [Expenses, purchasing and claim pools](specs/expenses-procurement-and-claims.md) | Private staff receipts, supplier RFQs, receiving, inventory and optional native-USDC claim lifecycles |
+| [Connected intake and integrations](specs/connected-intake-and-integrations.md) | Authenticated invoice channels, customer API/MCP and signed events |
+| [Operator setup](operator-setup.md) | Deployment, accounting consent, company-operated private processing and live configuration |
 | [Implementation status](specs/implementation-status.md) | Integrated features, local evidence and remaining live gates |
 | [Company operations](specs/operations.md) | Recurring drafts, bounded execution, worker setup and recovery |
 | [Private inference](specs/private-inference.md) | NEAR AI Cloud verification, privacy boundaries and retained draft handling |
