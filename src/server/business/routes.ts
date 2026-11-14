@@ -6,12 +6,14 @@ import { row, rows } from "../db";
 import { createBill, createPayrollRun, disputeBill, getPayrollRun, listBills, listPayrollRuns, report } from "./service";
 import { acceptBillMilestone, addBillInstallment, getBillTerms, resolveBillDispute, setBillTerms } from "./bill-terms";
 import { approveBillBatch, approveReviewedPayrollRun } from "../payment-management/service";
+import { payrollImportRoutes } from "../payroll-import";
 
 const money = z.string().regex(/^\d+$/);
 const billInput = z.object({ recipientId: z.string().min(1), reference: z.string().trim().min(1).max(120), title: z.string().trim().min(1).max(240), amount: money, maxFee: money.optional(), dueDate: z.string().datetime().optional(), lineItems: z.array(z.unknown()).max(100).optional(), evidence: z.string().max(5000).optional(), documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), projectReference: z.string().trim().max(120).optional(), costCenterReference: z.string().trim().max(120).optional() });
 const payrollInput = z.object({ reference: z.string().trim().min(1).max(120), periodStart: z.string().date(), periodEnd: z.string().date(), scheduledFor: z.string().datetime().optional(), items: z.array(z.object({ recipientId: z.string().min(1), amount: money, maxFee: money.optional(), baseAmount: money.optional(), bonusAmount: money.optional(), adjustmentAmount: z.string().regex(/^-?\d+$/).optional(), note: z.string().max(500).optional() })).min(1).max(1000) });
 
 export const businessRoutes = new Hono<AppEnv>();
+businessRoutes.route("/payroll-import", payrollImportRoutes);
 businessRoutes.get("/bills", (c) => c.json({ bills: listBills(c.get("access")) }));
 businessRoutes.post("/bills", async (c) => c.json({ bill: createBill(c.get("access"), billInput.parse(await c.req.json())) }, 201));
 businessRoutes.post("/bills/:id/approve", async (c) => c.json({ payment: approveBillBatch(c.get("access"), [c.req.param("id")], z.object({ reviewToken: z.string().regex(/^[a-f0-9]{64}$/) }).parse(await c.req.json()).reviewToken).payments[0] }));
