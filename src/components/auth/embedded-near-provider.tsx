@@ -118,5 +118,5 @@ function SignerBridge({userId,network,onIdentityChanged,children}:Omit<Props,"ap
 
 export function EmbeddedNearProvider({appId,children,...props}:Props) {
   if(!appId)return <>{children}</>;
-  return <PrivyProvider appId={appId} config={{loginMethods:["google","email","passkey"],appearance:{theme:"light",accentColor:"#2463eb",walletList:[]},embeddedWallets:{showWalletUIs:true,ethereum:{createOnLogin:"off"},solana:{createOnLogin:"off"}}}}><SignerBridge {...props}>{children}</SignerBridge></PrivyProvider>;
+  return <PrivyProvider appId={appId} config={{loginMethods:["google","email"],appearance:{theme:"light",accentColor:"#2463eb",walletList:[]},embeddedWallets:{showWalletUIs:true,ethereum:{createOnLogin:"off"},solana:{createOnLogin:"off"}}}}><SignerBridge {...props}>{children}</SignerBridge></PrivyProvider>;
 }
