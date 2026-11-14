@@ -8,6 +8,8 @@ export interface WorkspaceContextValue {
   session: Session;
   organization: Organization;
   recipients: Recipient[];
+  recipientsLoading?: boolean;
+  recipientsError?: string;
   base: string;
   revision: number;
   billing?: BillingEntitlements | null;
