@@ -18,7 +18,7 @@ function fixture() {
     const digest = createHash("sha256").update(bytes).digest();
     return { file, environmentKey, bytes: bytes.length, sha256: digest.toString("hex"), codeHash: base58.encode(digest) };
   });
-  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ architecture:"shared_v1", treasuryStateVersion: 3, artifacts }));
+  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ architecture:"shared_v1", treasuryStateVersion: 3, clearingStateVersion: 2, artifacts }));
   return { directory, input: { network: "mainnet" as const, treasuryAccount: "treasury.near", clearingAccount: "clearing.near", ownerAccount: "owner.near", artifactDirectory: directory } };
 }
 
@@ -30,6 +30,15 @@ test("deployment plan preserves canonical mainnet USDC, reviewed hashes and atom
     assert.equal(plan.deployed, false);
     assert.equal(plan.accountsVerified, false);
     assert.equal(plan.treasuryStateVersion, 3);
+    assert.equal(plan.clearingStateVersion, 2);
+    assert.equal(plan.optionalCashClearingSetup.completed, false);
+    assert.equal(plan.optionalCashClearingSetup.enabledByDeployment, false);
+    assert.equal(plan.optionalCashClearingSetup.signerAccountId, input.ownerAccount);
+    assert.equal(plan.optionalCashClearingSetup.storageRegistration.receiverId, NATIVE_USDC.near);
+    assert.deepEqual(plan.optionalCashClearingSetup.storageRegistration.args, { account_id: input.clearingAccount, registration_only: true });
+    assert.equal(plan.optionalCashClearingSetup.storageRegistration.requiresLiveStorageQuote, true);
+    assert.deepEqual(plan.optionalCashClearingSetup.enableCash.args, { network: "mainnet", testnet_token_contract: null });
+    assert.equal(plan.optionalCashClearingSetup.enableCash.deposit, "1");
     assert.equal(plan.freshAccountsOnly, true);
     assert.equal(plan.populatedStateMigrationSupported, false);
     assert.equal(plan.steps.length, 2);
@@ -56,6 +65,8 @@ test("deployment plans reject unsafe identities and mixed mainnet/testnet tokens
     const plan = prepareDeployment({ ...input, network: "testnet", testnetToken: "usdc.testnet" });
     assert.equal(plan.settlementEnabled, false);
     assert.equal(plan.tokenContract, "usdc.testnet");
+    assert.deepEqual(plan.optionalCashClearingSetup.enableCash.args, { network: "testnet", testnet_token_contract: "usdc.testnet" });
+    assert.equal(plan.optionalCashClearingSetup.storageRegistration.receiverId, "usdc.testnet");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -123,6 +134,18 @@ test("standing deployment refuses stale company-state manifests instead of plann
       manifest.treasuryStateVersion = version;
       writeFileSync(path, JSON.stringify(manifest));
       assert.throws(() => prepareDeployment(input), /fresh deployment accounts.*no populated-state migration/);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("funded clearing refuses old or unknown state manifests before planning a deployment", () => {
+  const { directory, input } = fixture();
+  try {
+    const path = join(directory, "manifest.json"), manifest = JSON.parse(readFileSync(path, "utf8"));
+    for (const version of [undefined, 1, 3]) {
+      manifest.clearingStateVersion = version;
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => prepareDeployment(input), /fresh empty clearing account.*no populated-state migration/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
