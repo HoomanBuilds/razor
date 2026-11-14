@@ -11,7 +11,8 @@ export function validNearAccount(value: string): boolean {
 }
 
 async function rpc<T>(network: "mainnet" | "testnet", method: string, params: unknown): Promise<T> {
-  const url = network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org";
+  const fallback = network === "mainnet" ? "https://rpc.mainnet.near.org" : "https://rpc.testnet.near.org";
+  const url = network === (process.env.NEAR_NETWORK || "testnet") ? process.env.NEAR_RPC_URL || fallback : fallback;
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "razor", method, params }), signal: AbortSignal.timeout(15_000), cache: "no-store" });
   if (!response.ok) throw new ApiError(503, "NEAR RPC is unavailable", "NEAR_UNAVAILABLE");
   const payload = await response.json();

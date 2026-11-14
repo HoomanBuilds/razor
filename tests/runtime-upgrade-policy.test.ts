@@ -23,7 +23,7 @@ async function withRuntime(
   run: (keyReads: () => number) => Promise<void>,
 ) {
   const values: Record<string, string | undefined> = {
-    NEAR_NETWORK:"mainnet", NEAR_TREASURY_ID:accounts.treasury, NEAR_CLEARING_ID:accounts.clearing,
+    NEAR_NETWORK:"mainnet", NEAR_RPC_URL:"https://rpc.example", NEAR_TREASURY_ID:accounts.treasury, NEAR_CLEARING_ID:accounts.clearing,
     NEAR_TREASURY_CODE_HASH:hashes.treasury, NEAR_CLEARING_CODE_HASH:hashes.clearing,
     NEAR_CONTRACT_UPGRADE_POLICY:options.policy,
     NEAR_CONTRACT_UPGRADE_KEYS:JSON.stringify(Object.fromEntries(Object.values(accounts).filter(account => account !== options.missingPinAccount).map(account => [account,[publicKey]]))),
@@ -36,6 +36,7 @@ async function withRuntime(
   }
   let keyReads = 0;
   globalThis.fetch = async (_url, init) => {
+    assert.equal(String(_url), "https://rpc.example");
     const request = JSON.parse(init!.body as string), params = request.params;
     if (request.method === "status") return Response.json({result:{chain_id:"mainnet"}});
     if (request.method === "block") return Response.json({result:{header:block}});
