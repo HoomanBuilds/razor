@@ -6,8 +6,26 @@
   const recording = sessionStorage.getItem('razor-recording-mode') === '1';
   if (recording) {
     const style = document.createElement('style');
-    style.textContent = '#razor-demo-environment{display:none!important}';
+    style.textContent = `
+      #razor-demo-environment{display:none!important}
+      [data-recording-funding] > :not([data-recording-funding-instructions]):not(#razor-demo-fund){display:none!important}
+      [data-recording-funding-instructions] > :not([data-recording-funding-summary]){display:none!important}
+      #treasury-deposit-review .workspace-panel:has([data-recording-funding]) > :first-child{display:none}
+      [data-recording-funding-summary]{padding:20px;border:1px solid #dce3fa;border-radius:20px;background:#fff}
+      [data-recording-funding] #razor-demo-fund{margin-bottom:0}
+    `;
     document.head.append(style);
+  }
+  function frameFundingReview(container) {
+    if (!recording || !container) return;
+    const address = container.querySelector('input[aria-label="Deposit address"]');
+    const instructions = address?.parentElement?.parentElement;
+    const summary = instructions?.firstElementChild;
+    const body = container.querySelector('.workspace-panel-body');
+    if (!body || !summary || !summary.textContent.includes('Expected treasury credit')) return;
+    body.dataset.recordingFunding = 'true';
+    instructions.dataset.recordingFundingInstructions = 'true';
+    summary.dataset.recordingFundingSummary = 'true';
   }
   function refresh() {
     document.querySelector('button[aria-label="Refresh workspace"]')?.click();
@@ -42,11 +60,15 @@
       } catch (error) { button.disabled = false; button.textContent = error.message; }
       finally { button.setAttribute('aria-busy', 'false'); }
     });
-    (container.querySelector('.workspace-panel-body') || container).prepend(button);
+    const body = container.querySelector('.workspace-panel-body') || container;
+    if (recording && action === 'fund') body.append(button);
+    else body.prepend(button);
   }
   const update = () => {
     addButton(document.getElementById('payroll-execution'), 'razor-demo-settle', recording ? 'Confirm payments' : 'Simulate payroll delivery', 'settle-payroll');
-    addButton(document.querySelector('#treasury-deposit-flow[open]'), 'razor-demo-fund', recording ? 'Confirm deposit' : 'Simulate this funding deposit', 'fund');
+    const fundingReview = document.querySelector('#treasury-deposit-flow[open]');
+    frameFundingReview(fundingReview);
+    addButton(fundingReview, 'razor-demo-fund', recording ? 'Confirm deposit' : 'Simulate this funding deposit', 'fund');
   };
   new MutationObserver(update).observe(document.body, { childList: true, subtree: true });
   update();
