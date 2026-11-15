@@ -14,7 +14,7 @@ Account-update email requires an opt-in from an account with a verified email id
 
 The operations worker queues encrypted recipient addresses and sends at most one message per tick. It rechecks identity email, opt-in and current company permissions before sending. Removing membership, changing the email address or withdrawing consent cancels the queued delivery. A durable lease and stable provider idempotency key preserve the same message across interrupted attempts. Attempts stop after 23 hours rather than retrying outside the provider's deduplication window.
 
-`accepted` means the provider returned a message ID. It does not claim inbox delivery. Ambiguous expired attempts remain `unknown` for review. No live email evidence has been recorded; local checks replace the provider transport and assert privacy, scoping and one recorded acceptance.
+`accepted` means the provider returned a message ID. It does not claim inbox delivery. Ambiguous expired attempts remain `unknown` for review. Local account-update checks replace the provider transport and assert privacy, scoping and one recorded acceptance; no customer inbox delivery is claimed.
 
 ## Recipient setup invitations
 
