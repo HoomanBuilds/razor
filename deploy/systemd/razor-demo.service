@@ -1,0 +1,37 @@
+[Unit]
+Description=Razor isolated interactive demo
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=razor
+Group=razor
+WorkingDirectory=/opt/razor/current
+Environment=PATH=/opt/razor/runtime/node-v24.22.3-linux-arm64/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=PUBLIC_DEMO_ORIGIN=https://razorfi.xyz
+ExecStart=/opt/razor/runtime/node-v24.22.3-linux-arm64/bin/node --max-old-space-size=256 --import tsx scripts/public-demo/server.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=75%
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=50
+
+[Install]
+WantedBy=multi-user.target

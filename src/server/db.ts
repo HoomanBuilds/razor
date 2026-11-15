@@ -1,9 +1,21 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { chmodSync, closeSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 let database: DatabaseSync | undefined;
 let transactionDepth = 0;
+const databaseScope = new AsyncLocalStorage<{ database: DatabaseSync; transactionDepth: number }>();
+
+export function withDatabase<T>(connection: DatabaseSync, action: () => T): T {
+  return databaseScope.run({ database: connection, transactionDepth: 0 }, action);
+}
+
+export function createMemoryDatabase(): DatabaseSync {
+  const connection = openDatabase(":memory:");
+  connection.exec("PRAGMA max_page_count=4096; PRAGMA cache_size=-1024");
+  return connection;
+}
 const startupWait = new Int32Array(new SharedArrayBuffer(4));
 
 function initializeWithRetry(action: () => void, deadline: number) {
@@ -18,8 +30,14 @@ function initializeWithRetry(action: () => void, deadline: number) {
 }
 
 export function getDb(): DatabaseSync {
-  if (database) return database;
-  const file = process.env.DATABASE_PATH ?? resolve(".data/razor.sqlite");
+  const scoped = databaseScope.getStore();
+  if (scoped) return scoped.database;
+  if (process.env.RAZOR_DATABASE_SCOPE_REQUIRED === "1") throw new Error("An isolated database scope is required");
+  if (!database) database = openDatabase(process.env.DATABASE_PATH ?? resolve(".data/razor.sqlite"));
+  return database;
+}
+
+function openDatabase(file: string): DatabaseSync {
   if (file !== ":memory:") {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const descriptor = openSync(file, "a", 0o600);
@@ -55,16 +73,17 @@ export function getDb(): DatabaseSync {
     }, deadline);
     connection.exec("PRAGMA busy_timeout = 5000");
   } catch (error) { connection.close(); throw error; }
-  database = connection;
   return connection;
 }
 
 export function transaction<T>(action: (db: DatabaseSync) => T): T {
   const db = getDb();
-  const depth = transactionDepth;
+  const scope = databaseScope.getStore();
+  const depth = scope?.transactionDepth ?? transactionDepth;
   const savepoint = `razor_transaction_${depth}`;
   db.exec(depth ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
-  transactionDepth = depth + 1;
+  if (scope) scope.transactionDepth = depth + 1;
+  else transactionDepth = depth + 1;
   try {
     const result = action(db);
     if (result instanceof Promise) throw new Error("Database transactions must not contain asynchronous work");
@@ -75,7 +94,8 @@ export function transaction<T>(action: (db: DatabaseSync) => T): T {
     if (depth) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
     throw error;
   } finally {
-    transactionDepth = depth;
+    if (scope) scope.transactionDepth = depth;
+    else transactionDepth = depth;
   }
 }
 
