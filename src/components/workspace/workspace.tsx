@@ -166,7 +166,7 @@ function Workspace() {
       const params = new URLSearchParams(window.location.search), value = params.get("section");
       setOrganizationId(params.get("company") ?? "");
       setSection(navigation.some(item => item.id === value) ? value as Section : "overview");
-      setSidebar(false);
+      if (window.matchMedia("(max-width: 1023px)").matches) setSidebar(false);
       setNotice("");
     };
     readLocation();
@@ -289,7 +289,7 @@ function Workspace() {
   const navigate = (next: Section, paymentId?: string) => {
     if (activeScope.current !== scope || !canOpenSection(next, organization.permissions)) return;
     setSection(next);
-    setSidebar(false);
+    if (window.matchMedia("(max-width: 1023px)").matches) setSidebar(false);
     window.history.pushState(null, "", workspacePath(organization.id, next, paymentId));
     window.dispatchEvent(new Event(WORKSPACE_NAVIGATION_EVENT));
   };
@@ -327,7 +327,7 @@ function Workspace() {
             onChange={async (event) => {
               if (switchingLock.current) return;
               const id = event.target.value;
-              if (id === "__new_company__") { setCreating(true); setSidebar(false); return; }
+              if (id === "__new_company__") { setCreating(true); if (window.matchMedia("(max-width: 1023px)").matches) setSidebar(false); return; }
               switchingLock.current = true;
               setSwitching(true);
               try {
@@ -335,7 +335,7 @@ function Workspace() {
                 setOrganizationId(id);
                 setSection("overview");
                 setNotice("");
-                setSidebar(false);
+                if (window.matchMedia("(max-width: 1023px)").matches) setSidebar(false);
                 window.history.pushState(null, "", workspacePath(id, "overview"));
                 await refreshIdentity();
               } catch (cause) {

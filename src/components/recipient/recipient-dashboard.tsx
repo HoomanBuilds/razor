@@ -53,7 +53,7 @@ export function RecipientDashboard({ active, onNavigate, views, onRefresh, notic
     window.addEventListener("keydown", keyboard);
     return () => { window.removeEventListener("keydown", keyboard); if (mobile) { document.body.style.overflow = overflow; if (previous?.isConnected) previous.focus(); } };
   }, [expanded]);
-  const navigate = (view: RecipientView) => { onNavigate(view); setExpanded(false); };
+  const navigate = (view: RecipientView) => { onNavigate(view); if (window.matchMedia("(max-width: 1023px)").matches) setExpanded(false); };
   return <div className="workspace-surface min-h-screen">
     <aside id="personal-navigation" ref={sidebar} aria-label="Personal navigation" data-expanded={expanded} className={`dashboard-dock ${expanded ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
       <div className={`flex h-14 shrink-0 items-center ${expanded ? "justify-between px-2" : "justify-center"}`}><a href="/receive" aria-label="Razor personal dashboard" className="flex items-center gap-3"><RazorMark size={31} className="shrink-0 text-[#5c5e68]"/><span className={`${expanded ? "" : "lg:hidden"} text-2xl font-semibold tracking-tight`}>Razor</span></a>{expanded && <button onClick={() => setExpanded(false)} aria-label="Collapse personal navigation" className="rounded-full p-2 text-muted-foreground hover:bg-muted"><X size={17}/></button>}</div>
