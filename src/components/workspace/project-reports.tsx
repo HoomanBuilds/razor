@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
@@ -21,7 +23,7 @@ export function ProjectReportsPanel() {
   const selected = data?.funding.find(item => item.id === selectedId);
   const records = category === "projects" ? data?.projects : data?.costCenters;
   const report = records?.find(item => item.reference === reference);
-  return <><Panel title="Project cash" tone="white" action={<a className="min-h-10 text-sm text-primary" href={`/api${base}/projects/export`} download>Export CSV</a>}>
+  return <><Panel title="Project cash" tone="white" action={<a className="min-h-10 text-sm text-primary" href={appHref(`/api${base}/projects/export`)} download>Export CSV</a>}>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div role="group" aria-label="Project report grouping" className="flex gap-1 rounded-full bg-muted p-1">{([['projects', 'Projects'], ['costCenters', 'Cost centers']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={category === value} onClick={() => { setCategory(value); setReference(""); }} className={`min-h-9 rounded-full px-4 text-xs font-medium ${category === value ? "bg-foreground text-white" : "text-muted-foreground"}`}>{label}</button>)}</div>{data?.canClassify && <Action type="button" onClick={() => openTaskDrawer("project-classification")}>Classify receipt</Action>}</div>
     {loadError && <p role="alert" className="mb-4 text-sm text-destructive">{loadError}</p>}
     {category === "costCenters" && <p className="mb-4 text-xs text-muted-foreground">Alternate view of project records. Do not add both totals.</p>}

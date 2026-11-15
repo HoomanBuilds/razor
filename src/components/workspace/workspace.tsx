@@ -1,5 +1,7 @@
 "use client";
 
+import { isPublicDemo, appHref } from "@/lib/demo-scope";
+
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -180,6 +182,7 @@ function Workspace() {
     if (!organization) return;
     const params = new URLSearchParams(window.location.search);
     window.history.replaceState(null, "", workspacePath(organization.id, visibleSection, params.get("payment") ?? undefined, params.get("invoice") ?? undefined));
+    if(isPublicDemo())window.dispatchEvent(new Event(WORKSPACE_NAVIGATION_EVENT));
   }, [organization?.id, visibleSection]);
   useEffect(() => {
     if (!sidebar || !scope) return;
@@ -259,7 +262,7 @@ function Workspace() {
           description="Review your pay, invoices and receiving preferences across the companies that pay you."
         >
           <a
-            href="/receive"
+            href={appHref("/receive")}
             className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
             Open my payments
@@ -282,6 +285,7 @@ function Workspace() {
           setOrganizationId(id);
           setSection("overview");
           window.history.pushState(null, "", workspacePath(id, "overview"));
+          if(isPublicDemo())window.dispatchEvent(new Event(WORKSPACE_NAVIGATION_EVENT));
           setCreating(false);
         }}
       />
@@ -311,7 +315,7 @@ function Workspace() {
     <div className="workspace-surface min-h-screen">
       <aside id="company-navigation" aria-label="Company navigation" data-expanded={sidebar} className={`dashboard-dock ${sidebar ? "flex w-64" : "hidden w-[84px]"} fixed inset-y-0 left-0 z-40 flex-col border-r border-border/60 bg-white p-3 lg:flex`}>
         <div className={`flex h-14 shrink-0 items-center ${sidebar ? "justify-between px-2" : "justify-center"}`}>
-          <a href="/app" aria-label="Razor workspace" className="flex items-center gap-3 font-semibold tracking-tight">
+          <a href={appHref("/app")} aria-label="Razor workspace" className="flex items-center gap-3 font-semibold tracking-tight">
             <RazorMark size={31} className="shrink-0 text-[#5c5e68]"/>
             <span className={`${sidebar ? "" : "lg:hidden"} text-2xl`}>Razor</span>
           </a>
@@ -337,6 +341,7 @@ function Workspace() {
                 setNotice("");
                 if (window.matchMedia("(max-width: 1023px)").matches) setSidebar(false);
                 window.history.pushState(null, "", workspacePath(id, "overview"));
+          if(isPublicDemo())window.dispatchEvent(new Event(WORKSPACE_NAVIGATION_EVENT));
                 await refreshIdentity();
               } catch (cause) {
                 setNotice(errorMessage(cause));
@@ -363,8 +368,8 @@ function Workspace() {
           })}</div> : <div className="grid gap-1">{compactNavigation.map(navigationButton)}<button type="button" title="All workspace tools" aria-label="All workspace tools" className="mx-auto mt-1 grid size-11 place-items-center rounded-xl text-muted-foreground hover:bg-white" onClick={() => { setSidebar(true); requestAnimationFrame(() => document.querySelector<HTMLElement>('#company-navigation [aria-current="page"]')?.focus()); }}><MoreHorizontal size={21}/><span className="sr-only">All workspace tools</span></button></div>}
         </nav>
         <div className={`dashboard-account-dock shrink-0 space-y-2 border-t border-border/60 pt-3 ${sidebar ? "px-2" : "flex flex-col items-center"}`}>
-          <a href="/receive" title="My personal payments" aria-label="My personal payments" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "px-2" : "size-10 justify-center"}`}><Wallet size={18}/><span className={sidebar ? "" : "lg:sr-only"}>My personal payments</span></a>
-          <a href={accountHref} title="Account and recovery" aria-label="Account and recovery" className={`flex items-center gap-3 rounded-xl text-xs ${sidebar ? "p-2" : "justify-center"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm font-medium text-white">{userName[0].toUpperCase()}</span><span className={sidebar ? "min-w-0 truncate" : "lg:sr-only"}>{userName}</span></a>
+          <a href={appHref("/receive")} title="My personal payments" aria-label="My personal payments" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "px-2" : "size-10 justify-center"}`}><Wallet size={18}/><span className={sidebar ? "" : "lg:sr-only"}>My personal payments</span></a>
+          <a href={appHref(accountHref)} title="Account and recovery" aria-label="Account and recovery" className={`flex items-center gap-3 rounded-xl text-xs ${sidebar ? "p-2" : "justify-center"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm font-medium text-white">{userName[0].toUpperCase()}</span><span className={sidebar ? "min-w-0 truncate" : "lg:sr-only"}>{userName}</span></a>
           <button title="Sign out" aria-label="Sign out" className={`flex min-h-10 items-center gap-3 rounded-xl text-xs text-muted-foreground hover:bg-muted ${sidebar ? "w-full px-2" : "size-10 justify-center"}`} onClick={() => void signOut().catch(cause => setNotice(errorMessage(cause)))}><LogOut size={17}/><span className={sidebar ? "" : "lg:sr-only"}>Sign out</span></button>
         </div>
       </aside>
@@ -380,12 +385,12 @@ function Workspace() {
           <div className="flex shrink-0 items-center gap-2">
             <button type="button" onClick={() => { setSearchTerm(""); setSearchOpen(true); }} aria-label="Search workspace pages" className="flex h-10 items-center gap-3 rounded-full bg-muted px-3 text-sm text-muted-foreground hover:bg-secondary"><Search size={17}/><span className="hidden md:block">Find a page</span><kbd className="hidden items-center gap-0.5 rounded border border-border bg-white px-1.5 py-0.5 text-[10px] md:flex"><Command size={10}/>K</kbd></button>
             <button onClick={() => void refreshIdentity().then(() => setRevision(value => value + 1)).catch(cause => setNotice(errorMessage(cause)))} aria-label="Refresh workspace" title="Refresh workspace" className="grid size-10 place-items-center rounded-full bg-muted text-muted-foreground hover:bg-secondary"><RefreshCw size={16}/></button>
-            <a href={accountHref} aria-label="Open account settings" className="ml-1 grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{userName[0].toUpperCase()}</a>
+            <a href={appHref(accountHref)} aria-label="Open account settings" className="ml-1 grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{userName[0].toUpperCase()}</a>
           </div>
         </header>
         <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-6">
           <div className="dashboard-page-heading mb-7 flex flex-wrap items-start justify-between gap-4">
-            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div>{visibleSection !== "overview" && visibleSection !== "payroll" && visibleSection !== "bills" && visibleSection !== "procurement" && visibleSection !== "recipients" && visibleSection !== "payments" && descriptions[visibleSection] && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
+            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {isPublicDemo()?"demo":organization.near_network}</span>}</div>{visibleSection !== "overview" && visibleSection !== "payroll" && visibleSection !== "bills" && visibleSection !== "procurement" && visibleSection !== "recipients" && visibleSection !== "payments" && descriptions[visibleSection] && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
             {visibleSection === "overview" && organization.permissions.includes("payments:prepare") && organization.permissions.includes("recipients:read") && <button className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-white transition-colors hover:bg-primary/90" onClick={() => { navigate("payments"); focusWorkspaceForm("payment-compose"); }}><Plus size={17}/>New payment</button>}
           </div>
           {notice && <div role="status" className="mb-6 flex items-center justify-between gap-3 rounded-2xl border bg-muted p-4 text-sm">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss notice" className="rounded-full p-1 hover:bg-white"><X size={16}/></button></div>}
@@ -530,7 +535,7 @@ function CreateCompany({
     <section className="w-full max-w-4xl" aria-labelledby="create-company-title">
       <div className="mb-8 flex items-center justify-between gap-4"><a href="/" aria-label="Razor home"><RazorLogo size={30}/></a>{onCancel && <button type="button" disabled={!!busy} className="rounded-full bg-muted px-4 py-2 text-xs text-muted-foreground hover:bg-secondary" onClick={onCancel}>Back to workspace</button>}</div>
       <div className="grid overflow-hidden rounded-[28px] border border-border bg-muted/50 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.15fr)]">
-        <div className="flex min-w-0 flex-col p-7 sm:p-9"><p className="text-xs font-medium text-primary">Your company workspace</p><h1 id="create-company-title" className="mt-4 max-w-xs text-[32px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">Create your company</h1><p className="mt-4 max-w-xs text-sm leading-6 text-muted-foreground">A workspace for your team, invoices and payments.</p><div className="mt-8 hidden items-start gap-3 rounded-2xl bg-white p-4 text-xs leading-5 lg:flex"><Wallet size={17} className="mt-0.5 shrink-0 text-primary"/><span>Start with payees and payment drafts. Connect your treasury when you're ready to add funds.</span></div><p className="mt-5 hidden text-xs leading-5 text-muted-foreground lg:mt-auto lg:block lg:pt-8">Just receiving payments? <a href="/receive" className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
+        <div className="flex min-w-0 flex-col p-7 sm:p-9"><p className="text-xs font-medium text-primary">Your company workspace</p><h1 id="create-company-title" className="mt-4 max-w-xs text-[32px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">Create your company</h1><p className="mt-4 max-w-xs text-sm leading-6 text-muted-foreground">A workspace for your team, invoices and payments.</p><div className="mt-8 hidden items-start gap-3 rounded-2xl bg-white p-4 text-xs leading-5 lg:flex"><Wallet size={17} className="mt-0.5 shrink-0 text-primary"/><span>Start with payees and payment drafts. Connect your treasury when you're ready to add funds.</span></div><p className="mt-5 hidden text-xs leading-5 text-muted-foreground lg:mt-auto lg:block lg:pt-8">Just receiving payments? <a href={appHref("/receive")} className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
         <div className="border-t border-border bg-white p-7 sm:p-9 lg:border-l lg:border-t-0"><h2 className="hidden text-xl font-medium tracking-tight lg:block">Company details</h2><form className="grid gap-5 lg:mt-6" onSubmit={event => {
           event.preventDefault();
           const values = new FormData(event.currentTarget);
@@ -538,7 +543,7 @@ function CreateCompany({
             const result = await api<{ organization: Organization }>("/organizations", { name: values.get("name"), timezone: values.get("timezone") });
             await onCreated(result.organization.id);
           });
-        }}><Field label="Company name"><input name="name" className={control} autoFocus autoComplete="organization" required maxLength={120} placeholder="Your company or team" disabled={!!busy}/></Field><Field label="Time zone" hint="Used for payroll dates and payment schedules."><TimezonePicker disabled={!!busy}/></Field><div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2.5 text-xs text-muted-foreground"><TokenLogo symbol="USDC" size={18}/><span>Amounts are recorded in USDC. Fund with supported assets.</span></div>{error && <p role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}<Action busy={busy === "company"} disabled={!!busy} className="min-h-12 w-full">Create company workspace<ArrowUpRight size={16}/></Action></form><p className="mt-5 text-xs text-muted-foreground lg:hidden">Just receiving payments? <a href="/receive" className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
+        }}><Field label="Company name"><input name="name" className={control} autoFocus autoComplete="organization" required maxLength={120} placeholder="Your company or team" disabled={!!busy}/></Field><Field label="Time zone" hint="Used for payroll dates and payment schedules."><TimezonePicker disabled={!!busy}/></Field><div className="flex items-center gap-2 rounded-xl bg-muted px-3 py-2.5 text-xs text-muted-foreground"><TokenLogo symbol="USDC" size={18}/><span>Amounts are recorded in USDC. Fund with supported assets.</span></div>{error && <p role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}<Action busy={busy === "company"} disabled={!!busy} className="min-h-12 w-full">Create company workspace<ArrowUpRight size={16}/></Action></form><p className="mt-5 text-xs text-muted-foreground lg:hidden">Just receiving payments? <a href={appHref("/receive")} className="font-medium text-primary underline underline-offset-4">Open my payments</a></p></div>
       </div>
     </section>
   </main>;

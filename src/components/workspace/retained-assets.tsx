@@ -1,5 +1,7 @@
 "use client";
 
+import { isPublicDemo } from "@/lib/demo-scope";
+
 import { useEffect, useState } from "react";
 import { ChevronLeft, Plus, ExternalLink } from "lucide-react";
 import { AssetPicker } from "@/components/assets/asset-picker";
@@ -22,7 +24,7 @@ const taskTitles: Record<Task, string> = { allow: "Approve a token", deposit: "D
 const previewTitle = (value: Preview) => value.kind === "allow" ? value.enabled ? "Enable deposits" : "Disable deposits" : value.kind === "deposit" ? "Review deposit" : value.kind === "withdraw" ? "Review withdrawal" : value.kind === "refresh" ? "Refresh token balance" : "Resolve withdrawal";
 
 function Receipt({ hash, network }: { hash: string; network: "mainnet" | "testnet" }) {
-  return <span className="flex flex-wrap items-center gap-2"><Address value={hash} label="transaction hash"/><a href={`https://${network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${encodeURIComponent(hash)}`} target="_blank" rel="noreferrer" className="text-primary" aria-label="View transaction in explorer"><ExternalLink size={14}/></a></span>;
+  return <span className="flex flex-wrap items-center gap-2"><Address value={hash} label="transaction hash"/><a hidden={isPublicDemo()} href={`https://${network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${encodeURIComponent(hash)}`} target="_blank" rel="noreferrer" className="text-primary" aria-label="View transaction in explorer"><ExternalLink size={14}/></a></span>;
 }
 
 function units(value: FormDataEntryValue | null, decimals: number) {

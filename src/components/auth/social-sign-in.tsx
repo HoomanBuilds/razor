@@ -1,5 +1,7 @@
 "use client";
 
+import { appFetch } from "@/lib/demo-scope";
+
 import { useLogin, usePrivy } from "@privy-io/react-auth";
 import { useRef, useState } from "react";
 import { identityRequest, walletErrorMessage } from "./wallets";
@@ -26,7 +28,7 @@ function SocialButton({onComplete,link=false,reauth=false}:{onComplete:()=>Promi
   async function switchAccount() {
     if(lock.current)return;lock.current=true;setPending(true);setError(null);
     try {
-      if(!link&&!reauth){const response=await fetch("/api/auth/logout",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok&&response.status!==401)throw new Error("Your Razor session could not be closed. Please try again.");}
+      if(!link&&!reauth){const response=await appFetch("/api/auth/logout",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});if(!response.ok&&response.status!==401)throw new Error("Your Razor session could not be closed. Please try again.");}
       await logout();await onComplete();
     }catch(error){setError(walletErrorMessage(error));}finally{lock.current=false;setPending(false);}
   }

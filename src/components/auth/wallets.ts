@@ -1,5 +1,7 @@
 "use client";
 
+import { requireLiveWallet } from "@/lib/demo-scope";
+
 import type { NearConnector } from "@hot-labs/near-connect";
 import type { WalletProvider } from "@/components/account/types";
 import { createWalletClient, custom, type EIP1193Provider } from "viem";
@@ -19,6 +21,7 @@ export async function identityRequest<T=unknown>(path:string,body?:unknown,metho
 }
 
 export async function getNearConnector():Promise<NearConnector> {
+  requireLiveWallet();
   if(typeof window==="undefined") throw new Error("Open Razor in your browser to connect a wallet.");
   if(!connectorPromise) {
     connectorPromise=Promise.all([import("@hot-labs/near-connect"),identityRequest<AuthConfig>("/auth/config")]).then(([{NearConnector},config])=>new NearConnector({network:config.nearNetwork,features:{signMessage:true},autoConnect:true}));
@@ -28,6 +31,7 @@ export async function getNearConnector():Promise<NearConnector> {
 }
 
 export async function connectNearWallet(options:{walletId?:string;chooseWallet?:boolean;accountId?:string}={}):Promise<NearWalletConnection> {
+  requireLiveWallet();
   const embedded=await embeddedNearConnection(options);
   if(embedded)return embedded;
   const connector=await getNearConnector();
@@ -51,6 +55,7 @@ export async function connectNearWallet(options:{walletId?:string;chooseWallet?:
 }
 
 export async function authenticateWallet(family:WalletFamily,options:{link?:boolean;reauth?:boolean;walletId?:string;chooseWallet?:boolean;accountId?:string}={}) {
+  requireLiveWallet();
   if(options.link&&options.reauth)throw new Error("Choose wallet linking or fresh verification.");
   const purpose=options.reauth?"reauth":options.link?"link":"login";
   if(family==="near") {

@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { useState } from "react";
 import { WorkspaceTabs } from "./workspace-tabs";
 import { TokenLogo } from "@/components/assets/asset-identity";
@@ -48,7 +50,7 @@ function InsightsContent({ base, revision }: { base: string; revision: number })
         <Field label="To (UTC)"><input type="date" className={control} value={to} required min={from} max={new Date().toISOString().slice(0, 10)} disabled={!!busy} onChange={event => setTo(event.target.value)}/></Field>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2"><Action className="min-h-11 px-5" disabled={!!busy}>Apply dates</Action>
-        {report && <a className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border bg-white px-4 text-sm font-medium transition-colors hover:bg-muted" href={`/api${base}/insights/export?${query}`}><Download size={15} aria-hidden="true"/>Export CSV</a>}</div>
+        {report && <a className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border bg-white px-4 text-sm font-medium transition-colors hover:bg-muted" href={appHref(`/api${base}/insights/export?${query}`)}><Download size={15} aria-hidden="true"/>Export CSV</a>}</div>
       </form>
       {(resource.error || error) && <p role="alert" className="break-words rounded-xl border border-border bg-white p-4 text-sm text-destructive">{resource.error || error}</p>}
       {resource.loading && !report ? <Empty>Loading insights...</Empty> : report && <>

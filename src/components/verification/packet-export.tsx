@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { EvidenceShareControl } from "@/components/evidence-sharing/controls";
 import { useState } from "react";
 import { control } from "@/components/workspace/shared";
@@ -31,7 +33,7 @@ export function PortableEvidenceExport({ endpoint }: { endpoint: string }) {
       <div className="flex flex-wrap gap-4">
         <a
           className="text-primary"
-          href={`/api${endpoint}/packet?disclosure=${disclosure}`}
+          href={appHref(`/api${endpoint}/packet?disclosure=${disclosure}`)}
           download
         >
           Download packet

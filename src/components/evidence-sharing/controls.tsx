@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { useRef, useState } from "react";
 import { Copy, Link2, ShieldOff } from "lucide-react";
 import { api } from "@/lib/api";
@@ -208,7 +210,7 @@ export function EvidenceShareControl({
       {error ? (
         <p role="alert" className="break-words text-sm text-destructive">
           {error}{" "}
-          <a href="/account" className="underline">
+          <a href={appHref("/account")} className="underline">
             Review sign-in
           </a>
         </p>

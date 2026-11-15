@@ -1,5 +1,7 @@
 "use client";
 
+import { appNavigate } from "@/lib/demo-scope";
+
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { formatUnits } from "@/lib/money";
@@ -74,7 +76,7 @@ function NetSuiteContent({
                 `${endpoint}/connect`,
                 { accountId: values.get("accountId") },
               );
-              window.location.assign(result.authorizationUrl);
+              appNavigate(result.authorizationUrl);
             });
           }}
         >

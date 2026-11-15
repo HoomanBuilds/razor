@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref, isPublicDemo } from "@/lib/demo-scope";
+
 import { useEffect, useState } from "react";
 import { ChevronLeft, Download, ExternalLink } from "lucide-react";
 import { AssetIdentity } from "@/components/assets/asset-identity";
@@ -22,7 +24,7 @@ function RefundAsset({ leg }: { leg: Leg }) {
 function Receipt({ hash, network }: { hash: string; network: string | null }) {
   const explorers: Record<string, string> = { near: "https://nearblocks.io/txns/", eth: "https://etherscan.io/tx/", ethereum: "https://etherscan.io/tx/", base: "https://basescan.org/tx/", arb: "https://arbiscan.io/tx/", arbitrum: "https://arbiscan.io/tx/", pol: "https://polygonscan.com/tx/", polygon: "https://polygonscan.com/tx/", sol: "https://solscan.io/tx/", solana: "https://solscan.io/tx/" };
   const explorer = network ? explorers[network] : undefined;
-  return <span className="flex flex-wrap items-center gap-2"><Address value={hash} label="transaction hash"/>{explorer && <a href={explorer + encodeURIComponent(hash)} target="_blank" rel="noreferrer" className="text-primary" aria-label="View transaction in explorer"><ExternalLink size={14}/></a>}</span>;
+  return <span className="flex flex-wrap items-center gap-2"><Address value={hash} label="transaction hash"/>{explorer && <a hidden={isPublicDemo()} href={explorer + encodeURIComponent(hash)} target="_blank" rel="noreferrer" className="text-primary" aria-label="View transaction in explorer"><ExternalLink size={14}/></a>}</span>;
 }
 function returnedAmount(leg: Leg) {
   if (!leg.closure) return "Awaiting receipt";
@@ -46,7 +48,7 @@ export function FundingRefundsPanel() {
   useEffect(() => { if (review) openTaskDrawer("source-refund-confirm"); }, [review]);
   if (!canRead) return null;
   return <div className="grid min-w-0 gap-5" aria-busy={!!busy}>
-    {selected ? <button type="button" disabled={!!busy} className="flex min-h-10 items-center gap-1 justify-self-start text-sm text-primary" onClick={() => choose("")}><ChevronLeft size={16}/>Source refunds</button> : <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Original funding assets</p>{organization.permissions?.includes("reports:read") && <a href={`/api${endpoint}/export`} download className="inline-flex min-h-10 items-center gap-2 text-sm text-primary"><Download size={15}/>Export</a>}</div>}
+    {selected ? <button type="button" disabled={!!busy} className="flex min-h-10 items-center gap-1 justify-self-start text-sm text-primary" onClick={() => choose("")}><ChevronLeft size={16}/>Source refunds</button> : <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Original funding assets</p>{organization.permissions?.includes("reports:read") && <a href={appHref(`/api${endpoint}/export`)} download className="inline-flex min-h-10 items-center gap-2 text-sm text-primary"><Download size={15}/>Export</a>}</div>}
     {resource.error && <p role="alert" className="text-sm text-destructive">{resource.error}</p>}
     {resource.loading ? <Empty>Loading refunds...</Empty> : data && (!selected ? <>
       <section className="divide-y rounded-3xl border bg-white px-5 sm:px-6">{data.funding.length ? data.funding.map(value => <button key={value.id} type="button" disabled={!!busy} className="flex w-full items-center justify-between gap-4 py-5 text-left" onClick={() => choose(value.id)}><span className="min-w-0"><span className="block text-sm font-medium">{value.reference}</span><span className="mt-2.5 block"><RefundAsset leg={value}/></span></span><span className="min-w-0 text-right"><span className="block break-all text-sm font-medium tabular-nums">{value.closure ? returnedAmount(value) : ""}</span><span className={value.closure ? "mt-2 block" : "block"}><Status value={refundStatus(value)}/></span></span></button>) : <p className="py-12 text-center text-sm text-muted-foreground">No source refunds.</p>}</section>

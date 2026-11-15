@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref, isPublicDemo } from "@/lib/demo-scope";
+
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDownToLine, Check, ChevronDown, ChevronRight, Download, FileText, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
 import { AssetIdentity, TokenLogo, NetworkIdentity } from "@/components/assets/asset-identity";
@@ -163,7 +165,7 @@ function ReconciliationWorkspace() {
             </summary>
             <div className="mt-3 w-full rounded-2xl border bg-white p-5 shadow-lg sm:absolute sm:right-0 sm:z-20 sm:mt-2 sm:w-80">
               <p className="text-sm font-medium">Accounting export</p>
-              <a className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-medium text-white" href={"/api" + base + "/reconciliation/export"}>
+              <a className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-medium text-white" href={appHref("/api" + base + "/reconciliation/export")}>
                 <Download size={15} aria-hidden="true" />Download CSV
               </a>
               <details className="mt-4 border-t pt-3 text-xs">
@@ -337,7 +339,7 @@ function ReconciliationWorkspace() {
                                   const result = await api<{ evidence: PrivateEvidence[] }>(base + "/reconciliation/attempts/" + attempt.id + "/evidence");
                                   setEvidence(current => ({ ...current, [attempt.id]: result.evidence }));
                                 })}>Inspect private evidence</button>
-                                <a className="inline-flex min-h-10 items-center gap-2 text-sm text-muted-foreground" href={"/api" + base + "/reconciliation/attempts/" + attempt.id + "/evidence?download=1"} download><Download size={14} aria-hidden="true" />Export evidence</a>
+                                <a className="inline-flex min-h-10 items-center gap-2 text-sm text-muted-foreground" href={appHref("/api" + base + "/reconciliation/attempts/" + attempt.id + "/evidence?download=1")} download><Download size={14} aria-hidden="true" />Export evidence</a>
                               </div>
                               {evidence[attempt.id] && (evidence[attempt.id].length ? (
                                 <div className="space-y-4 rounded-xl bg-muted p-4 text-xs">
@@ -380,7 +382,7 @@ function ReconciliationWorkspace() {
                           <div><p className="text-sm font-medium">{provenance[source] ?? source.replaceAll("_", " ")}</p><p className="mt-2 text-xs text-muted-foreground">Verified credit: <span className="font-medium text-foreground">{usd(funding.credited_amount)} USDC</span></p></div>
                           {allowed("payments:prepare") && <Action className="border bg-white text-foreground hover:bg-muted" busy={busy === funding.id + ":check"} disabled={!!busy} onClick={() => void run(funding.id + ":check", async () => { await api(base + "/funding/" + funding.id + "/reconcile", {}); refresh(); })}><RefreshCw size={14} aria-hidden="true" />Check status</Action>}
                         </div>
-                        {funding.destination_tx_hash && <a className="w-fit text-xs font-medium text-primary underline underline-offset-4" target="_blank" rel="noreferrer" href={"https://nearblocks.io/txns/" + encodeURIComponent(funding.destination_tx_hash)}>View NEAR transaction</a>}
+                        {funding.destination_tx_hash && <a hidden={isPublicDemo()} className="w-fit text-xs font-medium text-primary underline underline-offset-4" target="_blank" rel="noreferrer" href={"https://nearblocks.io/txns/" + encodeURIComponent(funding.destination_tx_hash)}>View NEAR transaction</a>}
                         {allowed("payments:prepare") && (<><Action disabled={actionLocked} onClick={() => openTask(`reconcile-task-funding-${funding.id}`)}>Verify receipt</Action><TaskDrawer id={`reconcile-task-funding-${funding.id}`} title="Verify funding receipt" description={funding.reference}><form key={funding.id} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
                             event.preventDefault();
                             const values = new FormData(event.currentTarget);

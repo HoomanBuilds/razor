@@ -1,5 +1,7 @@
 "use client";
 
+import { isPublicDemo } from "@/lib/demo-scope";
+
 import { Copy, ExternalLink, LoaderCircle, Plus, Info } from "lucide-react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -54,7 +56,7 @@ export function Address({ value, network, label = "address", full = false }: { v
     return () => { if (timeout.current) clearTimeout(timeout.current); };
   }, [value]);
   const explorers: Record<string, string> = { near: "https://nearblocks.io/address/", mainnet: "https://nearblocks.io/address/", testnet: "https://testnet.nearblocks.io/address/", base: "https://basescan.org/address/", eth: "https://etherscan.io/address/", ethereum: "https://etherscan.io/address/", arb: "https://arbiscan.io/address/", arbitrum: "https://arbiscan.io/address/", pol: "https://polygonscan.com/address/", polygon: "https://polygonscan.com/address/", sol: "https://solscan.io/account/", solana: "https://solscan.io/account/" };
-  const explorer = network && explorers[network] ? explorers[network] + encodeURIComponent(value) : undefined;
+  const explorer = !isPublicDemo() && network && explorers[network] ? explorers[network] + encodeURIComponent(value) : undefined;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value);

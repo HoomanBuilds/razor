@@ -1,5 +1,7 @@
 "use client";
 
+import { appFetch, isPublicDemo } from "@/lib/demo-scope";
+
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ACCESS_CHANGED_EVENT, SESSION_EXPIRED_EVENT } from "@/lib/api";
 import { authenticateWallet, identityRequest, walletErrorMessage, type AuthConfig, type WalletFamily } from "./wallets";
@@ -41,7 +43,7 @@ export function IdentityProvider({children}:{children:ReactNode}) {
     const version=epoch.current,controller=new AbortController();
     const promise=(async()=>{
       try {
-        const response=await fetch("/api/auth/session",{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+        const response=await appFetch("/api/auth/session",{credentials:"same-origin",cache:"no-store",signal:controller.signal});
         if(version!==epoch.current)return;
         if(response.status===401){clearSession(true);return;}
         const result=await response.json();
@@ -82,7 +84,7 @@ export function IdentityProvider({children}:{children:ReactNode}) {
   },[refresh]);
 
   const signInWallet=useCallback(async(family:WalletFamily,link=false)=>{await authenticateWallet(family,{link});await refresh();},[refresh]);
-  const signOut=useCallback(async()=>{await identityRequest("/auth/logout",{});clearSession();setError(null);},[clearSession]);
+  const signOut=useCallback(async()=>{if(isPublicDemo())throw new Error("Use the demo profile switcher to change accounts.");await identityRequest("/auth/logout",{});clearSession();setError(null);},[clearSession]);
 
   return <IdentityContext.Provider value={{config,session,loading,error,refresh,signInWallet,signOut}}><EmbeddedNearProvider appId={config?.socialEnabled?config.privyAppId:null} userId={session?.user.id||null} network={config?.nearNetwork||"testnet"} onIdentityChanged={refresh}>{children}</EmbeddedNearProvider></IdentityContext.Provider>;
 }

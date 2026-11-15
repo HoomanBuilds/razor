@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { proportion } from "@/lib/payment-activity";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, FileText, Mail, Plus, Search, Upload } from "lucide-react";
@@ -31,10 +33,11 @@ const assetSymbol=(recipient:Recipient,tokens:Token[])=>tokenFor(recipient,token
 const initials=(name:string)=>name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join("").toUpperCase();
 
 function InvitationLink({invitation}:{invitation:Invitation}) {
-  const [copied,setCopied]=useState(false),[copyError,setCopyError]=useState(false),currentUrl=useRef(invitation.url);
-  currentUrl.current=invitation.url;
-  useEffect(()=>{setCopied(false);setCopyError(false);},[invitation.url]);
-  return <div className="space-y-3"><Field label={`Confirmation link for ${invitation.name}`}><input readOnly value={invitation.url} className={control} onFocus={event=>event.target.select()}/></Field><div className="flex flex-wrap items-center justify-between gap-3"><Action type="button" onClick={()=>{const url=invitation.url;setCopied(false);setCopyError(false);void Promise.resolve().then(()=>navigator.clipboard.writeText(url)).then(()=>{if(currentUrl.current===url)setCopied(true);}).catch(()=>{if(currentUrl.current===url)setCopyError(true);});}}>{copied?<Check size={15}/>:<Copy size={15}/>} {copied?"Copied":"Copy link"}</Action></div>{copyError&&<p role="status" className="text-sm">Select the link above to copy it.</p>}</div>;
+  const url=typeof window==="undefined"?invitation.url:new URL(appHref(invitation.url),window.location.origin).toString();
+  const [copied,setCopied]=useState(false),[copyError,setCopyError]=useState(false),currentUrl=useRef(url);
+  currentUrl.current=url;
+  useEffect(()=>{setCopied(false);setCopyError(false);},[url]);
+  return <div className="space-y-3"><Field label={`Confirmation link for ${invitation.name}`}><input readOnly value={url} className={control} onFocus={event=>event.target.select()}/></Field><div className="flex flex-wrap items-center justify-between gap-3"><Action type="button" onClick={()=>{const selectedUrl=url;setCopied(false);setCopyError(false);void Promise.resolve().then(()=>navigator.clipboard.writeText(selectedUrl)).then(()=>{if(currentUrl.current===selectedUrl)setCopied(true);}).catch(()=>{if(currentUrl.current===selectedUrl)setCopyError(true);});}}>{copied?<Check size={15}/>:<Copy size={15}/>} {copied?"Copied":"Copy link"}</Action></div>{copyError&&<p role="status" className="text-sm">Select the link above to copy it.</p>}</div>;
 }
 
 function PendingInvitation({recipient,onBusyChange}:{recipient:Recipient;onBusyChange:(busy:boolean)=>void}) {

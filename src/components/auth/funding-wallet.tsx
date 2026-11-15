@@ -1,5 +1,8 @@
 "use client";
 
+import { isPublicDemo, requireLiveWallet } from "@/lib/demo-scope";
+import { DemoAction } from "@/components/demo/demo-action";
+
 import { withTaskDrawerWallet } from "@/components/workspace/task-drawer";
 
 import { ContractUpgradeDisclosure } from "@/components/contract-upgrade-disclosure";
@@ -194,6 +197,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const amount=/^\d+$/.test(funding.amount_in)&&token.decimals>=0&&token.decimals<=38?formatUnits(BigInt(funding.amount_in),token.decimals):"Unavailable";
   async function send() {
     if(busy.current || !canSend || !quote)return;
+    requireLiveWallet();
     busy.current=true;setPhase("signing");setError(null);
     let broadcastHash:string|undefined;
     function broadcast(txHash:string) {broadcastHash=txHash;setHash(txHash);setPhase("confirming");try{sessionStorage.setItem(storageKey(funding.id),txHash);}catch{} if(props.onBroadcast) void props.onBroadcast(txHash).catch(error=>setError(`Source transfer submitted. Reopen this task to reconcile it. ${walletErrorMessage(error)}`));}
@@ -221,6 +225,7 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
   const tracking=props.depositAllowed===false||!!hash;
   const direct=quote&&isDirectFunding(quote)?quote:null;
+  if(isPublicDemo())return props.depositAllowed===false||["credited","confirmed","completed"].includes(funding.status)?<p className="text-sm text-muted-foreground">Demo deposit {funding.status.replaceAll("_"," ")}</p>:<DemoAction action="fund" options={{fundingId:funding.id}}>Simulate deposit</DemoAction>;
   if (props.compact) return <section aria-busy={pending} className="grid gap-4">
     {props.upgradePolicy && props.depositAllowed !== false && !hash && <details className="border-t pt-4 text-sm"><summary className="cursor-pointer">Contract upgrades: {props.upgradePolicy.upgradable ? "operator-controlled" : "immutable"}</summary><div className="mt-3"><ContractUpgradeDisclosure policy={props.upgradePolicy}/></div></details>}
     {direct && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Company deposit message</summary><dl className="mt-3 grid gap-3"><div><dt>Token contract</dt><dd className="mt-1 break-all">{token.contractAddress}</dd></div><div><dt>Message</dt><dd className="mt-1 break-all font-mono">{direct.quoteRequest.customRecipientMsg}</dd></div><div><dt>Wallet action</dt><dd className="mt-1">120 Tgas limit · 1 yoctoNEAR attached</dd></div></dl></details>}

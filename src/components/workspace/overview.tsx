@@ -1,5 +1,7 @@
 "use client";
 
+import { appNavigate } from "@/lib/demo-scope";
+
 import { useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, CalendarDays, Check, ChevronRight, Circle, Plus, ReceiptText, Send, ShieldCheck, Users, Wallet } from "lucide-react";
 import { proportion, type PaymentActivity } from "@/lib/payment-activity";
@@ -82,7 +84,7 @@ export function Overview() {
     </div>
     {summary.data && BigInt(summary.data.uncommittedInvoicePrincipal) > 0n && <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-muted px-5 py-4 text-sm"><span>Invoices needing installments</span><button type="button" className="font-medium text-primary tabular-nums" onClick={() => navigate("bills")}>{usd(summary.data.uncommittedInvoicePrincipal)}</button></div>}
     {actions.length > 0 && <div className="flex flex-wrap gap-2">{actions.map(action => <button key={action.title} className="inline-flex items-center gap-2 rounded-full bg-muted px-4 py-2.5 text-xs hover:bg-secondary" onClick={() => { navigate(action.section); focusWorkspaceForm(action.formId); }}><action.icon size={14}/>{action.title}<ArrowUpRight size={12} className="text-muted-foreground"/></button>)}</div>}
-    {needsSetup && <Panel collapsible title="Finish company setup" description={`${complete} of ${visibleSteps.length} steps complete.`}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{visibleSteps.map(step => <button key={step.title} className="flex items-center gap-2 rounded-xl bg-white p-3 text-left text-xs hover:bg-secondary/40" onClick={() => step.href ? window.location.assign(step.href) : navigate(step.section)}>{step.done ? <Check size={14} className="shrink-0 text-primary"/> : <Circle size={14} className="shrink-0 text-muted-foreground"/>}<span>{step.title}</span></button>)}</div></Panel>}
+    {needsSetup && <Panel collapsible title="Finish company setup" description={`${complete} of ${visibleSteps.length} steps complete.`}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{visibleSteps.map(step => <button key={step.title} className="flex items-center gap-2 rounded-xl bg-white p-3 text-left text-xs hover:bg-secondary/40" onClick={() => step.href ? appNavigate(step.href) : navigate(step.section)}>{step.done ? <Check size={14} className="shrink-0 text-primary"/> : <Circle size={14} className="shrink-0 text-muted-foreground"/>}<span>{step.title}</span></button>)}</div></Panel>}
     <p className="text-[10px] leading-5 text-muted-foreground">{treasury?.config?.network === "testnet" ? "Your treasury is on NEAR testnet. Intents settlement requires mainnet." : treasury?.lastSyncedAt ? `Synced ${new Date(treasury.lastSyncedAt).toLocaleString()} · USDC` : "USDC · Treasury not synced"}</p>
   </div>;
 }

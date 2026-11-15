@@ -1,3 +1,4 @@
+import { appHref, isPublicDemo } from "./demo-scope";
 import { localRedirect } from "./redirect-path";
 import { workspacePath } from "./workspace-access";
 
@@ -9,11 +10,12 @@ export function accountView(value: unknown): AccountView {
 }
 
 export function accountReturnPath(companyIds: readonly string[], activeCompanyId: string | null, requested?: unknown) {
-  const fallback = activeCompanyId && companyIds.includes(activeCompanyId) ? workspacePath(activeCompanyId, "overview") : "/app";
+  const fallback = activeCompanyId && companyIds.includes(activeCompanyId) ? workspacePath(activeCompanyId, "overview") : appHref("/app");
   if (typeof requested !== "string") return fallback;
   const safe = localRedirect(requested, fallback), url = new URL(safe, "https://razor.invalid");
-  if (url.pathname === "/receive") return safe;
+  if (url.pathname === "/receive") return appHref(safe);
+  if (isPublicDemo() && url.pathname === "/demo") {const company=url.searchParams.get("company");return company&&!companyIds.includes(company)?fallback:safe;}
   if (url.pathname !== "/app") return fallback;
   const company = url.searchParams.get("company");
-  return company && !companyIds.includes(company) ? fallback : safe;
+  return company && !companyIds.includes(company) ? fallback : appHref(safe);
 }

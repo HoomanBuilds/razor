@@ -1,5 +1,7 @@
 "use client";
 
+import { appHref } from "@/lib/demo-scope";
+
 import { ContractUpgradeDisclosure } from "@/components/contract-upgrade-disclosure";
 import type { ContractUpgradePolicy } from "@/lib/contract-upgrade-policy";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -62,7 +64,7 @@ export function TreasuryCreation() {
   return <div data-wallet-action-busy={busy === "register" || busy === "link" ? "true" : "false"}><div className="grid gap-5">
     <ol aria-label="Treasury activation steps" className="flex gap-2">{["Owner","Limits","Review"].map((label,index)=><li key={label} aria-current={step === index ? "step" : undefined} className={`flex-1 border-b pb-4 text-xs ${step === index ? "border-primary font-medium text-primary" : "border-border text-muted-foreground"}`}><span className="mr-1">{index+1}.</span>{label}</li>)}</ol>
     {loading?<p className="text-sm text-muted-foreground">Checking the shared treasury...</p>:null}
-    {step === 0 && config && !config.verifiedWallets.length ? <div className="rounded-xl bg-muted p-4"><p className="text-sm leading-6">Link a NEAR wallet to activate your treasury.</p><div className="mt-3 flex flex-wrap items-center gap-4"><a href="/account" target="_blank" rel="noreferrer" className="text-sm font-medium text-primary">Wallet setup</a><button type="button" className="text-sm font-medium text-primary" onClick={refresh}>Refresh wallets</button></div></div> : null}
+    {step === 0 && config && !config.verifiedWallets.length ? <div className="rounded-xl bg-muted p-4"><p className="text-sm leading-6">Link a NEAR wallet to activate your treasury.</p><div className="mt-3 flex flex-wrap items-center gap-4"><a href={appHref("/account")} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary">Wallet setup</a><button type="button" className="text-sm font-medium text-primary" onClick={refresh}>Refresh wallets</button></div></div> : null}
     {configError?<p role="alert" className="text-sm text-destructive">{configError}</p>:null}
     {config&&!config.ready?<p role="status" className="rounded-lg bg-muted p-4 text-sm">{config.reason}</p>:null}
     {config?.network==="testnet"?<p className="text-sm text-muted-foreground">Testnet registration supports development. Live NEAR Intents funding requires mainnet.</p>:null}

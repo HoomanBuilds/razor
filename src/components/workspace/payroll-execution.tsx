@@ -1,5 +1,7 @@
 "use client";
 
+import { DemoAction } from "@/components/demo/demo-action";
+
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
 import { dateLabel, usd } from "@/lib/format";
@@ -95,6 +97,7 @@ export function PayrollExecution({ runId, onReview, active = true }: { runId: st
     {resource.loading ? <Empty>Loading run execution...</Empty> : data ? <div className="grid gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4"><div className="flex items-center gap-3 text-sm"><Status value={data.complete ? "paid" : data.run.status} /><span className="text-muted-foreground">{data.lines.filter(line => line.remaining === "0").length} / {data.lines.length} paid</span></div><p className="flex items-center gap-2 text-xl font-semibold"><TokenLogo symbol="USDC" size={22} />{usd(data.totalEntitlements)}</p></div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm"><p className="text-muted-foreground">{usd(data.funding.available)} available{BigInt(data.funding.shortfall) > 0n && <span className="ml-2 text-amber-900">· {usd(data.funding.shortfall)} shortfall</span>}</p><details><summary className="cursor-pointer text-muted-foreground">Run details</summary><div className="mt-4 grid gap-3 text-xs text-muted-foreground"><dl className="grid gap-2"><div className="flex justify-between gap-4"><dt>Still to reserve</dt><dd>{usd(data.funding.unreserved)}</dd></div><div className="flex justify-between gap-4"><dt>Reserved</dt><dd>{usd(data.funding.alreadyReserved)}</dd></div><div className="flex justify-between gap-4"><dt>Protected funds</dt><dd>{usd(data.funding.protectedFunding)}</dd></div><div className="flex justify-between gap-4"><dt>Awaiting reconciliation</dt><dd>{usd(data.funding.awaitingReconciliation)}</dd></div><div className="flex justify-between gap-4"><dt>Maximum costs</dt><dd>{usd(data.maximumCosts)}</dd></div></dl>{data.approvedVersion && <div className="grid gap-2 border-t pt-3"><p>Approved by {data.approvedVersion.approvedName} · {new Date(data.approvedVersion.created_at).toLocaleString()}</p><p className="break-all font-mono">Version: {data.approvedVersion.id}</p><p className="break-all font-mono">Review: {data.approvedVersion.review_hash}</p></div>}</div></details></div>
+      {!data.complete&&data.approvedVersion&&<DemoAction action="settle-payroll" options={{runId}}>Simulate payroll delivery</DemoAction>}
       {commonBlocks.length > 0 && <ul className="space-y-1 text-sm text-amber-900">{commonBlocks.map(block => <li key={block.code}>{blockLabels[block.code] ?? block.reason}</li>)}</ul>}
       <div className="divide-y border-y">{data.lines.map(line => {
         const network = line.attempt?.destination_network ?? line.route.primary.network;

@@ -1,3 +1,4 @@
+import { appFetch } from "@/lib/demo-scope";
 import { InvalidCompanyTime } from "./company-time";
 import { walletFailureMessage } from "./client-errors";
 
@@ -20,7 +21,7 @@ export async function api<T>(
   method?: string,
   options?: { signal?: AbortSignal },
 ): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await appFetch(`/api${path}`, {
     method: method ?? (body === undefined ? "GET" : "POST"),
     credentials: "same-origin",
     headers:

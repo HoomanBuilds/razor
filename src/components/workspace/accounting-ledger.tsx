@@ -1,5 +1,7 @@
 "use client";
 
+import { isPublicDemo } from "@/lib/demo-scope";
+
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { api } from "@/lib/api";
@@ -93,7 +95,7 @@ function LedgerContent({ endpoint, data, connectionId, canApprove, disabled, onC
     {task === "fee" && (selectedFee ? <>
       <div className="grid gap-3 rounded-2xl bg-muted/50 p-5"><AssetIdentity symbol="NEAR" network="near"/><p className="break-all text-2xl font-medium tabular-nums">{formatUnits(selectedFee.amount_atomic, 24)} NEAR</p><p className="text-sm text-muted-foreground">Actual network fee · {selectedFee.network}</p></div>
       <dl className="grid gap-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Source</dt><dd className="text-right">{feeLabel(selectedFee)}</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Recorded</dt><dd>{dateLabel(selectedFee.created_at)}</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Grouping</dt><dd>{selectedFee.batch_id ? "Grouped" : "Ungrouped"}</dd></div></dl>
-      <Field as="div" label="NEAR transaction"><Address value={selectedFee.transaction_hash} label="transaction hash"/><a className="mt-2 inline-block text-sm text-primary" href={`https://${selectedFee.network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${encodeURIComponent(selectedFee.transaction_hash)}`} target="_blank" rel="noreferrer">View transaction</a></Field>
+      <Field as="div" label="NEAR transaction"><Address value={selectedFee.transaction_hash} label="transaction hash"/><a hidden={isPublicDemo()} className="mt-2 inline-block text-sm text-primary" href={`https://${selectedFee.network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${encodeURIComponent(selectedFee.transaction_hash)}`} target="_blank" rel="noreferrer">View transaction</a></Field>
       <details className="border-t pt-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Record IDs</summary><div className="mt-4 grid gap-4"><Field as="div" label="Source ID"><Address value={selectedFee.reference_id} label="source ID"/></Field><Field as="div" label="Fee ID"><Address value={selectedFee.id} label="fee ID"/></Field>{selectedFee.batch_id && <Field as="div" label="Group ID"><Address value={selectedFee.batch_id} label="group ID"/></Field>}</div></details>
     </> : <Empty>Fee record unavailable.</Empty>)}
     {task === "batch" && (selectedBatch ? <>

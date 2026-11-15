@@ -1,3 +1,4 @@
+import { appHref } from "./demo-scope";
 import type { Section } from "../components/workspace/types";
 
 export const WORKSPACE_NAVIGATION_EVENT = "razor:workspace-navigation";
@@ -34,5 +35,5 @@ export function workspacePath(companyId: string, section: Section, paymentId?: s
   const params = new URLSearchParams({ company: companyId, section });
   if (section === "payments" && paymentId) params.set("payment", paymentId);
   if (section === "billing" && invoiceId) params.set("invoice", invoiceId);
-  return `/app?${params}`;
+  return appHref(`/app?${params}`);
 }
