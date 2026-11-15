@@ -1,77 +1,66 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, FileJson } from "lucide-react";
 import { api } from "@/lib/api";
 import { COMPANY_REVIEW_MAX_BYTES, parseCompanyReview, type CompanyReview } from "@/lib/company-private/schema";
 import { useWorkspace } from "./context";
 import { useAction } from "./hooks";
-import { Action, control, DataTable, Field, Panel } from "./shared";
+import { Action, Address, control, Empty, Field, Panel } from "./shared";
+import { openInvoice } from "./invoice-navigation";
+import { focusWorkspaceForm } from "./page-metrics";
 
 export function CompanyPrivateProcessing() {
+  const { base } = useWorkspace();
+  return <CompanyPrivateContent key={base}/>;
+}
+function CompanyPrivateContent() {
   const { base, organization, recipients, refresh, navigate } = useWorkspace();
   const allowed = ["company:read", "payments:read", "payments:prepare", "documents:manage"].every(permission => organization.permissions?.includes(permission));
   const [review, setReview] = useState<CompanyReview | null>(null), [fileError, setFileError] = useState("");
-  const [reading, setReading] = useState(false), [confirmed, setConfirmed] = useState(false), [notice, setNotice] = useState("");
-  const { busy, error, run } = useAction();
+  const [reading, setReading] = useState(false), [confirmed, setConfirmed] = useState(false), [billId, setBillId] = useState("");
+  const [view, setView] = useState<"import" | "review" | "bill" | "source" | "done">("import");
+  const { busy, error, run, setError } = useAction();
+  const active = useRef(true), generation = useRef(0);
+  useEffect(() => { active.current = true; return () => { active.current = false; generation.current++; }; }, []);
   const payees = recipients.filter(value => value.preference_status === "confirmed" && value.confirmed_at);
   async function choose(file?: File) {
-    setReview(null); setFileError(""); setConfirmed(false); setNotice("");
+    const request = ++generation.current;
+    setReview(null); setFileError(""); setConfirmed(false); setBillId(""); setError("");
     if (!file) return;
     setReading(true);
     try {
       if (file.size > COMPANY_REVIEW_MAX_BYTES) throw new Error();
-      setReview(parseCompanyReview(await file.text()));
-    } catch { setFileError("Choose a valid company-operated review JSON file up to 256 KB. The file has not been uploaded."); }
-    finally { setReading(false); }
+      const parsed = parseCompanyReview(await file.text());
+      if (active.current && request === generation.current) { setReview(parsed); setView("review"); }
+    } catch { if (active.current && request === generation.current) setFileError("Choose a valid review JSON file, up to 256 KB. Nothing was uploaded."); }
+    finally { if (active.current && request === generation.current) setReading(false); }
   }
-  return <Panel title="Process privately on your company computer" tone="white" description="Keep original documents and your AI key on your own computer." help="Run verified inference on your company computer. Original invoices and your NEAR AI key stay outside Razor's hosted server.">
-    <div className="grid min-w-0 grid-cols-1 gap-5">
-      <details className="rounded-xl border border-border bg-white p-4"><summary className="cursor-pointer text-xs font-medium">Privacy and inference costs</summary><p className="mt-3 text-xs leading-6 text-muted-foreground">Your computer verifies the required NEAR AI gateway and model identity, encrypts input and verifies signed output using the same private client as hosted analysis. Your own NEAR AI account pays for inference. Original files and local review artifacts remain on your computer until you delete them; the review file contains plaintext extracted fields. Revoke your key through your NEAR AI account. No key is entered in this page.</p></details>
-      <details className="min-w-0 rounded-2xl border border-border bg-white p-5 text-sm"><summary className="cursor-pointer font-medium">Run the company-operated tool</summary><div className="mt-3 grid min-w-0 grid-cols-1 gap-3">
-        <p>Use Node.js 24.22.1 or newer and the reviewed Razor source with its installed dependencies. Set your own <code>NEAR_AI_API_KEY</code>, <code>NEAR_AI_MODEL</code>, <code>NEAR_AI_MODEL_COMPOSE_SHA256</code> and <code>NEAR_AI_GATEWAY_COMPOSE_SHA256</code> only in that computer&apos;s environment. The command has no Razor endpoint or hosted fallback. PDF processing also needs the documented local PDF tools.</p>
-        <pre className="max-w-full overflow-x-auto rounded-lg bg-muted p-3 text-xs">node --max-old-space-size=512 --import tsx scripts/process-invoice-private.ts --input /absolute/invoice.pdf --output /absolute/review.json --packet /absolute/evidence.json</pre>
-        <p>TXT, PDF, PNG and JPEG files use bounded reading and processing. The output must use a new absolute path. Evidence export contains encrypted wire data by default, without plaintext or decryption keys. Use <code>--packet-mode metadata</code> for redacted evidence or omit <code>--packet</code>. Files are saved privately with mode 0600. Missing keys or failed verification stop processing. Manual invoice entry remains available.</p>
-        <a href="/verify" target="_blank" rel="noopener noreferrer" className="w-fit text-primary">Open the local evidence verifier</a>
-        <p className="text-xs text-muted-foreground">The evidence verifier reports individual claim limits. A signed encrypted response does not independently authenticate separately supplied decrypted fields or prove that an invoice is correct.</p>
-      </div></details>
-      {!allowed ? <p className="text-sm text-muted-foreground">A finance preparer with document access can import explicitly reviewed fields.</p> : <>
-        <Field label="Open a local company review file" hint="JSON only, up to 256 KB. This page reads the full review locally; only the fields you approve below are sent to Razor's server."><input type="file" accept="application/json,.json" disabled={reading || !!busy} onChange={event => void choose(event.target.files?.[0])} /></Field>
-        <p className="text-xs leading-5 text-muted-foreground">The review file contains plaintext and is accessible to the code served by this website. Use the company tool without opening its output here if you want all plaintext to stay outside the web application.</p>
-        {reading && <p role="status" className="text-sm">Reading the local review file...</p>}
-        {fileError && <p role="alert" className="text-sm text-destructive">{fileError}</p>}
-        {review && <div className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-border bg-white p-5">
-          <p className="break-all text-xs text-muted-foreground">Source SHA-256: {review.source.sha256}. {review.source.kind.toUpperCase()}, {review.source.bytes.toLocaleString()} bytes. Company tool reported model {review.processing.model}, processed {new Date(review.processedAt).toLocaleString()}. This file and its verification metadata are exporter assertions and can be edited; Razor has not independently verified these plaintext fields.</p>
-          <dl className="grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2"><div><dt className="text-muted-foreground">Supplier observed</dt><dd className="break-words">{review.draft.supplier || "Missing"}</dd></div><div><dt className="text-muted-foreground">Reference observed</dt><dd className="break-words">{review.draft.reference || "Missing"}</dd></div><div><dt className="text-muted-foreground">Printed amount and currency</dt><dd>{review.draft.amountPrinted || review.draft.amount || "Missing"} {review.draft.currency || "Unconfirmed"}</dd></div><div><dt className="text-muted-foreground">Model confidence</dt><dd>{review.draft.confidence === null ? "Not supplied" : `${Math.round(review.draft.confidence * 100)}% - a model estimate`}</dd></div></dl>
-          <dl className="grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-3">{[["Amount due observed", review.draft.amount], ["Due date observed", review.draft.dueDate], ["Subtotal", review.draft.subtotal], ["Tax", review.draft.tax], ["Withholding", review.draft.withholding], ["Deposit", review.draft.deposit]].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd>{value ?? "Missing"}</dd></div>)}</dl>
-          {review.draft.warnings.map((warning, index) => <p key={index} className="text-xs text-amber-900">{warning}</p>)}
-          {review.draft.paymentDetails && <p className="break-words text-xs text-amber-900">The document contains payment instructions. They are untrusted observations and will not be imported or used to change a receiving profile.</p>}
-          {review.draft.lineItems.length > 0 && <details className="min-w-0"><summary className="cursor-pointer text-xs font-medium">Inspect extracted original-currency line items</summary><div className="mt-3"><DataTable columns={["Description", "Quantity", "Unit price", "Total"]}>{review.draft.lineItems.map((item, index) => <tr key={index}><td className="max-w-64 break-words">{item.description}</td><td>{item.quantity ?? "Missing"}</td><td>{item.unitPrice ?? "Missing"}</td><td>{item.total ?? "Missing"}</td></tr>)}</DataTable></div></details>}
-          <form key={`${review.source.sha256}:${review.processedAt}`} className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2" onChange={event => { const target = event.nativeEvent.target; if (!(target instanceof HTMLInputElement) || target.name !== "reviewConfirmed") setConfirmed(false); }} onSubmit={event => {
-            event.preventDefault(); if (!confirmed) return; const values = new FormData(event.currentTarget);
-            void run("import-local-review", async () => {
-              const dueDate = String(values.get("dueDate") ?? "");
-              const result = await api<{ billId: string; message: string }>(`${base}/company-private/reviewed-invoices`, { sourceSha256: review.source.sha256, sourceKind: review.source.kind,
-                recipientId: values.get("recipient"), reference: values.get("reference"), title: values.get("title"), agreedUSDC: values.get("amount"), maxFeeUSDC: values.get("fee"), ...(dueDate ? { dueDate } : {}), reviewConfirmed: true });
-              setNotice(result.message); setConfirmed(false); refresh();
-            });
-          }}>
-            <fieldset disabled={!!busy} className="contents">
-              <Field label="Confirmed company payee"><select name="recipient" className={control} required defaultValue=""><option value="">Choose an existing payee</option>{payees.map(payee => <option key={payee.id} value={payee.id}>{payee.name}</option>)}</select></Field>
-              <Field label="Reviewed invoice reference"><input name="reference" className={control} required maxLength={120} defaultValue={review.draft.reference && review.draft.reference.length <= 120 ? review.draft.reference : ""} /></Field>
-              <Field label="Reviewed bill description"><input name="title" className={control} required maxLength={240} defaultValue={review.draft.supplier ? `Invoice from ${review.draft.supplier}` : "Company-reviewed invoice"} /></Field>
-              <Field label="Explicitly agreed obligation (USDC)" hint="Foreign-currency amounts are never converted automatically."><input name="amount" className={control} required inputMode="decimal" defaultValue={review.draft.currency === "USDC" ? review.draft.amount ?? "" : ""} /></Field>
-              <Field label="Maximum payment cost (USDC)" hint="A cost ceiling for later route review, not an actual fee."><input name="fee" className={control} required inputMode="decimal" defaultValue="1" /></Field>
-              <Field label="Reviewed due date (UTC, optional)"><input name="dueDate" type="date" className={control} defaultValue={review.draft.dueDate ?? ""} /></Field>
-              <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">Creating the draft sends only the source hash/type and the reviewed payee, reference, description, agreed USDC amount, cost ceiling and due date above. The raw document, complete extraction, payment instructions, model credentials and local evidence file are excluded. These selected fields are stored in the ordinary company bill record.</p>
-              <label className="flex items-start gap-2 text-xs sm:col-span-2"><input name="reviewConfirmed" type="checkbox" required checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I compared these fields with my original document, selected the confirmed payee and explicitly agreed the USDC amount. This creates a draft for separate approval.</label>
-              <div className="sm:col-span-2"><Action busy={busy === "import-local-review"} disabled={!!busy || !confirmed || !payees.length}>Create reviewed bill draft</Action></div>
-            </fieldset>
-          </form>
-        </div>}
+  const show = (next: typeof view) => { setView(next); setConfirmed(false); setError(""); };
+  return <Panel title={view === "import" ? "Company-operated analysis" : view === "bill" ? "Prepare bill draft" : view === "source" ? "Local source records" : view === "done" ? "Bill draft created" : "Review local extraction"} tone="white">
+    <section aria-busy={!!busy || reading} className="grid gap-5">
+      {(error || fileError) && <p role="alert" className="text-sm text-destructive">{error || fileError}</p>}
+      {view !== "import" && <button type="button" className="inline-flex items-center gap-1 justify-self-start text-sm text-muted-foreground" disabled={!!busy || reading} onClick={() => show(view === "bill" || view === "source" ? "review" : "import")}><ChevronLeft size={16}/>{view === "bill" || view === "source" ? "Extraction" : "Local import"}</button>}
+      {view === "import" && <>
+        {allowed ? <><div className="grid gap-4 rounded-2xl border border-dashed p-6"><FileJson size={26} className="text-primary"/><Field label="Company review JSON"><input type="file" className={control} accept="application/json,.json" disabled={reading || !!busy} onChange={event => void choose(event.target.files?.[0])}/></Field><p className="text-xs text-muted-foreground">Up to 256 KB. Plaintext opens in this page; only approved fields are uploaded.</p></div>{reading && <p role="status" className="text-sm">Reading local file...</p>}<button type="button" className="justify-self-start text-sm text-primary" onClick={() => { navigate("bills"); focusWorkspaceForm("bill-compose"); }}>Enter an invoice manually</button></> : <Empty>Payment preparation and document permissions are required to import fields.</Empty>}
+        <details className="border-t pt-5 text-sm"><summary className="cursor-pointer font-medium">Run the local tool</summary><div className="mt-4 grid gap-4"><p className="text-sm text-muted-foreground">Original documents and your NEAR AI key stay on your computer. Your NEAR AI account pays for inference.</p><ol className="list-inside list-decimal space-y-3 text-sm"><li>Use Node.js 24.22.1 or newer with Razor's installed dependencies.</li><li>Set <code>NEAR_AI_API_KEY</code>, <code>NEAR_AI_MODEL</code>, <code>NEAR_AI_MODEL_COMPOSE_SHA256</code> and <code>NEAR_AI_GATEWAY_COMPOSE_SHA256</code> in the local environment.</li><li>Run the command with new absolute output paths.</li></ol><pre className="max-w-full overflow-x-auto rounded-xl bg-muted/50 p-4 text-xs">node --max-old-space-size=512 --import tsx scripts/process-invoice-private.ts --input /absolute/invoice.pdf --output /absolute/review.json --packet /absolute/evidence.json</pre><p className="text-xs text-muted-foreground">TXT, PDF, PNG or JPEG. PDFs require the documented local PDF tools. Failed verification stops processing without a hosted fallback.</p><details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Files, keys and evidence</summary><div className="mt-3 grid gap-3 leading-5"><p>Review JSON contains plaintext extracted fields. Keep it outside this web app if plaintext must stay entirely local.</p><p>Files use mode 0600 and remain until deleted locally. Revoke the API key through your NEAR AI account.</p><p>Evidence exports encrypted wire data without decryption keys. Use <code>--packet-mode metadata</code> to redact wire data, or omit <code>--packet</code>.</p></div></details><a href="/verify" target="_blank" rel="noopener noreferrer" className="justify-self-start text-primary">Open local evidence verifier</a></div></details>
       </>}
-      {notice && <p role="status" className="text-sm">{notice}</p>}
-      {notice && <button type="button" className="w-fit text-sm text-primary" onClick={() => navigate("bills")}>Open the company bill history</button>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    </div>
+      {review && view !== "import" && <>
+        <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl bg-muted/50 p-5"><div><h3 className="font-medium">{review.draft.supplier || "Unknown supplier"}</h3><p className="mt-1 text-sm text-muted-foreground">{review.draft.reference || "Reference missing"}</p></div><p className="break-all text-xl font-medium">{review.draft.amountPrinted || review.draft.amount || "Amount missing"} <span className="text-sm text-muted-foreground">{review.draft.currency || "Currency unconfirmed"}</span></p></div>
+        {view === "review" && <>
+          <p role="status" className="text-sm text-amber-800">Unverified plaintext extraction. Compare with the original invoice.</p>
+          <dl className="grid gap-4 text-sm sm:grid-cols-2">{[["Amount due", review.draft.amount], ["Due date", review.draft.dueDate], ["Subtotal", review.draft.subtotal], ["Tax", review.draft.tax], ["Withholding", review.draft.withholding], ["Deposit", review.draft.deposit]].filter(([, value]) => value !== null && value !== "").map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1">{value}</dd></div>)}</dl>
+          {review.draft.warnings.map((warning, index) => <p key={index} className="text-sm text-amber-800">{warning}</p>)}
+          {review.draft.paymentDetails && <p className="text-xs text-muted-foreground">Document payment instructions are excluded from import.</p>}
+          {!!review.draft.lineItems.length && <details className="border-t pt-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Line items · Original currency</summary><div className="mt-3 divide-y">{review.draft.lineItems.map((item, index) => <div key={index} className="grid gap-2 py-4"><div className="flex items-start justify-between gap-4"><span className="break-words">{item.description}</span><span className="shrink-0 tabular-nums">{item.total ?? "Total missing"}</span></div><p className="text-xs text-muted-foreground">Quantity {item.quantity ?? "Unconfirmed"} · Unit price {item.unitPrice ?? "Unconfirmed"}</p></div>)}</div></details>}
+          <div className="flex flex-wrap items-center justify-end gap-4 border-t pt-5"><button type="button" className="text-sm text-muted-foreground" onClick={() => show("source")}>Source records</button>{allowed && <Action onClick={() => show("bill")}>Review bill fields</Action>}</div>
+        </>}
+        {view === "bill" && allowed && <form key={`${review.source.sha256}:${review.processedAt}`} className="grid gap-5" onChange={event => { if (!(event.target instanceof HTMLInputElement) || event.target.name !== "reviewConfirmed") setConfirmed(false); }} onSubmit={event => { event.preventDefault(); if (!confirmed) return; const values = new FormData(event.currentTarget); void run("import-local-review", async () => { const dueDate = String(values.get("dueDate") ?? ""); const result = await api<{ billId: string; message: string }>(`${base}/company-private/reviewed-invoices`, { sourceSha256: review.source.sha256, sourceKind: review.source.kind, recipientId: values.get("recipient"), reference: values.get("reference"), title: values.get("title"), agreedUSDC: values.get("amount"), maxFeeUSDC: values.get("fee"), ...(dueDate ? { dueDate } : {}), reviewConfirmed: true }); if (active.current) { setBillId(result.billId); setConfirmed(false); setView("done"); refresh(); } }); }}><fieldset disabled={!!busy} className="grid gap-5 sm:grid-cols-2">
+          <Field label="Confirmed payee"><select name="recipient" className={control} required defaultValue=""><option value="">Choose payee</option>{payees.map(payee => <option key={payee.id} value={payee.id}>{payee.name}</option>)}</select></Field><Field label="Invoice reference"><input name="reference" className={control} required maxLength={120} defaultValue={review.draft.reference && review.draft.reference.length <= 120 ? review.draft.reference : ""}/></Field><div className="sm:col-span-2"><Field label="Description"><input name="title" className={control} required maxLength={240} defaultValue={review.draft.supplier ? `Invoice from ${review.draft.supplier}` : "Company-reviewed invoice"}/></Field></div><Field label="Agreed amount (USDC)"><input name="amount" className={control} required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" defaultValue={review.draft.currency === "USDC" ? review.draft.amount ?? "" : ""}/></Field><Field label="Payment cost ceiling (USDC)"><input name="fee" className={control} required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" defaultValue="1"/></Field><Field label="Due date (UTC, optional)"><input name="dueDate" type="date" className={control} defaultValue={review.draft.dueDate ?? ""}/></Field>{review.draft.currency !== "USDC" && <p className="self-center text-sm text-amber-800">Agree USDC separately. No automatic conversion.</p>}<label className="flex items-start gap-3 text-sm sm:col-span-2"><input name="reviewConfirmed" type="checkbox" required checked={confirmed} onChange={event => setConfirmed(event.target.checked)} className="mt-1"/>I compared these fields with the original and approve sharing them to create a bill draft.</label><p className="text-xs text-muted-foreground sm:col-span-2">Only the fields above and source hash/type are saved. No document or AI credentials.</p><div className="flex justify-end border-t pt-5 sm:col-span-2"><Action busy={busy === "import-local-review"} disabled={!!busy || !confirmed || !payees.length}>Create bill draft</Action></div>
+        </fieldset></form>}
+        {view === "source" && <><p className="text-sm text-muted-foreground">Exporter-supplied metadata, not independently verified by Razor.</p><dl className="grid gap-3 text-sm"><div className="flex justify-between gap-3"><dt className="text-muted-foreground">Source</dt><dd>{review.source.kind.toUpperCase()} · {review.source.bytes.toLocaleString()} bytes</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">Processed</dt><dd>{new Date(review.processedAt).toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">Reported model</dt><dd className="break-all text-right">{review.processing.model}</dd></div>{review.draft.confidence !== null && <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Model confidence estimate</dt><dd>{Math.round(review.draft.confidence * 100)}%</dd></div>}</dl><Field as="div" label="Source SHA-256"><Address value={review.source.sha256} label="source hash"/></Field><details className="border-t pt-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Reported verification records</summary><pre className="mt-4 max-h-80 overflow-auto rounded-xl bg-muted/50 p-4 text-xs">{JSON.stringify(review.processing, null, 2)}</pre></details><a href="/verify" target="_blank" rel="noopener noreferrer" className="justify-self-start text-sm text-primary">Verify an evidence packet locally</a></>}
+        {view === "done" && <><p role="status" className="text-sm text-emerald-700">Saved for separate payment approval.</p><div><Action onClick={() => { navigate("bills"); openInvoice(billId); }}>Open bill draft</Action></div></>}
+      </>}
+    </section>
   </Panel>;
 }
