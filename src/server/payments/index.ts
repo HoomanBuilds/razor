@@ -54,10 +54,10 @@ paymentsRoutes.get("/funding", c => {
 paymentsRoutes.post("/funding", async (c) => c.json(await service.prepareFunding(c.get("access"), await body(c.req.raw, fundingInput)), 201));
 paymentsRoutes.post("/funding/:id/reconcile", async (c) => c.json(await service.reconcileFunding(c.get("access"), c.req.param("id"), (await body(c.req.raw, z.object({ sourceTxHash: text.optional() }))).sourceTxHash)));
 paymentsRoutes.get("/payments", (c) => {
-  if (c.req.query("page") === undefined && c.req.query("pageSize") === undefined) return c.json({ payments: service.listPayments(c.get("access")) });
-  const parsed = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(c.req.query());
-  if (!parsed.success) throw new ApiError(422, "Choose a valid payment page and page size", "INVALID_INPUT");
-  return c.json(service.paymentPage(c.get("access"), parsed.data.page, parsed.data.pageSize));
+  if (c.req.query("page") === undefined && c.req.query("pageSize") === undefined && c.req.query("statusGroup") === undefined) return c.json({ payments: service.listPayments(c.get("access")) });
+  const parsed = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50), statusGroup: z.enum(["all", "open", "completed"]).default("all") }).safeParse(c.req.query());
+  if (!parsed.success) throw new ApiError(422, "Choose a valid payment page, page size and status group", "INVALID_INPUT");
+  return c.json(service.paymentPage(c.get("access"), parsed.data.page, parsed.data.pageSize, parsed.data.statusGroup));
 });
 paymentsRoutes.get("/payments/summary", (c) => c.json(service.paymentSummary(c.get("access"))));
 paymentsRoutes.post("/payments", async (c) => c.json({ payment: service.createPayment(c.get("access"), await body(c.req.raw, paymentInput)) }, 201));

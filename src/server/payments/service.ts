@@ -50,19 +50,29 @@ export function getPayment(access: AccessContext, paymentId: string): Payment {
   return { ...item, recipientName: recordedRecipientName(access.organizationId, item), activeClearingRound: activeClearingRound(access.organizationId, item.id) };
 }
 
-export function listPayments(access: AccessContext, page?: { page: number; pageSize: number }): Payment[] {
+type PaymentStatusGroup = "all" | "open" | "completed";
+
+function paymentStatusFilter(group: PaymentStatusGroup = "all") {
+  if (group === "open") return " AND p.status NOT IN ('paid','cancelled')";
+  if (group === "completed") return " AND p.status='paid'";
+  if (group === "all") return "";
+  throw new ApiError(422, "Choose a valid payment status group", "INVALID_INPUT");
+}
+
+export function listPayments(access: AccessContext, page?: { page: number; pageSize: number; statusGroup?: PaymentStatusGroup }): Payment[] {
   requirePermission(access, "payments:read");
-  const query = "SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ? ORDER BY p.created_at DESC,p.id DESC";
+  const query = `SELECT p.*,EXISTS(SELECT 1 FROM payout_attempts a WHERE a.payment_id=p.id AND a.observed_output IS NOT NULL AND a.observed_output!='0') AS partial_delivery_observed FROM payments p WHERE p.organization_id = ?${paymentStatusFilter(page?.statusGroup)} ORDER BY p.created_at DESC,p.id DESC`;
   const payments = page ? rows<Payment>(`${query} LIMIT ? OFFSET ?`, access.organizationId, page.pageSize, (page.page - 1) * page.pageSize) : rows<Payment>(query, access.organizationId);
   return payments.map(payment => ({ ...payment, recipientName: recordedRecipientName(access.organizationId, payment), activeClearingRound: activeClearingRound(access.organizationId, payment.id) }));
 }
 
-export function paymentPage(access: AccessContext, page: number, pageSize: number) {
+export function paymentPage(access: AccessContext, page: number, pageSize: number, statusGroup: PaymentStatusGroup = "all") {
   requirePermission(access, "payments:read");
   if (!Number.isSafeInteger(page) || page < 1 || page > 100000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new ApiError(422, "Choose a valid payment page and page size", "INVALID_INPUT");
+  const filter = paymentStatusFilter(statusGroup);
   return transaction(() => {
-    const total = row<{ total: number }>("SELECT COUNT(*) AS total FROM payments WHERE organization_id=?", access.organizationId)!.total;
-    return { payments: listPayments(access, { page, pageSize }), page, pageSize, total, hasMore: page * pageSize < total };
+    const total = row<{ total: number }>(`SELECT COUNT(*) AS total FROM payments p WHERE p.organization_id=?${filter}`, access.organizationId)!.total;
+    return { payments: listPayments(access, { page, pageSize, statusGroup }), page, pageSize, total, hasMore: page * pageSize < total };
   });
 }
 

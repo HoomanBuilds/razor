@@ -70,6 +70,29 @@ test("a cancelled remainder preserves the original unpaid entitlement without du
   assert.equal(summary.attention[0].state, "needs_replacement");
 });
 
+test("payment status groups filter before pagination and preserve company boundaries", () => {
+  const f = fixture(), other = fixture();
+  const states = ["draft", "approved_unfunded", "unknown", "partially_paid", "paid", "paid", "cancelled"];
+  const expected = states.map(status => {
+    const payment = f.create();
+    getDb().prepare("UPDATE payments SET status=? WHERE id=?").run(status, payment.id);
+    return { id: payment.id, status };
+  });
+  other.create();
+  const first = paymentPage(f.access, 1, 2, "open"), second = paymentPage(f.access, 2, 2, "open");
+  assert.equal(first.total, 4);
+  assert.equal(first.hasMore, true);
+  assert.equal(second.hasMore, false);
+  assert.deepEqual(new Set([...first.payments, ...second.payments].map(payment => payment.id)), new Set(expected.filter(payment => !["paid", "cancelled"].includes(payment.status)).map(payment => payment.id)));
+  assert.equal(paymentPage(f.access, 3, 2, "open").payments.length, 0);
+  const completed = paymentPage(f.access, 1, 10, "completed");
+  assert.equal(completed.total, 2);
+  assert.ok(completed.payments.every(payment => payment.status === "paid"));
+  assert.equal(paymentPage(f.access, 1, 10).total, states.length);
+  assert.equal(paymentPage(other.access, 1, 10, "completed").total, 0);
+  assert.throws(() => paymentPage({ ...f.access, permissions: ["company:read"] }, 1, 10, "open"), /permission/);
+});
+
 test("earmarked cash covers its own remaining liability and fees stay separate", () => {
   const f = fixture("100"), parent = f.create();
   createClientReserve(f.access, { idempotencyKey: randomUUID(), amount: parent.amount, purpose: "Protected payroll", paymentId: parent.id });
