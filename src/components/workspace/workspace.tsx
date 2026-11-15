@@ -22,7 +22,6 @@ import {
   ReceiptText,
   RefreshCw,
   Settings2,
-  ShieldCheck,
   Sparkles,
   Users,
   Wallet,
@@ -392,7 +391,6 @@ function Workspace() {
           {notice && <div role="status" className="mb-6 flex items-center justify-between gap-3 rounded-2xl border bg-muted p-4 text-sm">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss notice" className="rounded-full p-1 hover:bg-white"><X size={16}/></button></div>}
           <div className="workspace-content"><CompanyWorkspace key={scope} session={session} organization={organization} section={visibleSection} revision={revision} refresh={() => { if (activeScope.current === scope) setRevision(value => value + 1); }} navigate={navigate} notify={message => { if (activeScope.current === scope) setNotice(message); }}/></div>
         </main>
-        <footer className="mx-auto flex max-w-[1536px] flex-wrap items-center justify-between gap-3 px-5 pb-6 text-[11px] leading-5 text-muted-foreground sm:px-8 lg:px-10"><span className="inline-flex items-center gap-1.5"><ShieldCheck size={13}/>Company authority on NEAR. Cross-chain settlement through NEAR Intents.</span><span>Payment status follows confirmed evidence.</span></footer>
       </div>
       <dialog ref={searchDialog} aria-labelledby="workspace-search-title" onCancel={() => setSearchOpen(false)} onClose={() => setSearchOpen(false)} onClick={event => { if (event.target === event.currentTarget) setSearchOpen(false); }} className="fixed inset-x-0 top-[16vh] m-auto max-h-[65vh] w-[calc(100%_-_2rem)] max-w-lg overflow-hidden rounded-3xl border border-border bg-white p-0 shadow-xl backdrop:bg-black/20 backdrop:backdrop-blur-sm">
         <div className="flex items-center gap-3 border-b px-5 py-4"><Search size={19} className="shrink-0 text-muted-foreground"/><label id="workspace-search-title" htmlFor="workspace-page-search" className="sr-only">Find a workspace page</label><input id="workspace-page-search" autoFocus value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="Where would you like to go?" className="min-w-0 flex-1 bg-transparent py-1 text-sm outline-none"/><button aria-label="Close page search" onClick={() => setSearchOpen(false)} className="rounded-full p-1 text-muted-foreground hover:bg-muted"><X size={17}/></button></div>
@@ -474,7 +472,7 @@ function CompanyWorkspace({
       ) : section === "accounting" ? (
         <AccountingPanel key={section}/>
       ) : section === "support" ? (
-        <SupportPanel />
+        <div className="grid gap-6"><SupportPanel /><WorkflowFeedback /></div>
       ) : section === "procurement" ? (
         <WorkspaceTabs key={section} tabs={[{ label: "Purchases", content: <ProcurementPanel /> }, { label: "Private agreements", content: <CompanyPrivateAgreements /> }, { label: "Commitments", content: <VendorCommitments /> }]} />
       ) : section === "bills" ? (
@@ -516,7 +514,6 @@ function CompanyWorkspace({
           { label: "Notifications", content: <NotificationInbox /> },
         ]} />
       )}
-      <div className="mt-8"><WorkflowFeedback /></div>
     </WorkspaceContext.Provider>
   );
 }
