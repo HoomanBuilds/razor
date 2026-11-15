@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, Check, ChevronDown, ChevronRight, Download, FileText, Info, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
+import { ArrowDownToLine, Check, ChevronDown, ChevronRight, Download, FileText, RefreshCw, ShieldCheck, Wallet } from "lucide-react";
+import { AssetIdentity, TokenLogo, NetworkIdentity } from "@/components/assets/asset-identity";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer, withTaskDrawerWallet } from "./task-drawer";
+import { paymentLabel } from "@/lib/payment-label";
 import { api, RequestError } from "@/lib/api";
 import { microUsd, usd } from "@/lib/format";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
@@ -16,7 +19,7 @@ interface Attempt { id: string; state: string; destination_network: string; dest
 interface Funding { id: string; reference: string; status: string; provider_status: string | null; origin_asset: string; origin_symbol?: string; origin_network?: string; expected_output: string; credited_amount: string; destination_tx_hash: string | null }
 interface Queue { payments: { payment: Payment; attempt: Attempt | null; provenance: string }[]; funding: { funding: Funding; provenance: string }[]; totals: { payments: number; funding: number; unresolvedEntitlementMicroUsdc: string }; page: number; pageSize: number; treasuryNetwork: string | null; more: { payments: boolean; funding: boolean } }
 interface PrivateEvidence {id:string;evidence_kind:string;content_hash:string;receipt:string|null;created_at:string;expires_at:string;retained:boolean}
-interface Prepared { label: string; paymentId: string; attemptId: string; walletActions: NearWalletAction[]; recordSource: boolean; treasuryNetwork: string; preparation: { path: string; body: object } }
+interface Prepared { reference: string; recipient: string; amount: string; label: string; paymentId: string; attemptId: string; walletActions: NearWalletAction[]; recordSource: boolean; treasuryNetwork: string; preparation: { path: string; body: object } }
 
 const provenance: Record<string, string> = {
   unexecuted_obligation: "No source transfer recorded",
@@ -42,37 +45,44 @@ function ReconciliationWorkspace() {
   const [nestedBusy, setNestedBusy] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<{ page: number; view: "payments" | "funding" } | null>(null);
   const container = useRef<HTMLDivElement>(null);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const queueElement = useRef<HTMLElement>(null);
   const keepReviewing = useRef<HTMLButtonElement>(null);
   const navigationTrigger = useRef<HTMLElement | null>(null);
-  const reviewHeading = useRef<HTMLHeadingElement>(null);
   const resource = useResource<Queue>(`${base}/reconciliation?page=${page}`, revision);
-  const { busy, error, run } = useAction();
+  const { busy, error, run, setError } = useAction();
   const [evidence,setEvidence]=useState<Record<string,PrivateEvidence[]>>({});
   const [prepared, setPrepared] = useState<Prepared | null>(null);
+  const [refundStages, setRefundStages] = useState<Record<string, "report" | "confirm">>({});
   const allowed = (permission: string) => organization.permissions?.includes(permission) ?? organization.role === "owner";
   const prepare = (key: string, label: string, paymentId: string, attemptId: string, path: string, input: object | (() => object) = {}, recordSource = false) => run(key, async () => {
     const treasuryNetwork = resource.data?.treasuryNetwork;
     if (!treasuryNetwork) throw new RequestError("Configure the company NEAR treasury first.", 409, "TREASURY_SETUP_REQUIRED");
     const body = typeof input === "function" ? input() : input;
     const result = await api<{ walletActions: NearWalletAction[]; sourceOutcome?: string }>(`${base}${path}`, body);
-    if (result.walletActions.length) setPrepared({ label: result.sourceOutcome ? `${label}: ${result.sourceOutcome}` : label, paymentId, attemptId, walletActions: result.walletActions, recordSource, treasuryNetwork, preparation: { path: `${base}${path}`, body } });
+    if (!active.current) return;
+    const payment = resource.data?.payments.find(value => value.payment.id === paymentId)?.payment;
+    document.querySelectorAll<HTMLDialogElement>('dialog[id^="reconcile-task-"][open]').forEach(dialog => closeTaskDrawer(dialog.id, true));
+    if (result.walletActions.length) setPrepared({ reference: payment ? paymentLabel(payment) : "Payment", recipient: payment?.recipientName ?? "Recipient", amount: payment?.amount ?? "0", label: result.sourceOutcome ? `${label}: ${result.sourceOutcome}` : label, paymentId, attemptId, walletActions: result.walletActions, recordSource, treasuryNetwork, preparation: { path: `${base}${path}`, body } });
     else { refresh(); notify("The recorded payment state has been refreshed."); }
   });
   const submit = () => run("sign", async () => {
-    if (!prepared || resource.error || resource.loading) return;
+    if (!prepared || resource.error || resource.refreshing) return;
     const fresh = await api<{ walletActions: NearWalletAction[] }>(prepared.preparation.path, prepared.preparation.body);
+    if (!active.current) return;
     if (JSON.stringify(fresh.walletActions) !== JSON.stringify(prepared.walletActions)) {
+      closeTaskDrawer("reconcile-wallet-review", true);
       setPrepared(null);
       throw new RequestError("The current authorization changed. Prepare and review the original attempt again.", 409, "SETTLEMENT_REVIEW_CHANGED");
     }
     try {
-      const txHash = await signNearActions(prepared.walletActions, prepared.treasuryNetwork);
+      const txHash = await withTaskDrawerWallet(() => signNearActions(prepared.walletActions, prepared.treasuryNetwork));
       if (txHash && prepared.recordSource) await api(`${base}/attempts/${prepared.attemptId}/submitted`, { txHash });
       await api(`${base}/payments/${prepared.paymentId}/reconcile`, {});
       notify("Wallet action recorded. Check the reconciled status before retrying.");
       refresh();
-    } finally { setPrepared(null); }
+    } finally { if (active.current) { closeTaskDrawer("reconcile-wallet-review", true); setPrepared(null); } }
   });
   useEffect(() => {
     const element = container.current;
@@ -84,14 +94,21 @@ function ReconciliationWorkspace() {
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (prepared) reviewHeading.current?.focus();
+    const dialog = document.getElementById("reconcile-wallet-review");
+    const close = () => { if (dialog?.dataset.walletSuspended !== "true") setPrepared(null); };
+    dialog?.addEventListener("close", close);
+    if (prepared) openTaskDrawer("reconcile-wallet-review");
+    return () => dialog?.removeEventListener("close", close);
   }, [prepared]);
   useEffect(() => {
     if (pendingNavigation) keepReviewing.current?.focus();
   }, [pendingNavigation]);
   const queue = resource.data;
+  const returnedAmount = prepared && "refundAmount" in prepared.preparation.body && typeof prepared.preparation.body.refundAmount === "string" ? prepared.preparation.body.refundAmount : null;
   const locked = !!busy || nestedBusy;
-  const navigatingLocked = locked || !!prepared || resource.loading || !!pendingNavigation;
+  const actionLocked = locked || resource.refreshing || !!resource.error;
+  const openTask = (id: string) => { setError(""); openTaskDrawer(id); };
+  const navigatingLocked = locked || !!prepared || resource.refreshing || !!pendingNavigation;
   const total = queue ? queue.totals.payments + queue.totals.funding : 0;
   const currentRows = view === "payments" ? queue?.payments : queue?.funding;
   const hasMore = queue?.more[view] ?? false;
@@ -138,7 +155,6 @@ function ReconciliationWorkspace() {
       <header className="flex flex-wrap items-start justify-between gap-4 px-1">
         <div>
           <h2 className="text-xl font-medium tracking-tight">Reconciliation</h2>
-          <p className="mt-1.5 text-sm text-muted-foreground">Resolve payment exceptions and confirm incoming funds.</p>
         </div>
         {allowed("reports:read") && (
           <details className="group relative w-full max-w-full sm:w-auto">
@@ -147,7 +163,6 @@ function ReconciliationWorkspace() {
             </summary>
             <div className="mt-3 w-full rounded-2xl border bg-white p-5 shadow-lg sm:absolute sm:right-0 sm:z-20 sm:mt-2 sm:w-80">
               <p className="text-sm font-medium">Accounting export</p>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">Includes every record, across all pages. Filter by record type before calculating totals.</p>
               <a className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-medium text-white" href={"/api" + base + "/reconciliation/export"}>
                 <Download size={15} aria-hidden="true" />Download CSV
               </a>
@@ -177,27 +192,13 @@ function ReconciliationWorkspace() {
         </div>
       )}
 
-      {prepared && (
-        <section aria-labelledby="reconciliation-wallet-review" className="rounded-3xl border border-primary/20 bg-secondary/40 p-5 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="mb-2 text-xs font-medium text-primary">Wallet confirmation</p>
-              <h3 ref={reviewHeading} tabIndex={-1} id="reconciliation-wallet-review" className="text-lg font-medium tracking-tight outline-none">{prepared.label}</h3>
-              <p className="mt-2 text-sm text-muted-foreground">Your owner or appointed signer confirms this action on {prepared.treasuryNetwork}.</p>
-            </div>
-            <button type="button" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setPrepared(null)}>Cancel review</button>
-          </div>
-          <details className="mt-5 rounded-2xl border bg-white p-4">
-            <summary className="cursor-pointer text-sm font-medium">Exact wallet actions</summary>
-            <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-muted p-3 text-xs">{JSON.stringify(prepared.walletActions, null, 2)}</pre>
-          </details>
-          <div className="mt-5 flex justify-end">
-            <Action busy={busy === "sign"} disabled={!!busy || !!resource.error || resource.loading} onClick={() => void submit()}>
-              {busy === "sign" ? "Confirming wallet action..." : "Confirm in NEAR wallet"}
-            </Action>
-          </div>
-        </section>
-      )}
+      <TaskDrawer id="reconcile-wallet-review" title={prepared?.label ?? "Review wallet action"} description={prepared?.reference}>{prepared && <div aria-busy={!!busy} className="grid gap-5">
+        <p className="text-sm font-medium">{prepared.recipient}</p><dl className="grid gap-4">{returnedAmount !== null && <div><dt className="text-xs text-muted-foreground">Returned USDC</dt><dd className="mt-2 text-3xl font-medium tabular-nums">{usd(returnedAmount)}</dd></div>}<div><dt className="text-xs text-muted-foreground">Original payment entitlement</dt><dd className="mt-2 flex items-center gap-2 text-sm tabular-nums"><TokenLogo symbol="USDC" size={20}/>{usd(prepared.amount)} USDC</dd></div></dl>
+        <p className="text-xs text-muted-foreground">Authority on NEAR {prepared.treasuryNetwork}</p>
+        <details className="border-t pt-4 text-xs"><summary className="cursor-pointer">Exact wallet actions</summary><pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-muted p-3">{JSON.stringify(prepared.walletActions, null, 2)}</pre></details>
+        <Action busy={busy === "sign"} disabled={!!busy || !!resource.error || resource.refreshing} onClick={() => void submit()}>Confirm in NEAR wallet</Action>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      </div>}</TaskDrawer>
 
       <section ref={queueElement} className="min-w-0 overflow-hidden rounded-3xl border bg-white" aria-label="Review queue">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 sm:px-6">
@@ -246,14 +247,14 @@ function ReconciliationWorkspace() {
                   {queue.payments.map(({ payment, attempt, provenance: source }) => {
                     const recordId = "payment-" + payment.id;
                     return (
-                      <ReviewRecord key={payment.id} id={recordId} title={payment.reference} subtitle={payment.recipientName ?? "Recorded recipient"}
+                      <ReviewRecord key={payment.id} id={recordId} title={paymentLabel(payment)} subtitle={payment.recipientName ?? "Recorded recipient"}
                         amount={usd(payment.amount)} status={payment.status} open={expanded === recordId} disabled={navigatingLocked} onToggle={() => toggleRecord(recordId)}>
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-medium">{provenance[source] ?? source.replaceAll("_", " ")}</p>
                             {payment.hold_reason && <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{payment.hold_reason}</p>}
                           </div>
-                          <Action className="border bg-white text-foreground hover:bg-muted" busy={busy === payment.id + ":check"} disabled={!!busy}
+                          <Action className="border bg-white text-foreground hover:bg-muted" busy={busy === payment.id + ":check"} disabled={actionLocked}
                             onClick={() => void run(payment.id + ":check", async () => { await api(base + "/payments/" + payment.id + "/reconcile", {}); refresh(); })}>
                             <RefreshCw size={14} aria-hidden="true" />Check status
                           </Action>
@@ -261,48 +262,43 @@ function ReconciliationWorkspace() {
 
                         {attempt?.state === "prepared" && allowed("payments:execute") && (
                           <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-muted p-4">
-                            <Action busy={busy === attempt.id + ":resume"} disabled={!!busy}
+                            <Action busy={busy === attempt.id + ":resume"} disabled={actionLocked}
                               onClick={() => void prepare(attempt.id + ":resume", "Resume payment authorization", payment.id, attempt.id, "/attempts/" + attempt.id + "/resume", {}, true)}>Review remaining steps</Action>
-                            <button type="button" className="min-h-10 rounded-full px-3 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" disabled={!!busy}
+                            <button type="button" className="min-h-10 rounded-full px-3 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" disabled={actionLocked}
                               onClick={() => void prepare(attempt.id + ":close", "Close an unsent route", payment.id, attempt.id, "/attempts/" + attempt.id + "/close")}>Close unsent route</button>
                           </div>
                         )}
 
-                        {attempt?.state === "reported_delivered" && allowed("payments:approve") && (
-                          <form className="grid gap-4 rounded-2xl border bg-white p-5" onSubmit={event => {
+                        {attempt?.state === "reported_delivered" && allowed("payments:approve") && (<><Action disabled={actionLocked} onClick={() => openTask(`reconcile-task-delivery-${attempt.id}`)}>Review reported delivery</Action><TaskDrawer id={`reconcile-task-delivery-${attempt.id}`} title="Attest delivery" description={paymentLabel(payment)}><form key={`${attempt.id}:${attempt.state}`} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
                             event.preventDefault();
                             const values = new FormData(event.currentTarget);
                             void prepare(attempt.id + ":delivery", "Attest external delivery", payment.id, attempt.id, "/attempts/" + attempt.id + "/settlement", { outcome: "delivered", receipt: values.get("receipt") });
                           }}>
-                            <div><h4 className="font-medium">Confirm reported delivery</h4><p className="mt-1 text-xs leading-5 text-muted-foreground">A provider report needs the company reporter's confirmation.</p></div>
+                            <PaymentContext payment={payment}/><NetworkIdentity network={attempt.destination_network}/><Address value={attempt.destination_address} network={attempt.destination_network} full/><p className="text-xs text-amber-900">Provider reported delivery. Company attestation required.</p>
                             <Field label="Delivery evidence"><input className={control} name="receipt" required maxLength={2000} defaultValue={attempt.destination_tx_hash ?? ""} placeholder="Checked transaction or receipt" /></Field>
-                            <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I checked delivery to the confirmed recipient. The treasury will trust this owner or reporter attestation.</span></label>
-                            <div className="flex justify-end border-t pt-4"><Action disabled={!!busy} busy={busy === attempt.id + ":delivery"}>Review delivery report</Action></div>
-                          </form>
+                            <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I attest delivery to this recipient.</span></label>
+                            <div className="flex justify-end border-t pt-4"><Action disabled={actionLocked} busy={busy === attempt.id + ":delivery"}>Review delivery report</Action></div>
+                            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+                          </form></TaskDrawer></>
                         )}
 
                         {(attempt?.state === "reported_partial" || payment.status === "partially_paid" || partialReviewId(payment) !== payment.id) && <PartialSettlementPanel paymentId={partialReviewId(payment)} />}
 
-                        {attempt && ["unknown", "processing", "submitted"].includes(attempt.state) && allowed("payments:approve") && (
-                          <details className="rounded-2xl border bg-white p-5">
-                            <summary className="cursor-pointer text-sm font-medium">Recover the original NEAR transfer</summary>
-                            <p className="mt-3 max-w-xl text-xs leading-5 text-muted-foreground">Use the original wallet transaction. Razor verifies its final token receipt before preparing recovery for this attempt.</p>
-                            <form className="mt-4 grid gap-4 sm:grid-cols-2" onSubmit={event => {
+                        {attempt && ["unknown", "processing", "submitted"].includes(attempt.state) && allowed("payments:approve") && (<><button type="button" className="min-h-10 text-sm text-primary" disabled={actionLocked} onClick={() => openTask(`reconcile-task-source-${attempt.id}`)}>Recover original transfer</button><TaskDrawer id={`reconcile-task-source-${attempt.id}`} title="Recover original transfer" description={paymentLabel(payment)}>
+                            <form key={`${attempt.id}:${attempt.state}`} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
                               event.preventDefault();
                               const values = new FormData(event.currentTarget);
                               void prepare(attempt.id + ":source", "Recover final NEAR source outcome", payment.id, attempt.id, "/reconciliation/attempts/" + attempt.id + "/source", { senderAccountId: String(values.get("sender")).trim().toLowerCase(), transactionHash: String(values.get("hash")).trim() });
                             }}>
-                              <Field label="Original NEAR signer"><input name="sender" className={control} required minLength={2} maxLength={64} autoCapitalize="none" spellCheck={false} placeholder="signer.near" /></Field>
+                              <PaymentContext payment={payment}/><Field label="Original NEAR signer"><input name="sender" className={control} required minLength={2} maxLength={64} autoCapitalize="none" spellCheck={false} placeholder="signer.near" /></Field>
                               <Field label="Original transaction hash"><input name="hash" className={control} required minLength={32} maxLength={64} defaultValue={attempt.source_tx_hash ?? ""} autoCapitalize="none" spellCheck={false} /></Field>
-                              <div className="flex justify-end border-t pt-4 sm:col-span-2"><Action disabled={!!busy} busy={busy === attempt.id + ":source"}>Verify and review recovery</Action></div>
-                            </form>
-                          </details>
+                              <div className="flex justify-end border-t pt-4 "><Action disabled={actionLocked} busy={busy === attempt.id + ":source"}>Verify and review recovery</Action></div>
+                              {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+                            </form></TaskDrawer></>
                         )}
 
-                        {attempt && ["recovery_pending", "unknown"].includes(attempt.state) && allowed("payments:approve") && (
-                          <details className="rounded-2xl border bg-white p-5">
-                            <summary className="cursor-pointer text-sm font-medium">Review a closed route or refund</summary>
-                            <form className="mt-4 grid gap-4" onSubmit={event => {
+                        {attempt && ["recovery_pending", "unknown"].includes(attempt.state) && allowed("payments:approve") && (<><button type="button" className="min-h-10 text-sm text-primary" disabled={actionLocked} onClick={() => openTask(`reconcile-task-refund-${attempt.id}`)}>Review closure or refund</button><TaskDrawer id={`reconcile-task-refund-${attempt.id}`} title="Review closure or refund" description={paymentLabel(payment)}>
+                            <form key={`${attempt.id}:${attempt.state}`} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
                               event.preventDefault();
                               const values = new FormData(event.currentTarget), action = values.get("action");
                               void prepare(attempt.id + ":refund", action === "confirm" ? "Confirm recovered funds" : "Report refund pending", payment.id, attempt.id, "/attempts/" + attempt.id + "/" + (action === "confirm" ? "refund" : "settlement"), () => {
@@ -314,15 +310,15 @@ function ReconciliationWorkspace() {
                                 return action === "confirm" ? { refundAmount, receipt: values.get("receipt") } : { outcome: "refund_pending", receipt: values.get("receipt") };
                               });
                             }}>
-                              <Field label="Recovery stage"><select name="action" className={control}><option value="report">Route closed, refund pending</option><option value="confirm">Funds returned on NEAR</option></select></Field>
+                              <PaymentContext payment={payment}/><Field label="Recovery stage"><select name="action" className={control} value={refundStages[attempt.id] ?? "report"} onChange={event => setRefundStages(current => ({ ...current, [attempt.id]: event.target.value as "report" | "confirm" }))}><option value="report">Route closed, refund pending</option><option value="confirm">Funds returned on NEAR</option></select></Field>
                               <div className="grid gap-4 sm:grid-cols-2">
-                                <Field label="Recovered USDC" hint="The amount returned for this attempt."><input name="refundAmount" className={control} inputMode="decimal" defaultValue="0" /></Field>
+                                {refundStages[attempt.id] === "confirm" && <Field label="Recovered USDC"><input name="refundAmount" className={control} inputMode="decimal" defaultValue="0" required /></Field>}
                                 <Field label="Refund or closure evidence"><input name="receipt" className={control} required maxLength={2000} placeholder="Verified transaction or route closure" /></Field>
                               </div>
-                              <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I checked that the earlier route cannot deliver. When confirming returned funds, I verified this attempt's refund. A treasury balance alone does not identify it.</span></label>
-                              <div className="flex justify-end border-t pt-4"><Action disabled={!!busy} busy={busy === attempt.id + ":refund"}>Review recovery authorization</Action></div>
-                            </form>
-                          </details>
+                              <label key={refundStages[attempt.id] ?? "report"} className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I verified this route cannot deliver and any reported refund belongs to this attempt.</span></label>
+                              <div className="flex justify-end border-t pt-4"><Action disabled={actionLocked} busy={busy === attempt.id + ":refund"}>Review recovery authorization</Action></div>
+                              {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+                            </form></TaskDrawer></>
                         )}
 
                         {attempt && (
@@ -332,8 +328,8 @@ function ReconciliationWorkspace() {
                               <div className="grid gap-4 sm:grid-cols-2">
                                 <div><p className="mb-2 text-xs text-muted-foreground">Receiving wallet on {attempt.destination_network}</p><Address value={attempt.destination_address} network={attempt.destination_network} /></div>
                                 <div className="space-y-2 break-all text-xs text-muted-foreground">
-                                  {attempt.source_tx_hash && <p>NEAR source: <span className="font-mono text-foreground">{attempt.source_tx_hash}</span></p>}
-                                  {attempt.destination_tx_hash && <p>Reported destination: <span className="font-mono text-foreground">{attempt.destination_tx_hash}</span></p>}
+                                  {attempt.source_tx_hash && <div><p className="mb-2">NEAR source</p><Address value={attempt.source_tx_hash} label="source transaction hash"/></div>}
+                                  {attempt.destination_tx_hash && <div><p className="mb-2">Reported destination</p><Address value={attempt.destination_tx_hash} label="destination transaction hash"/></div>}
                                 </div>
                               </div>
                               <div className="flex flex-wrap items-center gap-4 border-t pt-4">
@@ -385,27 +381,28 @@ function ReconciliationWorkspace() {
                           {allowed("payments:prepare") && <Action className="border bg-white text-foreground hover:bg-muted" busy={busy === funding.id + ":check"} disabled={!!busy} onClick={() => void run(funding.id + ":check", async () => { await api(base + "/funding/" + funding.id + "/reconcile", {}); refresh(); })}><RefreshCw size={14} aria-hidden="true" />Check status</Action>}
                         </div>
                         {funding.destination_tx_hash && <a className="w-fit text-xs font-medium text-primary underline underline-offset-4" target="_blank" rel="noreferrer" href={"https://nearblocks.io/txns/" + encodeURIComponent(funding.destination_tx_hash)}>View NEAR transaction</a>}
-                        {allowed("payments:prepare") && (
-                          <form className="grid gap-4 rounded-2xl border bg-white p-5" onSubmit={event => {
+                        {allowed("payments:prepare") && (<><Action disabled={actionLocked} onClick={() => openTask(`reconcile-task-funding-${funding.id}`)}>Verify receipt</Action><TaskDrawer id={`reconcile-task-funding-${funding.id}`} title="Verify funding receipt" description={funding.reference}><form key={funding.id} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
                             event.preventDefault();
                             const values = new FormData(event.currentTarget);
                             void run(funding.id + ":verify", async () => {
                               const hash = String(values.get("hash") ?? "").trim();
                               await api(base + "/reconciliation/funding/" + funding.id + "/verify", { senderAccountId: String(values.get("sender") ?? "").trim().toLowerCase() || undefined, ...(hash ? { transactionHash: hash } : {}) });
-                              notify("Final NEAR receipt verified. Funding credit recorded once.");
+                              closeTaskDrawer(`reconcile-task-funding-${funding.id}`, true);
+                              notify("Funding receipt verified.");
                               refresh();
                             });
                           }}>
-                            <div><h4 className="text-sm font-medium">Verify this deposit</h4><p className="mt-1.5 text-xs leading-5 text-muted-foreground">Razor checks the final NEAR token receipt. A verified deposit is credited only once.</p></div>
+                            <AssetIdentity symbol="USDC" network="near"/><div><p className="text-xs text-muted-foreground">Expected credit</p><p className="mt-2 text-2xl font-medium tabular-nums">{usd(funding.expected_output)}</p></div>
                             <details className="rounded-xl bg-muted p-4">
                               <summary className="cursor-pointer text-sm font-medium">Manual receipt lookup</summary>
                               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                                <Field label="Destination signer (optional)" hint="Use the signer shown by the NEAR explorer."><input name="sender" className={control} minLength={2} maxLength={64} autoCapitalize="none" spellCheck={false} placeholder="signer.near" /></Field>
-                                <Field label="Transaction hash (optional)" hint="Leave empty for automatic lookup."><input name="hash" className={control} maxLength={64} defaultValue={funding.destination_tx_hash ?? ""} autoCapitalize="none" spellCheck={false} /></Field>
+                                <Field label="Destination signer (optional)"><input name="sender" className={control} minLength={2} maxLength={64} autoCapitalize="none" spellCheck={false} placeholder="signer.near" /></Field>
+                                <Field label="Transaction hash (optional)"><input name="hash" className={control} maxLength={64} defaultValue={funding.destination_tx_hash ?? ""} autoCapitalize="none" spellCheck={false} /></Field>
                               </div>
                             </details>
-                            <div className="flex justify-end border-t pt-4"><Action busy={busy === funding.id + ":verify"} disabled={!!busy}><ShieldCheck size={15} aria-hidden="true" />Verify funding receipt</Action></div>
-                          </form>
+                            <div className="flex justify-end border-t pt-4"><Action busy={busy === funding.id + ":verify"} disabled={actionLocked}><ShieldCheck size={15} aria-hidden="true" />Verify funding receipt</Action></div>
+                            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+                          </form></TaskDrawer></>
                         )}
                       </ReviewRecord>
                     );
@@ -424,9 +421,12 @@ function ReconciliationWorkspace() {
           </div>
         )}
       </section>
-      <p className="flex items-start gap-2 px-1 text-xs leading-5 text-muted-foreground"><Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />An unresolved payment stays on hold until its original outcome is confirmed.</p>
     </div>
   );
+}
+
+function PaymentContext({ payment }: { payment: Payment }) {
+  return <div className="grid gap-3 border-b pb-5"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm font-medium">{payment.recipientName ?? "Recipient"}</p><div className="text-right"><p className="mb-1 text-xs text-muted-foreground">Entitlement</p><p className="text-2xl font-medium tabular-nums">{usd(payment.amount)}</p></div></div><div className="flex items-center gap-2 text-sm"><TokenLogo symbol="USDC" size={22}/>USDC</div></div>;
 }
 
 function ReviewMetric({ label, value, suffix, icon }: { label: string; value: string | null; suffix?: string; icon: ReactNode }) {

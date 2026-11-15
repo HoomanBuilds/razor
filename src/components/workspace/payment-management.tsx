@@ -18,7 +18,7 @@ import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
 import { Action, Address, control, Empty, Field, Panel, Status } from "./shared";
 import { PurchaseMatchReview } from "./vendor-commitments";
-import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer, withTaskDrawerWallet } from "./task-drawer";
 
 type Overview = ReturnType<typeof managementOverview>;
 type RunReview = Awaited<ReturnType<typeof payrollPreview>>;
@@ -66,7 +66,6 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
   const [task, setTask] = useState<"cancel" | "replace" | null>(null);
   const [reason, setReason] = useState("");
   const [cancellation, setCancellation] = useState<{ paymentId: string; walletActions: NearWalletAction[]; treasuryNetwork: string } | null>(null);
-  const taskHeading = useRef<HTMLHeadingElement>(null);
   const activePaymentId = useRef(paymentId);
   activePaymentId.current = paymentId;
   const current = review.data;
@@ -82,7 +81,14 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
   const term = search.trim().toLowerCase();
   const matches = payments.filter(item => `${paymentLabel(item.payment)} ${item.recipientName} ${item.payment.status.replaceAll("_", " ")}`.toLowerCase().includes(term));
 
-  useEffect(() => { if (task || cancellation) taskHeading.current?.focus(); }, [task, cancellation]);
+  useEffect(() => {
+    const dialog = document.getElementById("payment-tools-task");
+    const close = () => { if (dialog?.dataset.walletSuspended !== "true") { setTask(null); setCancellation(null); } };
+    dialog?.addEventListener("close", close);
+    if (task || cancellation) openTaskDrawer("payment-tools-task");
+    else closeTaskDrawer("payment-tools-task", true);
+    return () => dialog?.removeEventListener("close", close);
+  }, [task, cancellation]);
 
   const choosePayment = (id: string) => {
     if (selectionLocked) return;
@@ -117,7 +123,7 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
     if (!cancellation || cancellation.paymentId !== activePaymentId.current) return;
     const captured = cancellation;
     try {
-      await signNearActions(captured.walletActions, captured.treasuryNetwork);
+      await withTaskDrawerWallet(() => signNearActions(captured.walletActions, captured.treasuryNetwork));
       const result = await api<{ cancellationConfirmed: boolean }>(`${base}/payment-management/payments/${captured.paymentId}/cancel`, {});
       notify(result.cancellationConfirmed ? "NEAR cancellation confirmed. A replacement may now be prepared." : "Cancellation is not final yet. Check its status before replacing the obligation.");
       refresh();
@@ -136,52 +142,44 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
   });
 
   let nextTitle = "Ready for your review";
-  let nextDescription = "Review this payment's business terms before approving or funding it.";
   let nextLabel = current?.billId ? "Review invoice" : current?.payrollRunId ? "Review pay run" : "Review payment";
   let nextAction = openLinkedReview;
   let nextIcon = <FileText size={19} />;
   if (current?.activeClearingRound) {
     nextTitle = "Included in business clearing";
-    nextDescription = "Review its clearing commitment before changing this payment.";
     nextLabel = "Review clearing";
     nextAction = () => navigate("clearing");
     nextIcon = <LockKeyhole size={19} />;
   } else if (needsReconciliation) {
     nextTitle = partial ? "Partial delivery needs review" : "Resolve the existing delivery first";
-    nextDescription = partial ? "Review the amount received and the unpaid remainder. This payment cannot be cancelled or replaced in full." : "Confirm the original outcome before cancelling, replacing or sending again.";
     nextLabel = "Review in Reconciliation";
     nextAction = openReconciliation;
     nextIcon = <ShieldCheck size={19} />;
   } else if (canReplace) {
     nextTitle = "Ready for a replacement draft";
-    nextDescription = "Keep the unpaid amount and use the recipient's current receiving details. Fresh approval is required.";
     nextLabel = "Create replacement";
     nextAction = () => setTask("replace");
     nextIcon = <RefreshCw size={19} />;
   } else if (current?.payment.status === "cancelled") {
     nextTitle = "Payment cancelled";
-    nextDescription = "The original record remains in your payment history.";
     nextLabel = allowed("payments:approve") ? "Check cancellation" : "View payment queue";
     nextAction = allowed("payments:approve") ? () => { void cancel(); } : openQueue;
     nextIcon = <CircleCheck size={19} />;
   } else if (current?.payment.status === "paid") {
     nextTitle = "Payment completed";
-    nextDescription = "Completed payments remain in history and cannot be replaced.";
     nextLabel = "View payment queue";
     nextAction = openQueue;
     nextIcon = <CircleCheck size={19} />;
   } else if (current?.profileChanged) {
     nextTitle = "Receiving details have changed";
-    nextDescription = "This payment still uses its recorded receiving details. Review the change before proceeding.";
   } else if (current?.payment.status === "held") {
     nextTitle = "Payment needs attention";
-    nextDescription = "Review the hold in the payment queue before continuing.";
     nextLabel = "Review payment hold";
     nextAction = openQueue;
   }
 
   return <div className="grid min-w-0 gap-5">
-    <header className="px-1"><h2 className="text-xl font-medium tracking-tight">Payment tools</h2><p className="mt-1.5 text-sm text-muted-foreground">Review unpaid payments, receiving changes and replacements.</p></header>
+    <header className="px-1"><h2 className="text-xl font-medium tracking-tight">Payment tools</h2></header>
     {(overview.error || review.error || error) && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-destructive/20 bg-red-50/40 px-5 py-4 text-sm text-destructive"><p className="min-w-0 flex-1">{error || review.error || overview.error}</p>{(overview.error || review.error) && <button type="button" className="font-medium underline underline-offset-4" disabled={!!busy} onClick={refresh}>Try again</button>}</div>}
     <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(16rem,0.85fr)_minmax(0,2fr)]">
       <aside className="min-w-0 overflow-hidden rounded-3xl border bg-white" aria-label="Choose a payment">
@@ -201,7 +199,7 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
       </aside>
 
       <div className="grid min-w-0 gap-4">
-        {!paymentId ? <section className="rounded-3xl border bg-white px-6 py-14 text-center"><span className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-secondary text-primary"><FileText size={23} aria-hidden="true" /></span><h3 className="text-lg font-medium">Start with a payment</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">Choose a payee or reference to see the next step and its payment history.</p><button type="button" className="mt-6 min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted" onClick={openQueue}>Open payment queue</button></section>
+        {!paymentId ? <section className="rounded-3xl border bg-white px-6 py-14 text-center"><span className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-secondary text-primary"><FileText size={23} aria-hidden="true" /></span><h3 className="text-lg font-medium">Start with a payment</h3><button type="button" className="mt-6 min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted" onClick={openQueue}>Open payment queue</button></section>
           : review.loading ? <div className="rounded-3xl border bg-white"><ToolsLoading /></div>
           : !current ? <section className="rounded-3xl border bg-white"><ToolsEmpty title="Payment unavailable" description="Refresh the records or choose another payment." /></section>
           : <section className="min-w-0 overflow-hidden rounded-3xl border bg-white">
@@ -211,17 +209,21 @@ function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: s
             </div>
 
             <div className="space-y-5 p-5 sm:p-6">
-              {!task && !cancellation && <div className="rounded-2xl bg-muted/70 p-5"><div className="flex items-start gap-3"><span className="mt-0.5 text-primary" aria-hidden="true">{nextIcon}</span><div className="min-w-0"><h4 className="text-sm font-medium">{nextTitle}</h4><p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{nextDescription}</p></div></div><Action className="mt-4" disabled={actionLocked} busy={busy === "cancel"} onClick={nextAction}>{nextLabel}<ChevronRight size={15} aria-hidden="true" /></Action></div>}
+              {!task && !cancellation && <div className="rounded-2xl bg-muted/70 p-5"><div className="flex items-start gap-3"><span className="mt-0.5 text-primary" aria-hidden="true">{nextIcon}</span><div className="min-w-0"><h4 className="text-sm font-medium">{nextTitle}</h4></div></div><Action className="mt-4" disabled={actionLocked} busy={busy === "cancel"} onClick={nextAction}>{nextLabel}<ChevronRight size={15} aria-hidden="true" /></Action></div>}
 
-              {task === "cancel" && <form className="grid gap-4 rounded-2xl border border-destructive/20 bg-red-50/30 p-5" onSubmit={event => { event.preventDefault(); if (canCancel && !actionLocked) void cancel(); }}>
-                <div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Cancel this payment?</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">Cancel {usd(current.payment.amount)} to {current.recipientName}. Its history stays available, and any replacement requires a new approval.</p></div>
+              <TaskDrawer id="payment-tools-task" title={cancellation ? "Confirm cancellation" : task === "cancel" ? "Cancel payment" : "Replace payment"} description={paymentLabel(current.payment)}>
+              {task === "cancel" && <form key={`cancel:${current.payment.id}`} aria-busy={!!busy} className="grid gap-5" onSubmit={event => { event.preventDefault(); if (canCancel && !actionLocked) void cancel(); }}>
+                <div><p className="text-sm">{current.recipientName}</p><p className="mt-2 text-3xl font-medium tabular-nums">{usd(current.payment.amount)} <span className="text-sm">USDC</span></p></div>
                 <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required disabled={!!busy} className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I want to cancel this unpaid payment.</span></label>
                 <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setTask(null)}>Keep payment</button><Action className="bg-destructive text-white hover:bg-destructive/90" busy={busy === "cancel"} disabled={actionLocked || !canCancel}>{busy === "cancel" ? "Preparing cancellation..." : "Cancel payment"}</Action></div>
               </form>}
 
-              {cancellation && <div className="rounded-2xl border border-primary/20 bg-secondary/40 p-5"><div className="flex items-start gap-3"><Wallet size={20} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" /><div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Confirm cancellation in your wallet</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">Reserved funds stay protected until the original treasury confirms cancellation on {cancellation.treasuryNetwork}.</p></div></div><details className="mt-4 rounded-xl border bg-white p-4"><summary className="cursor-pointer text-xs font-medium">Exact cancellation action</summary><pre className="mt-3 max-h-52 overflow-auto text-xs">{JSON.stringify(cancellation.walletActions, null, 2)}</pre></details><div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setCancellation(null)}>Close review</button><Action busy={busy === "sign-cancel"} disabled={actionLocked || cancellation.paymentId !== paymentId} onClick={() => void confirmCancellation()}>{busy === "sign-cancel" ? "Confirming cancellation..." : "Confirm in NEAR wallet"}</Action></div></div>}
+              {cancellation && <div aria-busy={!!busy} className="grid gap-5"><div className="flex items-start gap-3"><Wallet size={20} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" /><div><p className="text-sm font-medium">{current.recipientName} · {usd(current.payment.amount)} USDC</p><p className="mt-2 text-sm leading-6 text-muted-foreground">Funds stay reserved until NEAR {cancellation.treasuryNetwork} confirms cancellation.</p></div></div><details className="mt-4 rounded-xl border bg-white p-4"><summary className="cursor-pointer text-xs font-medium">Exact cancellation action</summary><pre className="mt-3 max-h-52 overflow-auto text-xs">{JSON.stringify(cancellation.walletActions, null, 2)}</pre></details><div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setCancellation(null)}>Close review</button><Action busy={busy === "sign-cancel"} disabled={actionLocked || cancellation.paymentId !== paymentId} onClick={() => void confirmCancellation()}>{busy === "sign-cancel" ? "Confirming cancellation..." : "Confirm in NEAR wallet"}</Action></div></div>}
 
-              {task === "replace" && <form className="grid gap-4 rounded-2xl border bg-muted/40 p-5" onSubmit={event => { event.preventDefault(); if (!actionLocked) void replacement(); }}><div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Prepare a replacement</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">The new draft keeps {usd(current.payment.amount)} unpaid and uses the current receiving profile. Earlier costs reduce its remaining cost budget.</p></div><Field label="Why does this payment need replacing?"><textarea className={control} required minLength={3} maxLength={1000} rows={3} value={reason} disabled={!!busy} onChange={event => setReason(event.target.value)} placeholder="For example, the recipient confirmed a different wallet" /></Field><p className="text-xs leading-5 text-muted-foreground">The original record stays in history. This creates a draft, not another transfer.</p><div className="flex flex-wrap justify-end gap-2 border-t pt-4"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setTask(null)}>Close without saving</button><Action busy={busy === "replace"} disabled={actionLocked || !canReplace}>{busy === "replace" ? "Creating draft..." : "Create replacement draft"}</Action></div></form>}
+              {task === "replace" && <form key={`replace:${current.payment.id}`} aria-busy={!!busy} className="grid gap-5" onSubmit={event => { event.preventDefault(); if (!actionLocked) void replacement(); }}><div><p className="text-sm">{current.recipientName}</p><p className="mt-2 text-3xl font-medium tabular-nums">{usd(current.payment.amount)} <span className="text-sm">USDC</span></p><p className="mt-2 text-xs text-muted-foreground">Current receiving profile · Fresh approval required</p></div><Field label="Replacement reason"><textarea className={control} required minLength={3} maxLength={1000} rows={3} value={reason} disabled={!!busy} onChange={event => setReason(event.target.value)} /></Field><div className="flex flex-wrap justify-end gap-2 border-t pt-4"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setTask(null)}>Close</button><Action busy={busy === "replace"} disabled={actionLocked || !canReplace}>{busy === "replace" ? "Creating draft..." : "Create replacement draft"}</Action></div></form>}
+
+                {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}
+              </TaskDrawer>
 
               <details className="rounded-2xl border px-4 py-4"><summary className="flex cursor-pointer items-center justify-between gap-3 text-sm font-medium"><span>Receiving details</span><span className={"text-xs font-normal " + (current.profileChanged ? "text-amber-800" : "text-muted-foreground")}>{current.profileChanged ? "Changed" : "Unchanged"}</span></summary><div className="mt-4 grid gap-4"><PaymentReceivingProfile profile={current.recordedProfile} tokens={assets.data?.tokens ?? []} title={current.profileChanged ? "Recorded for this payment" : "Recorded receiving profile"} />{current.profileChanged && <PaymentReceivingProfile profile={current.currentProfile} tokens={assets.data?.tokens ?? []} title="Current receiving profile" />}</div>{current.profileChanged && <p className="mt-4 text-xs leading-5 text-muted-foreground">A recipient change does not redirect an approved payment.</p>}</details>
 
