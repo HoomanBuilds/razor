@@ -1,3 +1,4 @@
+import { dispatchRecipientInvitations } from "../src/server/identity/recipient-invitations";
 import { tickOperations } from "../src/server/operations/worker";
 import { tickBilling } from "../src/server/billing/worker";
 import { processPendingInvoiceEvents } from "../src/server/invoice-channels/service";
@@ -19,6 +20,7 @@ process.on("SIGINT", () => { stopped = true; });
 do {
   const result: Record<string, unknown> = { at: new Date().toISOString() };
   const tasks = [
+    ["recipientInvitations", () => dispatchRecipientInvitations(organizationId)],
     ["operations", () => tickOperations({ organizationId, maxJobs: 20 })],
     ["billing", () => tickBilling(organizationId)],
     ["invoiceIntake", () => processPendingInvoiceEvents({ organizationId, maxEvents: 1 })],

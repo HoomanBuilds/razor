@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, requirePermission, type AccessContext, type AppEnv } from "../context";
 import { getDb, row, rows, transaction } from "../db";
-import { decrypt, encrypt, hashToken, newToken } from "./crypto";
+import { decrypt, encrypt, hashToken } from "./crypto";
+import { ensureRecipientInvitation, getRecipientInvitation, initializeRecipientInvitation, queueRecipientInvitation, revokeRecipientInvitation } from "./recipient-invitations";
 import { normalizeWallet } from "./auth";
-import { appOrigin, audit, requireOrganization, requireUser } from "./session";
+import { audit, requireOrganization, requireUser } from "./session";
 import { parseCsv } from "../../lib/csv";
 import { getSupportedTokens, nativeUsdc, type Token } from "../payments/intents";
 import { canonicalNetwork, DestinationError, normalizeDestination } from "../../lib/recipient-destination";
@@ -26,6 +27,19 @@ const ProfileInput = z.object({
   backupMemo: z.string().trim().max(0,"USDC backup destinations cannot require a separate receiving memo. Use a personal wallet on an enabled backup network.").nullable().optional(),
   backupNetwork: z.preprocess((value)=>typeof value==="string"?canonicalNetwork(value):value,z.enum(BACKUP_NETWORKS).nullable().optional()), backupAddress: z.string().trim().min(2).max(200).nullable().optional(),
 });
+const CompanyProfileInput = ProfileInput.extend({
+  primaryAsset: z.string().trim().max(240).default(""), primaryNetwork: z.string().trim().max(80).default(""), primaryAddress: z.string().trim().max(200).default(""),
+});
+function companyProfile(input: z.infer<typeof CompanyProfileInput>) {
+  if (!input.primaryAsset && !input.primaryNetwork && !input.primaryAddress) {
+    if (!input.email) throw new ApiError(400,"An email is required when the recipient will choose their wallet","RECIPIENT_EMAIL_REQUIRED");
+    if (input.primaryMemo || input.backupNetwork || input.backupAddress || input.backupMemo) throw new ApiError(400,"Leave all receiving details empty for an email invitation","ROUTE_INCOMPLETE");
+    return input;
+  }
+  if (!input.primaryNetwork || !input.primaryAddress) throw new ApiError(400,"Choose both the primary network and receiving address","ROUTE_INCOMPLETE");
+  input.primaryAsset ||= "USDC";
+  return validateRoute(input);
+}
 export const PreferenceInput = ProfileInput.pick({primaryAsset:true,primaryNetwork:true,primaryAddress:true,primaryMemo:true,backupMemo:true,backupNetwork:true,backupAddress:true}).extend({expectedVersion:z.number().int().positive(),fallbackConsent:z.boolean().default(false)});
 
 function familyFor(network: string): string | undefined {
@@ -105,14 +119,14 @@ function importRecipientId(orgId:string,externalId:string):string {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 
-interface ImportResult {row:number;externalId:string;status:"ready"|"created"|"existing"|"error";recipient?:RecipientRecord;invitationUrl?:string;error?:string;code?:string}
+interface ImportResult {row:number;externalId:string;status:"ready"|"created"|"existing"|"error";recipient?:RecipientRecord;invitationUrl?:string;invitation?:ReturnType<typeof getRecipientInvitation>;error?:string;code?:string}
 
 export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[]|null,dryRun=false) {
   requirePermission(access,"recipients:manage");
   let records:Record<string,string>[];
   try{records=parseCsv(csv);}catch(error){throw new ApiError(400,error instanceof Error?error.message:"Check the CSV format","CSV_INVALID");}
   if(records.length>250)throw new ApiError(400,"Import up to 250 payees at a time","CSV_TOO_LARGE");
-  const required=["external_id","name","kind","primary_asset","primary_network","primary_address"];
+  const required=["external_id","name","kind"];
   if(required.some(key=>!(key in records[0])))throw new ApiError(400,`CSV requires these columns: ${required.join(", ")}`,"CSV_COLUMNS_MISSING");
   const seen=new Set<string>();
   const results:ImportResult[]=records.map((record,index):ImportResult=>{
@@ -121,7 +135,7 @@ export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[
       if(!externalId||externalId.length>120)throw new ApiError(400,"Use a stable external_id of 1 to 120 characters","EXTERNAL_ID_REQUIRED");
       if(seen.has(externalId))throw new ApiError(400,"This external_id appears more than once in the file","DUPLICATE_EXTERNAL_ID");
       seen.add(externalId);
-      const input=validateRoute(ProfileInput.parse({name:record.name,email:record.email?.toLowerCase()||null,kind:record.kind,primaryAsset:record.primary_asset,primaryNetwork:record.primary_network,primaryAddress:record.primary_address,primaryMemo:record.primary_memo||null,backupMemo:record.backup_memo||null,backupNetwork:record.backup_network||null,backupAddress:record.backup_address||null}));
+      const input=companyProfile(CompanyProfileInput.parse({name:record.name,email:record.email?.toLowerCase()||null,kind:record.kind,primaryAsset:record.primary_asset,primaryNetwork:record.primary_network,primaryAddress:record.primary_address,primaryMemo:record.primary_memo||null,backupMemo:record.backup_memo||null,backupNetwork:record.backup_network||null,backupAddress:record.backup_address||null}));
       const id=importRecipientId(access.organizationId,externalId);
       return transaction((db):ImportResult=>{
         if(row("SELECT id FROM recipients WHERE id = ? AND organization_id = ?",id,access.organizationId)) {
@@ -130,19 +144,23 @@ export function importRecipientCsv(access:AccessContext,csv:string,tokens:Token[
           const original=row<{profile_ciphertext:string}>("SELECT profile_ciphertext FROM recipient_versions WHERE recipient_id = ? AND version = 1",id);
           const initial:RecipientRecord=original?JSON.parse(decrypt(original.profile_ciphertext)):recipient;
           if(initial.name!==input.name||initial.email!==(input.email||null)||initial.kind!==input.kind||initial.primary_asset!==input.primaryAsset||initial.primary_network!==input.primaryNetwork||initial.primary_address!==input.primaryAddress||(initial.primary_memo??null)!==(input.primaryMemo??null)||initial.backup_network!==(input.backupNetwork||null)||initial.backup_address!==(input.backupAddress||null))throw new ApiError(409,"This external_id was imported with different details. Edit the existing payee instead.","IMPORT_KEY_CONFLICT");
-          return {row:index+2,externalId,status:"existing",recipient};
+          const invitation=!dryRun && recipient.preference_status!=="confirmed" ? ensureRecipientInvitation(access,id) : undefined;
+          return {row:index+2,externalId,status:"existing",recipient,invitation,invitationUrl:invitation?.invitationUrl ?? undefined};
         }
-        if(!tokens)throw new ApiError(503,"The live asset catalog is unavailable. Retry later; existing imported profiles are preserved.","CATALOG_UNAVAILABLE");
-        validateBackupAsset(input,tokens);
-        const asset=tokens.find(token=>token.assetId===input.primaryAsset);
-        if(!asset||asset.blockchain!==input.primaryNetwork)throw new ApiError(400,"Choose a live catalog asset ID on its matching network","ASSET_UNSUPPORTED");
+        if(input.primaryAddress && !tokens)throw new ApiError(503,"The live asset catalog is unavailable. Retry later; existing imported profiles are preserved.","CATALOG_UNAVAILABLE");
+        if(input.primaryAddress) {
+          validateBackupAsset(input,tokens);
+          const asset=tokens!.find(token=>token.assetId===input.primaryAsset);
+          if(!asset||asset.blockchain!==input.primaryNetwork)throw new ApiError(400,"Choose a live catalog asset ID on its matching network","ASSET_UNSUPPORTED");
+        }
         if(dryRun)return {row:index+2,externalId,status:"ready"};
-        const token=newToken(),now=new Date().toISOString();
-        db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-          .run(id,access.organizationId,encrypt(input.name),input.email?encrypt(input.email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
+        const now=new Date().toISOString();
+        db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+          .run(id,access.organizationId,encrypt(input.name),input.email?encrypt(input.email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,now,now);
         const recipient=getRecipient(access.organizationId,id);
         saveVersion(recipient,access.userId);audit(access.userId,access.organizationId,"recipient.imported",id,{version:1});
-        return {row:index+2,externalId,status:"created",recipient,invitationUrl:`${appOrigin()}/receive?token=${token}`};
+        const invitation=initializeRecipientInvitation(access,id);
+        return {row:index+2,externalId,status:"created",recipient,invitation,invitationUrl:invitation.invitationUrl ?? undefined};
       });
     }catch(error){
       if(error instanceof z.ZodError)return {row:index+2,externalId,status:"error",error:error.issues[0]?.message || "Check this row",code:"INVALID_PROFILE"};
@@ -164,20 +182,23 @@ recipientRoutes.post("/:orgId/recipients/import",requireOrganization("recipients
 });
 
 recipientRoutes.post("/:orgId/recipients",requireOrganization("recipients:manage"),async(c)=>{
-  const input=await validateProfile(ProfileInput.parse(await c.req.json())),orgId=c.req.param("orgId"),id=randomUUID(),token=newToken(),now=new Date().toISOString();
-  transaction((db)=>{
-    db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,invitation_token_hash,invitation_expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .run(id,orgId,encrypt(input.name),input.email?encrypt(input.email.toLowerCase()):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,hashToken(token),new Date(Date.now()+7*86400000).toISOString(),now,now);
+  const input=companyProfile(CompanyProfileInput.parse(await c.req.json())),orgId=c.req.param("orgId"),id=randomUUID(),now=new Date().toISOString();
+  if(input.primaryAddress) await validateProfile(input);
+  const invitation=transaction((db)=>{
+    db.prepare("INSERT INTO recipients (id,organization_id,name,email,kind,primary_asset,primary_network,primary_address,primary_memo,backup_network,backup_address,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(id,orgId,encrypt(input.name),input.email?encrypt(input.email.toLowerCase()):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,now,now);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.created",id,{version:1});
+    return initializeRecipientInvitation(c.get("access"),id);
   });
-  return c.json({recipient:getRecipient(orgId,id),invitationUrl:`${appOrigin()}/receive?token=${token}`,delivery:"copy_link"},201);
+  return c.json({recipient:getRecipient(orgId,id),...invitation},201);
 });
 
 recipientRoutes.get("/:orgId/recipients/:recipientId",requireOrganization("recipients:read"),(c)=>c.json({recipient:getRecipient(c.req.param("orgId"),c.req.param("recipientId"))}));
 
 recipientRoutes.patch("/:orgId/recipients/:recipientId",requireOrganization("recipients:manage"),async(c)=>{
-  const input=await validateProfile(ProfileInput.extend({expectedVersion:z.number().int().positive()}).parse(await c.req.json())),orgId=c.req.param("orgId"),id=c.req.param("recipientId");
+  const parsed=CompanyProfileInput.extend({expectedVersion:z.number().int().positive()}).parse(await c.req.json()),input={...companyProfile(parsed),expectedVersion:parsed.expectedVersion},orgId=c.req.param("orgId"),id=c.req.param("recipientId");
+  if(input.primaryAddress) await validateProfile(input);
   transaction((db)=>{
     const existing=getRecipient(orgId,id);
     if(existing.archived) throw new ApiError(409,"This recipient has been archived","RECIPIENT_ARCHIVED");
@@ -187,17 +208,23 @@ recipientRoutes.patch("/:orgId/recipients/:recipientId",requireOrganization("rec
     if(identityChanged || input.kind!==existing.kind) for(const bill of rows<{id:string}>("SELECT id FROM bills WHERE organization_id=? AND recipient_id=?",orgId,id)) assertBillUnassigned(orgId,bill.id);
     db.prepare("UPDATE recipients SET name = ?,email = ?,kind = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = 0,preference_status = 'pending_confirmation',confirmed_at = NULL,user_id = CASE WHEN ? THEN NULL ELSE user_id END,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ?")
       .run(encrypt(input.name),email?encrypt(email):null,input.kind,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(identityChanged),new Date().toISOString(),id,orgId,input.expectedVersion);
+    revokeRecipientInvitation(orgId,id);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.updated",id,{version:input.expectedVersion+1});
   });
   return c.json({recipient:getRecipient(orgId,id)});
 });
 
-recipientRoutes.post("/:orgId/recipients/:recipientId/invite",requireOrganization("recipients:manage"),(c)=>{
-  const orgId=c.req.param("orgId"),id=c.req.param("recipientId"),recipient=getRecipient(orgId,id),token=newToken();
-  if(recipient.archived) throw new ApiError(409,"This recipient has been archived","RECIPIENT_ARCHIVED");
-  getDb().prepare("UPDATE recipients SET invitation_token_hash = ?,invitation_expires_at = ? WHERE id = ? AND organization_id = ?").run(hashToken(token),new Date(Date.now()+7*86400000).toISOString(),id,orgId);
-  return c.json({invitationUrl:`${appOrigin()}/receive?token=${token}`,delivery:"copy_link"});
+recipientRoutes.get("/:orgId/recipients/:recipientId/invite",requireOrganization("recipients:manage"),(c)=>c.json(getRecipientInvitation(c.get("access"),c.req.param("recipientId"))));
+recipientRoutes.post("/:orgId/recipients/:recipientId/invite",requireOrganization("recipients:manage"),(c)=>c.json(ensureRecipientInvitation(c.get("access"),c.req.param("recipientId"))));
+recipientRoutes.post("/:orgId/recipients/:recipientId/invite/email",requireOrganization("recipients:manage"),async(c)=>{
+  const input=z.object({idempotencyKey:z.string().uuid()}).parse(await c.req.json());
+  return c.json(queueRecipientInvitation(c.get("access"),c.req.param("recipientId"),input.idempotencyKey),202);
+});
+recipientRoutes.delete("/:orgId/recipients/:recipientId/invite",requireOrganization("recipients:manage"),(c)=>{
+  const orgId=c.req.param("orgId"),id=c.req.param("recipientId");
+  transaction(()=>{getRecipient(orgId,id);revokeRecipientInvitation(orgId,id);audit(c.get("userId"),orgId,"recipient.invitation_revoked",id);});
+  return c.json(getRecipientInvitation(c.get("access"),id));
 });
 
 recipientRoutes.delete("/:orgId/recipients/:recipientId",requireOrganization("recipients:manage"),(c)=>{
@@ -206,6 +233,7 @@ recipientRoutes.delete("/:orgId/recipients/:recipientId",requireOrganization("re
     getRecipient(orgId,id);
     for(const bill of rows<{id:string}>("SELECT id FROM bills WHERE organization_id=? AND recipient_id=?",orgId,id)) assertBillUnassigned(orgId,bill.id);
     db.prepare("UPDATE recipients SET archived = 1,version = version + 1,updated_at = ?,invitation_token_hash = NULL WHERE id = ? AND organization_id = ?").run(new Date().toISOString(),id,orgId);
+    revokeRecipientInvitation(orgId,id);
     saveVersion(getRecipient(orgId,id),c.get("userId"));
     audit(c.get("userId"),orgId,"recipient.archived",id);
   });
@@ -218,7 +246,7 @@ recipientRoutes.get("/:orgId/recipients/:recipientId/versions",requireOrganizati
 });
 
 function invitedRecipient(token:string,userId:string):RecipientRecord {
-  const record=row<RecipientRecord>(`SELECT ${RECIPIENT_COLUMNS} FROM recipients WHERE invitation_token_hash = ? AND invitation_expires_at > ? AND archived = 0`,hashToken(token),new Date().toISOString());
+  const record=row<RecipientRecord>(`SELECT ${RECIPIENT_COLUMNS} FROM recipients WHERE invitation_token_hash = ? AND invitation_expires_at > ? AND archived = 0 AND preference_status != 'confirmed' AND (invitation_version IS NULL OR invitation_version=version)`,hashToken(token),new Date().toISOString());
   if(!record) throw new ApiError(404,"This recipient link has expired. Ask the payer for a new link.","RECIPIENT_LINK_UNAVAILABLE");
   const recipient=serialize(record);
   if(recipient.user_id===userId) return recipient;
@@ -253,12 +281,14 @@ recipientPortalRoutes.post("/:token/confirm",async(c)=>{
   const input=await validateProfile(PreferenceInput.parse(await c.req.json())),userId=c.get("userId"),recipient=invitedRecipient(c.req.param("token"),userId);
   if(input.fallbackConsent && (!input.backupNetwork || !input.backupAddress)) throw new ApiError(400,"Choose a complete backup route before consenting to USDC fallback","BACKUP_INCOMPLETE");
   transaction((db)=>{
+    invitedRecipient(c.req.param("token"),userId);
     const now=new Date().toISOString();
     const result=db.prepare("UPDATE recipients SET user_id = ?,primary_asset = ?,primary_network = ?,primary_address = ?,primary_memo = ?,backup_network = ?,backup_address = ?,fallback_consent = ?,preference_status = 'confirmed',confirmed_at = ?,version = version + 1,updated_at = ? WHERE id = ? AND organization_id = ? AND version = ? AND archived=0 AND (user_id IS NULL OR user_id=?)")
       .run(userId,input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,recipient.organization_id,input.expectedVersion,userId);
     if(!result.changes) throw new ApiError(409,"Your preferences changed. Refresh before confirming.","RECIPIENT_VERSION_CHANGED");
+    revokeRecipientInvitation(recipient.organization_id,recipient.id);
     saveVersion(getRecipient(recipient.organization_id,recipient.id),userId);
     audit(userId,recipient.organization_id,"recipient.preferences_confirmed",recipient.id,{version:input.expectedVersion+1,fallbackConsent:input.fallbackConsent});
   });
-  return c.json({recipient:getRecipient(recipient.organization_id,recipient.id)});
+  return c.json({recipient:getRecipient(recipient.organization_id,recipient.id),recipientId:recipient.id});
 });

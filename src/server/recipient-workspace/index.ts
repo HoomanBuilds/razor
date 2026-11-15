@@ -4,6 +4,7 @@ import { ApiError, type AppEnv } from "../context";
 import { row, transaction } from "../db";
 import { requireOrganization, requireUser } from "../identity";
 import { getRecipient, PreferenceInput, saveVersion, validateProfile } from "../identity/recipients";
+import { revokeRecipientInvitation } from "../identity/recipient-invitations";
 import { audit } from "../identity/session";
 import { BACKUP_NETWORKS } from "../payments/policy";
 import { companyRequestPage, invoiceInput, ownPayment, ownPaymentActivity, ownPaymentPage, ownProfiles, ownRecipient, ownRequestPage, prepareInvoiceRequest, reviewInput, submitInvoice } from "./service";
@@ -43,6 +44,7 @@ recipientWorkspaceRoutes.post("/profiles/:id/confirm",async c=>{
     const now=new Date().toISOString(),updated=db.prepare("UPDATE recipients SET primary_asset=?,primary_network=?,primary_address=?,primary_memo=?,backup_network=?,backup_address=?,fallback_consent=?,preference_status='confirmed',confirmed_at=?,version=version+1,updated_at=? WHERE id=? AND user_id=? AND version=? AND archived=0")
       .run(input.primaryAsset,input.primaryNetwork,input.primaryAddress,input.primaryMemo??null,input.backupNetwork??null,input.backupAddress??null,Number(input.fallbackConsent),now,now,recipient.id,userId,input.expectedVersion);
     if(!updated.changes)throw new ApiError(409,"Your preferences changed. Refresh before confirming.","RECIPIENT_VERSION_CHANGED");
+    revokeRecipientInvitation(recipient.organization_id,recipient.id);
     saveVersion(getRecipient(recipient.organization_id,recipient.id),userId);
     audit(userId,recipient.organization_id,"recipient.preferences_confirmed",recipient.id,{version:input.expectedVersion+1,fallbackConsent:input.fallbackConsent});
   });
