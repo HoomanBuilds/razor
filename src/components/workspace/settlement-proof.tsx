@@ -19,11 +19,14 @@ const SettlementLinkPanel = dynamic(
 export function SettlementProof({
   attemptId,
   onReportPrepared,
+  focused = false,
 }: {
   attemptId: string;
+  focused?: boolean;
   onReportPrepared?: (plan: StructuredSettlementReport) => void;
 }) {
   const [open, setOpen] = useState(false);
+  if (focused) return <SettlementLinkPanel key={attemptId} attemptId={attemptId} onReportPrepared={onReportPrepared} focused/>;
   return (
     <details
       className="mt-4"

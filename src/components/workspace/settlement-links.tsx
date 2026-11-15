@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, FileCheck2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, Download, FileCheck2 } from "lucide-react";
 import { api, RequestError } from "@/lib/api";
 import { usd } from "@/lib/format";
 import { formatUnits } from "@/lib/money";
@@ -74,8 +74,10 @@ function displayedAmount(value: string, decimals?: number | null) {
 export function SettlementLinkPanel({
   attemptId,
   onReportPrepared,
+  focused = false,
 }: {
   attemptId: string;
+  focused?: boolean;
   onReportPrepared?: (plan: StructuredSettlementReport) => void;
 }) {
   const { organization, base } = useWorkspace();
@@ -90,14 +92,17 @@ export function SettlementLinkPanel({
       key={`${base}:${attemptId}`}
       attemptId={attemptId}
       onReportPrepared={onReportPrepared}
+      focused={focused}
     />
   );
 }
 function SettlementLinkEditor({
   attemptId,
   onReportPrepared,
+  focused = false,
 }: {
   attemptId: string;
+  focused?: boolean;
   onReportPrepared?: (plan: StructuredSettlementReport) => void;
 }) {
   const { base, revision, organization, notify } = useWorkspace(),
@@ -109,7 +114,12 @@ function SettlementLinkEditor({
     [disclose, setDisclose] = useState(false),
     [prepared, setPrepared] = useState<StructuredSettlementReport | null>(null),
     [selectedReceipt, setSelectedReceipt] = useState("");
+  const [step, setStep] = useState<"source" | "destination" | "review" | "export" | "prepared">("source");
+  const active = useRef(true), generation = useRef(0);
+  useEffect(() => { active.current = true; return () => { active.current = false; generation.current++; }; }, []);
   useEffect(() => {
+    generation.current++;
+    setStep("source");
     setSource(null);
     setPrepared(null);
     setDisclose(false);
@@ -119,8 +129,70 @@ function SettlementLinkEditor({
     canApprove = organization.permissions?.includes("payments:approve"),
     unavailable = !!busy || resource.refreshing || !!resource.error;
   function changed() {
+    generation.current++;
     setDisclose(false);
     setPrepared(null);
+  }
+  async function loadSource() {
+    changed(); const request = generation.current;
+    const result = await api<{ source: SettlementLinkSource }>(`${endpoint}/source`, {});
+    if (!active.current || request !== generation.current) return;
+    setSource(result.source); if (focused) setStep("destination");
+  }
+  async function loadFile(file: File) {
+    const request = generation.current;
+    if (file.size > MAX_DESTINATION_BYTES) throw new RequestError("Choose destination evidence smaller than 100 KB", 422, "EVIDENCE_TOO_LARGE");
+    let value: DestinationTransfer;
+    try { value = parseDestinationEvidence(await file.text()).transfer; } catch { throw new RequestError("Choose a valid structured destination evidence file", 422, "INVALID_DESTINATION_EVIDENCE"); }
+    if (!active.current || request !== generation.current) return;
+    setTransfer(value); if (focused) setStep("review");
+  }
+  async function prepareReport() {
+    if (!source || !transfer || !disclose) return;
+    const request = generation.current;
+    const result = await api<StructuredSettlementReport>(`${endpoint}/prepare`, { source, transfer, reviewConfirmed: true, discloseSelectedReceipt: true });
+    if (!active.current || request !== generation.current) return;
+    setPrepared(result); if (focused) setStep("prepared"); notify("Delivery report prepared for separate NEAR authorization.");
+  }
+  async function exportEvidence(values: FormData) {
+    if (!source || !transfer || !disclose) return;
+    const request = generation.current, kind = source.route.kind === "direct" ? "native_execution" : "reporter_statement";
+    const evidence = await api(`${endpoint}/export`, { kind, source, transfer, sourceTransaction: { transactionHash: String(values.get("hash")).trim(), signerId: String(values.get("signer")).trim().toLowerCase() }, ...(kind === "reporter_statement" ? { retainedEvidenceId: selectedReceipt } : {}), discloseSelectedReceipt: true });
+    if (!active.current || request !== generation.current) return;
+    download(evidence, "razor-settlement-link.json"); notify("Selected settlement evidence exported.");
+  }
+  if (focused) {
+    const back = () => { setDisclose(false); setPrepared(null); setStep(step === "prepared" || step === "export" ? "review" : step === "review" ? "destination" : "source"); };
+    const consent = <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={disclose} disabled={unavailable || !source || !transfer} className="mt-1" onChange={event => setDisclose(event.target.checked)}/><span>I reviewed this transfer and allow its selected receipt to be shared with this company and included in an export.</span></label>;
+    return <section aria-busy={!!busy} className="grid gap-5">
+      {step !== "source" && <button type="button" disabled={!!busy} className="inline-flex items-center gap-1 justify-self-start text-sm text-muted-foreground" onClick={back}><ChevronLeft size={16}/>{step === "destination" ? "Source terms" : step === "review" ? "Destination evidence" : "Evidence review"}</button>}
+      <h3 className="text-xl font-medium">{step === "source" ? "Settlement evidence" : step === "destination" ? "Add destination evidence" : step === "review" ? "Review evidence" : step === "export" ? "Export settlement link" : "Report prepared"}</h3>
+      {(resource.error || error) && <p role="alert" className="text-sm text-destructive">{resource.error || error}</p>}
+      {resource.loading ? <Empty>Loading payment evidence...</Empty> : !overview ? <Empty>Evidence unavailable.</Empty> : <>
+        <div className="grid gap-3 rounded-2xl bg-muted/50 p-5"><AssetIdentity symbol={overview.attempt.symbol ?? "Asset"} network={overview.attempt.network} assetId={overview.attempt.asset}/>{transfer && ["review", "export", "prepared"].includes(step) && <p className="text-2xl font-medium tabular-nums">{displayedAmount(transfer.amount, overview.attempt.decimals)} {overview.attempt.symbol}</p>}<Address value={overview.attempt.address} network={overview.attempt.network}/></div>
+        {step === "source" && <div><Action disabled={unavailable} busy={busy === "source"} onClick={() => void run("source", loadSource)}><FileCheck2 size={15}/>Load source terms</Action></div>}
+        {step === "destination" && <Field label="Destination evidence JSON"><input type="file" accept="application/json,.json" className={control} disabled={unavailable} onChange={event => { const file = event.currentTarget.files?.[0]; setTransfer(null); changed(); if (file) void run("file", () => loadFile(file)); }}/><span className="text-xs text-muted-foreground">razor.destination-evidence v1 · Up to 100 KB</span></Field>}
+        {step === "review" && source && transfer && <>
+          <dl className="grid gap-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Approved entitlement</dt><dd>{usd(source.amount)} USDC</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Cost ceiling</dt><dd>{usd(source.maxFee)}</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Receiving profile / policy</dt><dd>v{source.recipientVersion} / v{source.policyVersion}</dd></div></dl>
+          <p role="status" className="text-sm text-muted-foreground">{source.route.kind === "direct" ? "Native execution evidence. Independent verification required." : "Cross-chain reporter statement. It does not prove bridge causality."}</p>
+          <details className="border-t pt-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Source and destination records</summary><pre className="mt-4 max-h-72 overflow-auto text-xs">{JSON.stringify({ source, transfer }, null, 2)}</pre></details>
+          {canApprove && source.route.kind === "intents" && <>{consent}<p className="text-xs text-muted-foreground">The private statement is retained encrypted. Separate NEAR authorization publishes its hash.</p></>}
+          <div className="flex flex-wrap justify-end gap-3 border-t pt-5"><button type="button" className="text-sm text-primary" disabled={unavailable} onClick={() => { setDisclose(false); setStep("export"); }}>Export existing evidence</button>{canApprove && source.route.kind === "intents" && <Action disabled={unavailable || !disclose} busy={busy === "prepare"} onClick={() => void run("prepare", prepareReport)}>Prepare report</Action>}</div>
+        </>}
+        {step === "prepared" && prepared && <>
+          <p role="status" className="text-sm text-muted-foreground">Unsigned reporter statement</p>
+          <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Statement and wallet calls</summary><div className="mt-4 grid gap-4"><Address value={prepared.statementSha256} label="statement hash"/><pre className="max-h-72 overflow-auto text-xs">{JSON.stringify({ statement: prepared.statement, walletActions: prepared.walletActions }, null, 2)}</pre></div></details>
+          <div className="flex flex-wrap justify-end gap-3 border-t pt-5"><button type="button" className="inline-flex items-center gap-2 text-sm text-primary" disabled={unavailable} onClick={() => download({ statement: prepared.statement, walletActions: prepared.walletActions }, "razor-unsigned-settlement-report.json")}><Download size={15}/>Download</button>{onReportPrepared && <Action disabled={unavailable || !disclose} onClick={() => onReportPrepared(prepared)}>Review NEAR authorization</Action>}</div>
+        </>}
+        {step === "export" && source && transfer && <form className="grid gap-5" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); void run("export", () => exportEvidence(values)); }}>
+          <Field label={source.route.kind === "direct" ? "Original NEAR execution hash" : "Final NEAR reporter transaction hash"}><input name="hash" className={control} minLength={32} maxLength={64} required disabled={unavailable} defaultValue={source.route.kind === "direct" ? overview.attempt.sourceTransactionHash ?? "" : ""} spellCheck={false} autoCapitalize="none" onChange={changed}/></Field>
+          <Field label="NEAR transaction signer"><input name="signer" className={control} minLength={2} maxLength={64} required disabled={unavailable} spellCheck={false} autoCapitalize="none" onChange={changed}/></Field>
+          {source.route.kind === "intents" && <Field label="Retained delivery receipt"><select className={control} value={selectedReceipt} required disabled={unavailable} onChange={event => { setSelectedReceipt(event.target.value); changed(); }}><option value="">Choose receipt</option>{overview.retained.filter(item => item.evidence_kind === "settlement:delivered").map(item => <option key={item.id} value={item.id} disabled={!item.available}>{item.available ? "Retained" : "Expired/redacted"} · {item.content_hash.slice(0, 12)}</option>)}</select>{!overview.retained.some(item => item.available && item.evidence_kind === "settlement:delivered") && <span role="status" className="text-xs text-muted-foreground">No structured delivery receipt is retained.</span>}</Field>}
+          {consent}
+          <div className="flex justify-end border-t pt-5"><Action disabled={unavailable || !disclose || source.route.kind === "intents" && !selectedReceipt} busy={busy === "export"}><Download size={15}/>Export link</Action></div>
+        </form>}
+      </>}
+    </section>;
   }
   return (
     <Panel
@@ -165,12 +237,7 @@ function SettlementLinkEditor({
             busy={busy === "source"}
             onClick={() =>
               void run("source", async () => {
-                changed();
-                const result = await api<{ source: SettlementLinkSource }>(
-                  `${endpoint}/source`,
-                  {},
-                );
-                setSource(result.source);
+                await loadSource();
               })
             }
           >
@@ -214,23 +281,7 @@ function SettlementLinkEditor({
                 changed();
                 if (!file) return;
                 void run("file", async () => {
-                  if (file.size > MAX_DESTINATION_BYTES)
-                    throw new RequestError(
-                      "Choose destination evidence smaller than 100 KB",
-                      422,
-                      "EVIDENCE_TOO_LARGE",
-                    );
-                  try {
-                    setTransfer(
-                      parseDestinationEvidence(await file.text()).transfer,
-                    );
-                  } catch {
-                    throw new RequestError(
-                      "Choose a valid structured destination evidence file",
-                      422,
-                      "INVALID_DESTINATION_EVIDENCE",
-                    );
-                  }
+                  await loadFile(file);
                 });
               }}
             />
@@ -281,19 +332,7 @@ function SettlementLinkEditor({
               busy={busy === "prepare"}
               onClick={() =>
                 void run("prepare", async () => {
-                  const result = await api<StructuredSettlementReport>(
-                    `${endpoint}/prepare`,
-                    {
-                      source,
-                      transfer,
-                      reviewConfirmed: true,
-                      discloseSelectedReceipt: true,
-                    },
-                  );
-                  setPrepared(result);
-                  notify(
-                    "Structured report prepared. No wallet action was signed.",
-                  );
+                  await prepareReport();
                 })
               }
             >
@@ -359,27 +398,7 @@ function SettlementLinkEditor({
               event.preventDefault();
               const values = new FormData(event.currentTarget);
               void run("export", async () => {
-                const kind =
-                  source?.route.kind === "direct"
-                    ? "native_execution"
-                    : "reporter_statement";
-                const evidence = await api(`${endpoint}/export`, {
-                  kind,
-                  source,
-                  transfer,
-                  sourceTransaction: {
-                    transactionHash: String(values.get("hash")).trim(),
-                    signerId: String(values.get("signer")).trim().toLowerCase(),
-                  },
-                  ...(kind === "reporter_statement"
-                    ? { retainedEvidenceId: selectedReceipt }
-                    : {}),
-                  discloseSelectedReceipt: true,
-                });
-                download(evidence, "razor-settlement-link.json");
-                notify(
-                  "Selected evidence exported. Verify it with independent trust and explicitly selected RPCs.",
-                );
+                await exportEvidence(values);
               });
             }}
           >
