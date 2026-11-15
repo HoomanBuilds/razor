@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { WorkspaceTabs } from "./workspace-tabs";
 import { TokenLogo } from "@/components/assets/asset-identity";
-import { BarChart3, Calculator } from "lucide-react";
+import { BarChart3, Calculator, Download } from "lucide-react";
 import { api } from "@/lib/api";
 import { usd } from "@/lib/format";
 import type { CompanyCostComparison, CompanyInsights } from "@/server/insights";
@@ -42,11 +42,13 @@ function InsightsContent({ base, revision }: { base: string; revision: number })
   const query = new URLSearchParams(window).toString(), resource = useResource<CompanyInsights>(`${base}/insights?${query}`, revision), report = resource.data;
   return <Panel title="Company insights" tone="white">
     <div className="grid min-w-0 grid-cols-1 gap-5">
-      <form className="grid min-w-0 grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end" onSubmit={event => { event.preventDefault(); setComparison(null); setWindow({ from, to }); }}>
+      <form className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end sm:justify-between" onSubmit={event => { event.preventDefault(); setComparison(null); setWindow({ from, to }); }}>
+        <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-[11rem_11rem]">
         <Field label="From (UTC)"><input type="date" className={control} value={from} required max={to} disabled={!!busy} onChange={event => setFrom(event.target.value)}/></Field>
         <Field label="To (UTC)"><input type="date" className={control} value={to} required min={from} max={new Date().toISOString().slice(0, 10)} disabled={!!busy} onChange={event => setTo(event.target.value)}/></Field>
-        <Action disabled={!!busy}>Apply dates</Action>
-        {report && <a className="text-sm font-medium text-primary underline underline-offset-4" href={`/api${base}/insights/export?${query}`}>Export CSV</a>}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2"><Action className="min-h-11 px-5" disabled={!!busy}>Apply dates</Action>
+        {report && <a className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border bg-white px-4 text-sm font-medium transition-colors hover:bg-muted" href={`/api${base}/insights/export?${query}`}><Download size={15} aria-hidden="true"/>Export CSV</a>}</div>
       </form>
       {(resource.error || error) && <p role="alert" className="break-words rounded-xl border border-border bg-white p-4 text-sm text-destructive">{resource.error || error}</p>}
       {resource.loading && !report ? <Empty>Loading insights...</Empty> : report && <>
