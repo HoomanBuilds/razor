@@ -37,265 +37,39 @@ const localTime = (value?: string) =>
         .toISOString()
         .slice(0, 16)
     : "";
-export function TenderEditor({
-  setup,
-  buyerKey,
-  initial,
-  supplierIds = [],
-  busy,
-  onSave,
-}: {
-  setup: Setup;
-  buyerKey: LocalKey | null;
-  initial?: TenderTerms;
-  supplierIds?: string[];
-  busy: boolean;
-  onSave: (input: unknown) => Promise<void>;
-}) {
-  const [error, setError] = useState("");
-  return (
-    <form
-      className="grid min-w-0 gap-3 sm:grid-cols-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const values = new FormData(event.currentTarget);
-        try {
-          setError("");
-          void onSave({
-            terms: {
-              reference: values.get("reference"),
-              specification: values.get("specification"),
-              eligibility: values.get("eligibility"),
-              quantity: values.get("quantity"),
-              minimumQuantity: values.get("minimumQuantity"),
-              unit: values.get("unit"),
-              budget: microUsd(String(values.get("budget"))),
-              deliveryFrom: values.get("deliveryFrom"),
-              deliveryTo: values.get("deliveryTo"),
-              bidDeadline: new Date(
-                String(values.get("bidDeadline")),
-              ).toISOString(),
-              revealAt: new Date(String(values.get("revealAt"))).toISOString(),
-              negotiationDeadline: new Date(
-                String(values.get("negotiationDeadline")),
-              ).toISOString(),
-              awardRule: values.get("awardRule"),
-              disclosureRule: "selected_terms_to_razor_after_buyer_review",
-              revealRule: "buyer_explicitly_after_reveal_at",
-              encryptedRetentionDays: Number(values.get("retention")),
-              reviewingRoleId: values.get("role"),
-            },
-            supplierIds: values.getAll("supplier"),
-            buyerPublicKey: buyerKey?.publicKey,
-          });
-        } catch {
-          setError(
-            "Enter an exact USDC budget and complete valid dates before saving",
-          );
-        }
-      }}
-    >
-      <fieldset disabled={busy || !buyerKey} className="contents">
-        <Field label="Tender reference">
-          <input
-            name="reference"
-            className={control}
-            required
-            maxLength={120}
-            defaultValue={initial?.reference}
-            readOnly={!!initial}
-          />
-        </Field>
-        <Field label="Reviewing company role">
-          <select
-            name="role"
-            className={control}
-            required
-            defaultValue={initial?.reviewingRoleId ?? ""}
-          >
-            <option value="">Choose a purchasing reviewer</option>
-            {setup.roles.map((role) => (
-              <option key={role.id} value={role.id}>
-                {role.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <div className="sm:col-span-2">
-          <Field label="Full purchase specification">
-            <textarea
-              name="specification"
-              className={control}
-              minLength={3}
-              maxLength={3000}
-              required
-              defaultValue={initial?.specification}
-            />
-          </Field>
-        </div>
-        <Field label="Supplier eligibility rules">
-          <textarea
-            name="eligibility"
-            className={control}
-            minLength={3}
-            maxLength={3000}
-            required
-            defaultValue={
-              initial?.eligibility ??
-              "Only the invited confirmed business supplier identities may submit"
-            }
-          />
-        </Field>
-        <Field label="Award and review rules">
-          <textarea
-            name="awardRule"
-            className={control}
-            minLength={3}
-            maxLength={3000}
-            required
-            defaultValue={
-              initial?.awardRule ??
-              "Company manually compares complete terms after reveal; both exact parties approve the final agreement before a separate PO proposal"
-            }
-          />
-        </Field>
-        {[
-          ["quantity", "Maximum quantity", initial?.quantity],
-          [
-            "minimumQuantity",
-            "Minimum acceptable quantity",
-            initial?.minimumQuantity ?? initial?.quantity ?? "1",
-          ],
-        ].map(([name, label, value]) => (
-          <Field key={name} label={label!}>
-            <input
-              name={name}
-              className={control}
-              pattern="[1-9][0-9]{0,11}"
-              required
-              defaultValue={value}
-            />
-          </Field>
-        ))}
-        <Field label="Quantity unit">
-          <input
-            name="unit"
-            className={control}
-            required
-            maxLength={40}
-            defaultValue={initial?.unit ?? "units"}
-          />
-        </Field>
-        <Field label="Maximum complete commercial total, USDC">
-          <input
-            name="budget"
-            className={control}
-            inputMode="decimal"
-            required
-            maxLength={32}
-            defaultValue={initial ? usdcInput(initial.budget) : ""}
-          />
-        </Field>
-        {(
-          [
-            ["deliveryFrom", "Earliest delivery, UTC"],
-            ["deliveryTo", "Latest delivery, UTC"],
-          ] as const
-        ).map(([name, label]) => (
-          <Field key={name} label={label}>
-            <input
-              name={name}
-              className={control}
-              type="date"
-              required
-              defaultValue={initial?.[name]}
-            />
-          </Field>
-        ))}
-        {(
-          [
-            ["bidDeadline", "Sealed bid deadline, device time"],
-            ["revealAt", "Earliest explicit buyer reveal, device time"],
-            [
-              "negotiationDeadline",
-              "Final agreement and PO deadline, device time",
-            ],
-          ] as const
-        ).map(([name, label]) => (
-          <Field key={name} label={label}>
-            <input
-              name={name}
-              className={control}
-              type="datetime-local"
-              required
-              defaultValue={localTime(initial?.[name])}
-            />
-          </Field>
-        ))}
-        <Field label="Encrypted transcript retention after negotiation ends">
-          <input
-            name="retention"
-            className={control}
-            type="number"
-            min={1}
-            max={30}
-            step={1}
-            required
-            defaultValue={initial?.encryptedRetentionDays ?? 7}
-          />
-        </Field>
-        <fieldset className="grid gap-2 rounded-lg border p-3 sm:col-span-2">
-          <legend className="px-1 text-sm">
-            Invite confirmed business suppliers
-          </legend>
-          {setup.suppliers.length ? (
-            setup.suppliers.map((supplier) => (
-              <label
-                key={supplier.id}
-                className="flex items-start gap-2 text-sm"
-              >
-                <input
-                  name="supplier"
-                  type="checkbox"
-                  value={supplier.id}
-                  defaultChecked={supplierIds.includes(supplier.id)}
-                />
-                <span>
-                  {supplier.name}, confirmed profile version {supplier.version}
-                </span>
-              </label>
-            ))
-          ) : (
-            <p className="text-sm">
-              Add a business recipient and wait for their account and receiving
-              profile confirmation.
-            </p>
-          )}
-        </fieldset>
-        <label className="flex items-start gap-2 text-xs sm:col-span-2">
-          <input type="checkbox" required />
-          <span>
-            I saved the local decryption key. Only its public key is submitted.
-            Selected final terms become visible to Razor only after explicit
-            disclosure. Losing the key can make sealed bids unreadable.
-          </span>
-        </label>
-        {error && (
-          <p role="alert" className="text-sm text-destructive sm:col-span-2">
-            {error}
-          </p>
-        )}
-        <div>
-          <Action
-            disabled={busy || !buyerKey || !setup.suppliers.length}
-            busy={busy}
-          >
-            Save unpublished tender version
-          </Action>
-        </div>
-      </fieldset>
-    </form>
-  );
+export function TenderEditor({ setup, buyerKey, initial, supplierIds = [], busy, onSave }: { setup: Setup; buyerKey: LocalKey | null; initial?: TenderTerms; supplierIds?: string[]; busy: boolean; onSave: (input: unknown) => Promise<void> }) {
+  const [error, setError] = useState(""), [step, setStep] = useState(0);
+  const next = (form: HTMLFormElement) => {
+    if (step === 0) {
+      const budget = form.elements.namedItem("budget") as HTMLInputElement;
+      budget.setCustomValidity("");
+      try { microUsd(budget.value); } catch (cause) { budget.setCustomValidity(cause instanceof Error ? cause.message : "Enter a valid budget."); budget.reportValidity(); return; }
+    }
+    const invalid = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[data-tender-step="${step}"] input, [data-tender-step="${step}"] select, [data-tender-step="${step}"] textarea`)).find(field => !field.checkValidity());
+    if (invalid) invalid.reportValidity(); else setStep(value => value + 1);
+  };
+  return <form noValidate className="grid min-w-0 gap-6" aria-busy={busy} onInvalidCapture={event => { const element = event.target as HTMLElement; const target = element.closest<HTMLElement>("[data-tender-step]"); if (target) { setStep(Number(target.dataset.tenderStep)); requestAnimationFrame(() => element.focus()); } }} onSubmit={event => {
+    event.preventDefault();
+    if (step < 2) { next(event.currentTarget); return; }
+    const form = event.currentTarget;
+    const invalid = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")).find(field => !field.checkValidity());
+    if (invalid) { const target = invalid.closest<HTMLElement>("[data-tender-step]"); if (target) setStep(Number(target.dataset.tenderStep)); requestAnimationFrame(() => invalid.reportValidity()); return; }
+    const values = new FormData(form);
+    if (!values.getAll("supplier").length) { setStep(1); setError("Choose at least one supplier."); return; }
+    try {
+      setError("");
+      void onSave({ terms: { reference: values.get("reference"), specification: values.get("specification"), eligibility: values.get("eligibility"), quantity: values.get("quantity"), minimumQuantity: values.get("minimumQuantity"), unit: values.get("unit"), budget: microUsd(String(values.get("budget"))), deliveryFrom: values.get("deliveryFrom"), deliveryTo: values.get("deliveryTo"), bidDeadline: new Date(String(values.get("bidDeadline"))).toISOString(), revealAt: new Date(String(values.get("revealAt"))).toISOString(), negotiationDeadline: new Date(String(values.get("negotiationDeadline"))).toISOString(), awardRule: values.get("awardRule"), disclosureRule: "selected_terms_to_razor_after_buyer_review", revealRule: "buyer_explicitly_after_reveal_at", encryptedRetentionDays: Number(values.get("retention")), reviewingRoleId: values.get("role") }, supplierIds: values.getAll("supplier"), buyerPublicKey: buyerKey?.publicKey });
+    } catch { setError("Enter a valid USDC budget and dates."); }
+  }}>
+    <ol className="flex gap-4 border-b pb-4 text-xs">{["Purchase", "Suppliers", "Timing"].map((label, index) => <li key={label} className={index === step ? "font-medium text-primary" : "text-muted-foreground"}>{index + 1}. {label}</li>)}</ol>
+    <fieldset disabled={busy || !buyerKey} className="grid min-w-0 gap-6">
+      <div data-tender-step="0" hidden={step !== 0}><div className="grid gap-5"><Field label="What are you buying?"><textarea name="specification" className={control} minLength={3} maxLength={3000} required rows={3} defaultValue={initial?.specification}/></Field><div className="grid grid-cols-2 gap-4"><Field label="Reference"><input name="reference" className={control} required maxLength={120} defaultValue={initial?.reference} readOnly={!!initial}/></Field><Field label="Budget (USDC)"><input name="budget" className={control} inputMode="decimal" onInput={event => event.currentTarget.setCustomValidity("")} required maxLength={32} defaultValue={initial ? usdcInput(initial.budget) : ""}/></Field></div><div className="grid grid-cols-2 gap-4"><Field label="Maximum quantity"><input name="quantity" className={control} pattern="[1-9][0-9]{0,11}" required defaultValue={initial?.quantity}/></Field><Field label="Minimum quantity"><input name="minimumQuantity" className={control} pattern="[1-9][0-9]{0,11}" required defaultValue={initial?.minimumQuantity ?? initial?.quantity ?? "1"}/></Field></div><Field label="Unit"><input name="unit" className={control} required maxLength={40} defaultValue={initial?.unit ?? "units"}/></Field></div></div>
+      <div data-tender-step="1" hidden={step !== 1}><div className="grid gap-5"><Field label="Reviewer role"><select name="role" className={control} required defaultValue={initial?.reviewingRoleId ?? ""}><option value="">Choose a role</option>{setup.roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}</select></Field><fieldset className="grid gap-3 border-y py-4"><legend className="text-xs text-muted-foreground">Suppliers</legend>{setup.suppliers.length ? setup.suppliers.map(supplier => <label key={supplier.id} className="flex items-start gap-2 text-sm"><input name="supplier" type="checkbox" value={supplier.id} defaultChecked={supplierIds.includes(supplier.id)}/>{supplier.name}</label>) : <p className="text-sm text-muted-foreground">No confirmed business suppliers.</p>}</fieldset><Field label="Eligibility"><textarea name="eligibility" className={control} minLength={3} maxLength={3000} required rows={2} defaultValue={initial?.eligibility ?? "Invited confirmed business suppliers only"}/></Field><Field label="Award rules"><textarea name="awardRule" className={control} minLength={3} maxLength={3000} required rows={3} defaultValue={initial?.awardRule ?? "Company review after reveal; both parties accept before purchase approval"}/></Field></div></div>
+      <div data-tender-step="2" hidden={step !== 2}><div className="grid gap-5"><div className="grid gap-4 sm:grid-cols-2">{([["deliveryFrom", "Delivery from (UTC)"], ["deliveryTo", "Delivery to (UTC)"]] as const).map(([name, label]) => <Field key={name} label={label}><input name={name} className={control} type="date" required defaultValue={initial?.[name]}/></Field>)}</div>{([["bidDeadline", "Bids close"], ["revealAt", "Reveal after"], ["negotiationDeadline", "Agreement deadline"]] as const).map(([name, label]) => <Field key={name} label={`${label} (device time)`}><input name={name} className={control} type="datetime-local" required defaultValue={localTime(initial?.[name])}/></Field>)}<Field label="Encrypted history retention (days)"><input name="retention" className={control} type="number" min={1} max={30} step={1} required defaultValue={initial?.encryptedRetentionDays ?? 7}/></Field><label className="flex items-start gap-2 text-sm"><input type="checkbox" required/>I saved my key. Losing it may make offers unreadable.</label></div></div>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="flex items-center justify-between gap-3 border-t pt-5">{step > 0 ? <button type="button" className="text-sm text-muted-foreground" onClick={() => setStep(value => value - 1)}>Back</button> : <span/>}{step < 2 ? <Action type="button" onClick={event => next(event.currentTarget.form!)}>Continue</Action> : <Action disabled={busy || !buyerKey || !setup.suppliers.length} busy={busy}>Save draft</Action>}</div>
+    </fieldset>
+  </form>;
 }
 
 const emptyCommercial = {
@@ -322,6 +96,7 @@ export function OfferEditor({
   busy,
   onSave,
   label,
+  compact = false,
 }: {
   tender: TenderTerms;
   initial?: OfferTerms;
@@ -329,6 +104,7 @@ export function OfferEditor({
   busy: boolean;
   onSave: (terms: OfferTerms) => Promise<void>;
   label: string;
+  compact?: boolean;
 }) {
   const commercial = initial?.commercial ?? emptyCommercial,
     [error, setError] = useState(""),
@@ -393,6 +169,18 @@ export function OfferEditor({
       setError("");
       void onSave(result.terms);
     } catch (cause) {
+      if (compact) {
+        for (const field of Array.from(event.currentTarget.querySelectorAll<HTMLInputElement>('input[inputmode="decimal"]'))) {
+          if (!field.required && !field.value.trim()) continue;
+          try { microUsd(field.value, field.name !== "unitPrice"); }
+          catch (inputError) {
+            for (let detail = field.closest("details"); detail; detail = detail.parentElement?.closest("details") ?? null) detail.open = true;
+            field.setCustomValidity(inputError instanceof Error ? inputError.message : "Enter a valid amount.");
+            field.reportValidity();
+            return;
+          }
+        }
+      }
       setError(
         cause instanceof Error
           ? cause.message
@@ -402,9 +190,11 @@ export function OfferEditor({
   }
   return (
     <form
-      className="grid min-w-0 gap-3 rounded-lg border p-4 sm:grid-cols-2"
+      className={compact ? "grid min-w-0 gap-5 sm:grid-cols-2" : "grid min-w-0 gap-3 rounded-lg border p-4 sm:grid-cols-2"}
+      onInvalidCapture={event => { if (!compact) return; const target = event.target as HTMLElement; for (let detail = target.closest("details"); detail; detail = detail.parentElement?.closest("details") ?? null) detail.open = true; }}
       onSubmit={submit}
       onInput={(event) => {
+        if (compact && event.target instanceof HTMLInputElement) event.target.setCustomValidity("");
         try {
           setPreview(
             checkedOffer(tender, read(event.currentTarget), mandate).total,
@@ -455,6 +245,9 @@ export function OfferEditor({
             defaultValue={localTime(initial?.validUntil)}
           />
         </Field>
+        <details className={compact ? "border-t pt-4 sm:col-span-2" : "contents"} open={compact ? undefined : true}>
+          <summary className={compact ? "cursor-pointer text-sm" : "hidden"}>Charges & conditions</summary>
+          <div className={compact ? "mt-5 grid gap-5 sm:grid-cols-2" : "contents"}>
         {(
           [
             ["shippingAmount", "Included shipping, USDC"],
@@ -607,6 +400,8 @@ export function OfferEditor({
             defaultValue={commercial.conversionEstimate?.description}
           />
         </Field>
+          </div>
+        </details>
         <div className="sm:col-span-2">
           <Field label="Full additional commercial conditions">
             <textarea
@@ -623,9 +418,9 @@ export function OfferEditor({
           {preview
             ? `Exact included total: ${usd(preview)} USDC.`
             : "Complete valid fields to calculate the exact USDC total."}{" "}
-          Excluded charges and conversion estimates are supplier assertions
+          {!compact && <>Excluded charges and conversion estimates are supplier assertions
           outside the PO allowance, payment route and fee ceiling. Nothing in
-          this editor changes a receiving destination.
+          this editor changes a receiving destination.</>}
         </p>
         {error && (
           <p role="alert" className="text-sm text-destructive sm:col-span-2">
@@ -654,7 +449,7 @@ export function MandateEditor({
   const [error, setError] = useState("");
   return (
     <form
-      className="grid gap-3 rounded-lg border p-3 sm:grid-cols-2"
+      className="grid gap-5 sm:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
         try {
@@ -679,7 +474,7 @@ export function MandateEditor({
       }}
     >
       <fieldset className="contents" disabled={busy}>
-        <Field label="Negotiation maximum complete total, USDC">
+        <Field label="Maximum total (USDC)">
           <input
             name="maximumTotal"
             className={control}
@@ -688,7 +483,7 @@ export function MandateEditor({
             defaultValue={usdcInput(tender.budget)}
           />
         </Field>
-        <Field label="Maximum company and supplier round pairs">
+        <Field label="Maximum round pairs">
           <input
             name="maximumRounds"
             className={control}
@@ -734,7 +529,7 @@ export function MandateEditor({
             defaultValue={tender.deliveryTo}
           />
         </Field>
-        <Field label="Mandate expiry, device time">
+        <Field label="Expires (device time)">
           <input
             name="expiresAt"
             type="datetime-local"
@@ -743,7 +538,7 @@ export function MandateEditor({
             defaultValue={localTime(tender.negotiationDeadline)}
           />
         </Field>
-        <Field label="Human negotiation instruction">
+        <Field label="Instructions">
           <textarea
             name="instruction"
             className={control}
@@ -752,11 +547,7 @@ export function MandateEditor({
             maxLength={3000}
           />
         </Field>
-        <p className="text-xs sm:col-span-2">
-          This draft authorizes no negotiation until a different company
-          reviewer approves it. Price, quantity, date, counterparty, round and
-          expiry limits remain independent of any model suggestion.
-        </p>
+
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -764,7 +555,7 @@ export function MandateEditor({
         )}
         <div>
           <Action disabled={busy} busy={busy}>
-            Propose separate negotiation mandate
+            Propose negotiation
           </Action>
         </div>
       </fieldset>

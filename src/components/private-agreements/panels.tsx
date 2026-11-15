@@ -48,6 +48,8 @@ import {
   TenderEditor,
 } from "./forms";
 
+import { CompanyPrivateWorkspace } from "./company";
+
 type Detail = CompanyPrivateTender;
 type Invite = Detail["invites"][number];
 type RecordView =
@@ -1047,25 +1049,7 @@ export function CompanyPrivateAgreements({
     )
   )
     return null;
-  return (
-    <AgreementPanel
-      key={organization.id}
-      mode="company"
-      base={`${base}/private-agreements`}
-      refreshRevision={revision}
-      onRefresh={refresh}
-      assets={assets.length ? assets : catalog.data?.tokens ?? []}
-      canPrepare={
-        organization.permissions?.includes("payments:prepare") === true
-      }
-      canApprove={
-        organization.permissions?.includes("payments:approve") === true
-      }
-      canDelete={
-        organization.permissions?.includes("documents:manage") === true
-      }
-    />
-  );
+  return <CompanyPrivateWorkspace assets={assets.length ? assets : catalog.data?.tokens ?? []} />;
 }
 export function SupplierPrivateAgreements({
   assets = [],
