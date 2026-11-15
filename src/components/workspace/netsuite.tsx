@@ -10,7 +10,8 @@ import {
 } from "./accounting-ledger";
 import { useWorkspace } from "./context";
 import { useAction, useResource } from "./hooks";
-import { Action, control, Empty, Field, Panel, Status } from "./shared";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
+import { Action, Address, control, Empty, Field, Status } from "./shared";
 
 type Overview = ReturnType<typeof netSuiteOverview>;
 export function NetSuitePanel() {
@@ -46,32 +47,23 @@ function NetSuiteContent({
 }) {
   const [page, setPage] = useState(1),
     [notice, setNotice] = useState(""),
-    { busy, error, run } = useAction(),
+    { busy, error, run, setError } = useAction(),
     resource = useResource<Overview>(`${endpoint}?page=${page}`, revision),
     data = resource.data,
     c = data?.connection,
     mapping = c?.mapping,
     catalog = c?.catalog,
     fresh = !busy && !resource.refreshing && !resource.error;
+  const openTask = (id: string) => { setNotice(""); setError(""); openTaskDrawer(id); };
   const mutate = async (path: string, input: unknown, method?: "PUT") => {
     await api(endpoint + path, input, method);
     refresh();
   };
   return (
-    <Panel
-      title="NetSuite journal connection"
-      description="A separate company-owned NetSuite OAuth connection for a narrow, explicitly reviewed non-tax crypto-fee journal. Provider bookkeeping never creates Razor cash or payment delivery."
-    >
+    <section aria-label="NetSuite" className="grid min-w-0 gap-5">
+      <header className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-medium">NetSuite</h2><p className="mt-2 text-xs text-muted-foreground">Non-tax NEAR fee journals</p></div><Action type="button" disabled={!fresh} onClick={() => openTask("netsuite-connect")}>{c ? "Connection" : "Connect NetSuite"}</Action></header>
       <div className="grid min-w-0 gap-5">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {data?.scope ?? "Loading the current supported NetSuite scope..."} The
-          operator needs a confidential NetSuite integration with REST web
-          services and this exact callback registered. Credentials stay on the
-          server and are never entered here.
-        </p>
-        <p className="break-all text-xs">
-          Callback: {data?.redirectUri ?? "Loading configuration..."}
-        </p>
+        <TaskDrawer id="netsuite-connect" title={c ? "NetSuite connection" : "Connect NetSuite"}><div aria-busy={!!busy} className="grid gap-5">
         <form
           className="flex min-w-0 flex-wrap items-end gap-3"
           onSubmit={(event) => {
@@ -86,7 +78,7 @@ function NetSuiteContent({
             });
           }}
         >
-          <Field label="Exact NetSuite account ID">
+          <Field label="NetSuite account ID">
             <input
               key={c?.account_domain ?? "new"}
               name="accountId"
@@ -105,51 +97,28 @@ function NetSuiteContent({
             busy={busy === "connect"}
           >
             {c
-              ? "Reauthorize this original account"
-              : "Authorize company NetSuite access"}
+              ? "Reauthorize account"
+              : "Authorize connection"}
           </Action>
         </form>
-        {data && !data.configured && (
-          <p role="status" className="text-sm">
-            Operator setup required: NETSUITE_CLIENT_ID and
-            NETSUITE_CLIENT_SECRET. The connector will not simulate consent or a
-            completed post.
-          </p>
-        )}
+        {data && !data.configured && <p role="status" className="text-sm text-amber-900">NetSuite integration is not configured.</p>}
+        {c && <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4"><Status value={c.status}/><button type="button" className="min-h-10 text-sm text-destructive" disabled={!fresh || c.status === "disabled"} onClick={() => void run("disconnect", async () => { const result = await api<{note:string}>(`${endpoint}/disconnect`, {}); setNotice(result.note); refresh(); })}>Disconnect</button></div>}
+        <details className="border-t pt-4 text-xs"><summary className="cursor-pointer">Integration settings</summary><div className="mt-4 grid gap-3"><p className="text-muted-foreground">OAuth callback</p>{data?.redirectUri && <Address value={data.redirectUri} label="OAuth callback" full/>}<p className="text-muted-foreground">Company-owned OAuth integration with REST web services.</p></div></details>
+        {(error || resource.error) && <p role="alert" className="text-sm text-destructive">{error || resource.error}</p>}{notice && <p role="status" className="text-sm">{notice}</p>}
+        </div></TaskDrawer>
         {resource.loading ? (
           <Empty>Loading the company grant and journal history...</Empty>
         ) : c ? (
           <section className="grid min-w-0 gap-4 rounded-lg border p-4">
-            <div className="flex flex-wrap justify-between gap-3">
-              <p className="text-sm font-medium">
-                {c.account_domain} · <Status value={c.status} />
-              </p>
-              <Action
-                type="button"
-                disabled={!fresh || c.status === "disabled"}
-                onClick={() =>
-                  void run("disconnect", async () => {
-                    const result = await api<{ note: string }>(
-                      `${endpoint}/disconnect`,
-                      {},
-                    );
-                    setNotice(result.note);
-                    refresh();
-                  })
-                }
-              >
-                Revoke access and stop future work
-              </Action>
-            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-medium">{mapping?.subsidiaryName ?? "Connected account"}</h3><p className="mt-2 text-xs text-muted-foreground">{c.account_domain}{mapping ? ` · ${mapping.currencyCode}` : ""}</p></div><Status value={c.status}/></div>
             {c.last_error && (
               <p role="alert" className="text-sm text-destructive">
-                {c.last_error}. Existing sent or unknown requests keep their
-                original external IDs for read-only reconciliation.
+                {c.last_error}
               </p>
             )}
             {c.status === "active" && (
               <>
-                <form
+                <button type="button" className="w-fit min-h-10 text-sm text-primary" disabled={!fresh} onClick={() => openTask("netsuite-catalog")}>Import account catalog</button><TaskDrawer id="netsuite-catalog" title="Account catalog"><div aria-busy={!!busy} className="grid gap-5"><form
                   className="flex flex-wrap items-end gap-3"
                   onSubmit={(event) => {
                     event.preventDefault();
@@ -159,12 +128,12 @@ function NetSuiteContent({
                         page: Number(values.get("page")),
                       });
                       setNotice(
-                        "Actual metadata and catalog page loaded. Unsupported required/custom/tax schema stays held; no journal was posted.",
+                        "Catalog imported.",
                       );
                     });
                   }}
                 >
-                  <Field label="Actual NetSuite catalog page">
+                  <Field label="Catalog page">
                     <input
                       name="page"
                       type="number"
@@ -178,8 +147,7 @@ function NetSuiteContent({
                     />
                   </Field>
                   <Action disabled={!fresh} busy={busy === "catalog"}>
-                    Read schema, subsidiary, accounts, currency and tax
-                    availability
+                    Import catalog
                   </Action>
                 </form>
                 {catalog?.schemaError && (
@@ -194,23 +162,20 @@ function NetSuiteContent({
                 )}
                 {catalog && (
                   <p className="text-xs">
-                    Observed {new Date(catalog.observedAt).toLocaleString()}.{" "}
+                    Updated {new Date(catalog.observedAt).toLocaleString()}.{" "}
                     {catalog.records.length} catalog records retained.{" "}
                     {catalog.hasMore
                       ? "More pages may exist; load the next page for missing records."
                       : "This imported page reached its end."}{" "}
-                    Required custom fields and tax-bearing operations cannot be
-                    supplied as arbitrary JSON.
+
                   </p>
                 )}
+                {(error || resource.error) && <p role="alert" className="text-sm text-destructive">{error || resource.error}</p>}{notice && <p role="status" className="text-sm">{notice}</p>}</div></TaskDrawer>
                 {canApprove && catalog?.schemaSupported && (
-                  <details>
-                    <summary className="cursor-pointer text-sm font-medium">
-                      Review exact legal-entity and non-tax journal mappings
-                    </summary>
+                  <><button type="button" className="w-fit min-h-10 text-sm text-primary" disabled={!fresh} onClick={() => openTask("netsuite-mapping")}>{mapping ? "Edit mappings" : "Configure mappings"}</button><TaskDrawer id="netsuite-mapping" title="Journal mappings"><div aria-busy={!!busy}>
                     <form
                       key={`${c.id}:${c.mapping_version}`}
-                      className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2"
+                      className="grid min-w-0 gap-5 sm:grid-cols-2"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const values = new FormData(event.currentTarget);
@@ -233,8 +198,9 @@ function NetSuiteContent({
                             "PUT",
                           );
                           setNotice(
-                            "Live base-currency, subsidiary and directly assigned account mapping reviewed. Every future write rechecks its exact schema and original fee source.",
+                            "Journal mappings saved.",
                           );
+                          closeTaskDrawer("netsuite-mapping", true);
                         });
                       }}
                     >
@@ -243,25 +209,25 @@ function NetSuiteContent({
                           [
                             [
                               "subsidiary",
-                              "Actual OneWorld legal subsidiary",
+                              "Legal subsidiary",
                               "subsidiary",
                               mapping?.subsidiaryId,
                             ],
                             [
                               "currency",
-                              "Actual subsidiary base currency",
+                              "Base currency",
                               "currency",
                               mapping?.currencyId,
                             ],
                             [
                               "expense",
-                              "Directly assigned active expense account",
+                              "Expense account",
                               "account",
                               mapping?.expenseAccountId,
                             ],
                             [
                               "clearing",
-                              "Directly assigned nonbank crypto asset account",
+                              "Nonbank crypto asset account",
                               "account",
                               mapping?.clearingAccountId,
                             ],
@@ -275,19 +241,19 @@ function NetSuiteContent({
                               defaultValue={current ?? ""}
                             >
                               <option value="">
-                                Choose an actual imported record
+                                Choose an account record
                               </option>
                               {catalog.records
                                 .filter((item) => item.kind === kind)
                                 .map((item) => (
                                   <option key={item.id} value={item.id}>
-                                    {item.name} · {item.id}
+                                    {item.name}
                                   </option>
                                 ))}
                             </select>
                           </Field>
                         ))}
-                        <Field label="Company legal-entity mapping reference">
+                        <Field label="Legal entity reference">
                           <input
                             name="legalEntityReference"
                             className={control}
@@ -297,7 +263,7 @@ function NetSuiteContent({
                             defaultValue={mapping?.legalEntityReference}
                           />
                         </Field>
-                        <Field label="Books closed through, optional">
+                        <Field label="Books closed through (optional)">
                           <input
                             name="closedThrough"
                             className={control}
@@ -306,32 +272,21 @@ function NetSuiteContent({
                           />
                         </Field>
                         <label className="flex items-start gap-2 text-xs sm:col-span-2">
-                          <input type="checkbox" required />I reviewed the
-                          actual legal entity and base currency. These are
-                          non-tax crypto-fee entries using distinct eligible
-                          expense and nonbank asset accounts. Tax, bank,
-                          control, summary and unknown required/custom fields
-                          are outside this operation.
+                          <input type="checkbox" required />I confirm the legal entity, base currency and distinct eligible accounts for non-tax fee journals.
                         </label>
                         <div>
                           <Action disabled={!fresh} busy={busy === "mapping"}>
-                            Save live reviewed mapping
+                            Save mappings
                           </Action>
                         </div>
                       </fieldset>
-                    </form>
-                  </details>
+                    </form>{(error || resource.error) && <p role="alert" className="mt-4 text-sm text-destructive">{error || resource.error}</p>}</div></TaskDrawer></>
                 )}
                 {mapping && (
                   <>
-                    <p className="text-sm">
-                      Mapped legal entity: {mapping.subsidiaryName} · Base
-                      currency {mapping.currencyCode}. Mapping version{" "}
-                      {c.mapping_version}. Account and schema changes require
-                      fresh review.
-                    </p>
+                    <Action type="button" className="justify-self-start" disabled={!fresh} onClick={() => openTask("netsuite-journal-create")}>New fee journal</Action><TaskDrawer id="netsuite-journal-create" title="New fee journal" description={`${mapping.subsidiaryName} · ${mapping.currencyCode}`}><div aria-busy={!!busy}>
                     <form
-                      className="grid min-w-0 gap-3 rounded-lg border p-4 sm:grid-cols-2"
+                      className="grid min-w-0 gap-5 sm:grid-cols-2"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const values = new FormData(event.currentTarget);
@@ -343,21 +298,21 @@ function NetSuiteContent({
                             nonTaxJournalAcknowledged: true,
                           });
                           setNotice(
-                            "Exact structured journal prepared for a separate fresh approval. No provider write or transfer occurred.",
+                            "Journal draft prepared for approval.",
                           );
+                          closeTaskDrawer("netsuite-journal-create", true);
                         });
                       }}
                     >
                       <fieldset className="contents" disabled={!fresh}>
-                        <Field label="Existing verified mainnet NEAR fee group">
+                        <Field label="Verified NEAR fee group">
                           <select name="sourceId" className={control} required>
-                            <option value="">Choose an exact fee group</option>
+                            <option value="">Choose a fee group</option>
                             {data!.feeGroups
                               .filter((value) => value.network === "mainnet")
                               .map((value) => (
                                 <option key={value.id} value={value.id}>
-                                  {formatUnits(value.amount_atomic, 24)} NEAR ·{" "}
-                                  {value.id}
+                                  {formatUnits(value.amount_atomic, 24)} NEAR · {new Date(value.created_at).toLocaleString()}
                                 </option>
                               ))}
                           </select>
@@ -375,40 +330,28 @@ function NetSuiteContent({
                         <AccountingValuationFields asset="NEAR" />
                         <label className="flex gap-2 text-xs sm:col-span-2">
                           <input type="checkbox" required />
-                          Prepare this exact non-tax fee expense only. I
-                          reviewed its independently sourced valuation and
-                          rounding policy. Actual native NEAR and any
-                          functional-cent residual remain recorded; no peg or
-                          provider FX execution is assumed.
+                          I reviewed this non-tax fee expense, its independent valuation and rounding policy. Native fees and fractional-cent residuals stay recorded.
                         </label>
                         <div>
                           <Action disabled={!fresh} busy={busy === "preview"}>
-                            Prepare exact non-tax journal review
+                            Prepare journal
                           </Action>
                         </div>
                       </fieldset>
                     </form>
-                    <p className="text-xs text-muted-foreground">
-                      Capture and group final verified NEAR fees in the crypto
-                      ledger tools first. A fee stays unique across NetSuite
-                      requests even if its company group is later released or
-                      rebuilt.
-                    </p>
+                    {(error || resource.error) && <p role="alert" className="mt-4 text-sm text-destructive">{error || resource.error}</p>}</div></TaskDrawer>
                   </>
                 )}
               </>
             )}
           </section>
-        ) : (
-          <Empty>
-            No company NetSuite grant. Connecting and reading metadata never
-            creates a journal or moves funds.
-          </Empty>
-        )}
+        ) : !resource.error ? (
+          <Empty>No NetSuite account connected.</Empty>
+        ) : null}
         <section className="grid min-w-0 gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">
-              Exact journals and original-write recovery
+              Fee journals
             </h3>
             {canApprove && (
               <Action
@@ -418,40 +361,24 @@ function NetSuiteContent({
                   void run("dispatch", async () => {
                     await mutate("/dispatch", {});
                     setNotice(
-                      "One approved original request processed. Check its actual provider record or held outcome below.",
+                      "One approved journal processed.",
                     );
                   })
                 }
               >
-                Process one approved journal
+                Process approved journal
               </Action>
             )}
           </div>
-          {!data?.jobs.length ? (
+          {resource.loading ? <Empty>Loading journals...</Empty> : !data?.jobs.length && !resource.error ? (
             <Empty>No NetSuite journal requests on this page.</Empty>
           ) : (
-            data.jobs.map((value) => (
-              <article
-                key={value.id}
-                className="grid min-w-0 gap-3 rounded-lg border p-4"
-              >
-                <div className="flex flex-wrap justify-between gap-3">
-                  <h4 className="break-all text-sm font-medium">
-                    {value.external_id}
-                  </h4>
-                  <Status value={value.state} />
-                </div>
-                <p className="break-all text-xs">
-                  Source fee group {value.source_id}. Provider ID{" "}
-                  {value.provider_id ?? "not confirmed"}. Attempts{" "}
-                  {value.attempts}. Exact functional amount{" "}
-                  {value.posting.valuation.text}{" "}
-                  {value.posting.mapping.currencyCode}. Original native amount{" "}
-                  {formatUnits(value.posting.source.amountAtomic, 24)} NEAR.
-                </p>
-                <p className="text-xs leading-5">
-                  {value.posting.financialEffect}
-                </p>
+            data?.jobs.map((value) => (
+              <div key={value.id}><button type="button" className="flex w-full items-center justify-between gap-4 border-b py-4 text-left" disabled={!fresh} onClick={() => openTask(`netsuite-journal-${value.id}`)}><span className="min-w-0"><span className="block text-sm font-medium">NEAR fees · {value.posting.payload.tranDate}</span><span className="mt-2 block text-xs text-muted-foreground">{value.posting.mapping.subsidiaryName}</span></span><span className="text-right"><span className="mb-2 block font-medium tabular-nums">{value.posting.valuation.text} {value.posting.mapping.currencyCode}</span><Status value={value.state}/></span></button><TaskDrawer id={`netsuite-journal-${value.id}`} title="NEAR fee journal" description={`${value.posting.mapping.subsidiaryName} · ${value.posting.payload.tranDate}`}><article aria-busy={!!busy} className="grid min-w-0 gap-5">
+                <div className="flex flex-wrap items-start justify-between gap-3"><p className="text-3xl font-medium tabular-nums">{value.posting.valuation.text} <span className="text-sm">{value.posting.mapping.currencyCode}</span></p><Status value={value.state}/></div>
+                <dl className="grid gap-4 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Verified native fee</dt><dd className="mt-2 break-all text-sm tabular-nums">{formatUnits(value.posting.source.amountAtomic, 24)} NEAR</dd></div><div><dt className="text-xs text-muted-foreground">Valuation rate</dt><dd className="mt-2 break-all text-sm">{value.posting.valuation.valuation.numerator}/{value.posting.valuation.valuation.denominator} {value.posting.mapping.currencyCode}/NEAR</dd></div><div><dt className="text-xs text-muted-foreground">Rate source & date</dt><dd className="mt-2 break-words text-sm">{value.posting.valuation.valuation.source} · {value.posting.valuation.valuation.date}</dd></div><div><dt className="text-xs text-muted-foreground">Rounding</dt><dd className="mt-2 text-sm">{value.posting.valuation.valuation.rounding === "exact" ? "Exact cents" : "Half even to cent"}</dd></div></dl>
+                <dl className="grid gap-4 sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Debit expense account</dt><dd className="mt-2 text-sm">{catalog?.records.find(record => record.kind === "account" && record.id === value.posting.mapping.expenseAccountId)?.name ?? value.posting.mapping.expenseAccountId}</dd></div><div><dt className="text-xs text-muted-foreground">Credit crypto asset account</dt><dd className="mt-2 text-sm">{catalog?.records.find(record => record.kind === "account" && record.id === value.posting.mapping.clearingAccountId)?.name ?? value.posting.mapping.clearingAccountId}</dd></div></dl>
+                <p className="text-xs text-muted-foreground">Non-tax expense journal. No cash credit or payment delivery.</p>
                 {value.last_error && (
                   <p role="alert" className="text-sm text-destructive">
                     {value.last_error}. An unknown original write never
@@ -460,9 +387,9 @@ function NetSuiteContent({
                 )}
                 <details>
                   <summary className="cursor-pointer text-sm">
-                    Inspect full exact disclosure, accounts, source and
-                    valuation
+                    Accounts, source & exact disclosure
                   </summary>
+                  <dl className="mt-4 grid gap-4 text-xs"><div><dt className="text-muted-foreground">Original external ID</dt><dd className="mt-2"><Address value={value.external_id} label="external ID" full/></dd></div><div><dt className="text-muted-foreground">Provider record</dt><dd className="mt-2">{value.provider_id ? <Address value={value.provider_id} label="provider ID"/> : "Not confirmed"}</dd></div><div><dt className="text-muted-foreground">Source fee group</dt><dd className="mt-2"><Address value={value.source_id} label="fee group ID"/></dd></div><div><dt className="text-muted-foreground">Write attempts</dt><dd className="mt-2">{value.attempts}</dd></div></dl>
                   <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-muted p-3 text-xs">
                     {JSON.stringify(value.posting, null, 2)}
                   </pre>
@@ -475,8 +402,7 @@ function NetSuiteContent({
                 {value.observation && (
                   <details>
                     <summary className="cursor-pointer text-sm">
-                      Inspect the last actual provider observation before
-                      acknowledging a changed revision
+                      Provider observation
                     </summary>
                     <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-muted p-3 text-xs">
                       {JSON.stringify(value.observation.record, null, 2)}
@@ -504,12 +430,12 @@ function NetSuiteContent({
                             disclosureAcknowledged: true,
                           });
                           setNotice(
-                            "Only this exact human-reviewed journal is queued. Dispatch is a separate action; NetSuite approval workflows still apply.",
+                            "Journal approved and queued.",
                           );
                         })
                       }
                     >
-                      Approve this exact disclosure and journal
+                      Approve journal
                     </Action>
                   )}
                   {canApprove &&
@@ -523,12 +449,12 @@ function NetSuiteContent({
                           void run(`cancel:${value.id}`, async () => {
                             await mutate(`/journals/${value.id}/cancel`, {});
                             setNotice(
-                              "Only an unapproved, unattempted review was retired. Its exact fee identities can now be reviewed again; history remains.",
+                              "Unapproved journal retired.",
                             );
                           })
                         }
                       >
-                        Retire unapproved review
+                        Retire draft
                       </Action>
                     )}
                   {["done", "unknown", "held"].includes(value.state) && (
@@ -539,12 +465,12 @@ function NetSuiteContent({
                         void run(`reconcile:${value.id}`, async () => {
                           await mutate(`/journals/${value.id}/reconcile`, {});
                           setNotice(
-                            "Read the original account-bound external ID. Missing results remain held; no write was replayed.",
+                            "Original journal status reconciled.",
                           );
                         })
                       }
                     >
-                      Read and reconcile original external ID
+                      Reconcile original journal
                     </Action>
                   )}
                   {canApprove &&
@@ -552,7 +478,7 @@ function NetSuiteContent({
                       "EXTERNAL_REVISION_REVIEW_REQUIRED" && (
                       <Action
                         type="button"
-                        disabled={!fresh || c?.status !== "active"}
+                        disabled={!fresh || c?.status !== "active" || !value.observation}
                         onClick={() =>
                           void run(`revision:${value.id}`, async () => {
                             await mutate(`/journals/${value.id}/reconcile`, {
@@ -560,25 +486,26 @@ function NetSuiteContent({
                               expectedProviderHash: value.observation?.hash,
                             });
                             setNotice(
-                              "A changed provider revision was explicitly reviewed. Financial conflicts cannot be accepted as matching.",
+                              "Matching provider revision acknowledged.",
                             );
                           })
                         }
                       >
-                        Review matching provider revision
+                        Accept matching revision
                       </Action>
                     )}
                 </div>
-              </article>
+                {(error || resource.error) && <p role="alert" className="text-sm text-destructive">{error || resource.error}</p>}{notice && <p role="status" className="text-sm">{notice}</p>}
+              </article></TaskDrawer></div>
             ))
           )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {(page > 1 || data?.hasMore) && <div className="flex flex-wrap items-center justify-between gap-3">
             <Action
               type="button"
               disabled={!fresh || page === 1}
               onClick={() => setPage((value) => value - 1)}
             >
-              Previous journal requests
+              Previous
             </Action>
             <span className="text-xs">Page {page}</span>
             <Action
@@ -586,9 +513,9 @@ function NetSuiteContent({
               disabled={!fresh || !data?.hasMore}
               onClick={() => setPage((value) => value + 1)}
             >
-              Next journal requests
+              Next
             </Action>
-          </div>
+          </div>}
         </section>
         {notice && (
           <p role="status" className="text-sm">
@@ -601,6 +528,6 @@ function NetSuiteContent({
           </p>
         )}
       </div>
-    </Panel>
+    </section>
   );
 }
