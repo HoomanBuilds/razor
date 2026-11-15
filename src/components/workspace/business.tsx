@@ -4,7 +4,7 @@ import { proportion } from "@/lib/payment-activity";
 
 import { useEffect, useState } from "react";
 import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./task-drawer";
-import { FileSpreadsheet, Plus, Upload } from "lucide-react";
+import { ChevronLeft, Plus, Upload } from "lucide-react";
 import { AssetIdentity, TokenLogo } from "@/components/assets/asset-identity";
 import { PageMetrics, focusWorkspaceForm } from "./page-metrics";
 import { companyTimeToIso } from "@/lib/company-time";
@@ -296,9 +296,12 @@ export function Payroll() {
   const [entryMode, setEntryMode] = useState<"manual" | "csv">("manual");
   const [csvFilename, setCsvFilename] = useState("");
   const [fee, setFee] = useState("1.00");
+  const [errorLocation, setErrorLocation] = useState<"csv" | "save">("save");
   const [reviewRunId, setReviewRunId] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("reviewRun") ?? "");
   const [executionRunId, setExecutionRunId] = useState("");
+  const [runView, setRunView] = useState<"list" | "review" | "execution">(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reviewRun") ? "review" : "list");
   const selected = Object.entries(items).filter(([, value]) => value.trim());
+  const usesDefaultFee = !selected.length || selected.some(([id]) => importedRows[id]?.maxFee === undefined);
   let selectedTotal: bigint | null = 0n, selectedFees: bigint | null = 0n;
   try {
     for (const [id, amount] of selected) {
@@ -306,18 +309,18 @@ export function Payroll() {
       selectedFees += BigInt(microUsd(importedRows[id]?.maxFee ?? fee, true));
     }
   } catch { selectedTotal = null; selectedFees = null; }
-  const showReview = (id: string) => { setExecutionRunId(""); setReviewRunId(id); };
-  const showExecution = (id: string) => { setReviewRunId(""); setExecutionRunId(id); };
-  useEffect(() => { if (reviewRunId && !loading) focusWorkspaceForm("payroll-review"); }, [reviewRunId, loading]);
-  useEffect(() => { if (executionRunId) document.getElementById("payroll-execution")?.scrollIntoView({ block: "start" }); }, [executionRunId]);
+  const showReview = (id: string) => { setReviewRunId(id); setRunView("review"); };
+  const showExecution = (id: string) => { setExecutionRunId(id); setRunView("execution"); };
+  useEffect(() => { if (reviewRunId && !loading && runView === "review") focusWorkspaceForm("payroll-review"); }, [reviewRunId, loading, runView]);
+  useEffect(() => { if (executionRunId && runView === "execution") document.getElementById("payroll-execution")?.scrollIntoView({ block: "start" }); }, [executionRunId, runView]);
   if (!canRead) return null;
   return <div className="grid min-w-0 gap-7">
-    <PageMetrics items={[
+    <div hidden={runView !== "list"} className="grid gap-7"><PageMetrics items={[
       { label: "Recorded pay runs", value: data?.runs.length ?? (loadError ? "Unavailable" : null) },
-      { label: "Prepared net entitlement", value: data ? usd(data.runs.reduce((sum, payrun) => sum + BigInt(payrun.total), 0n)) : loadError ? "Unavailable" : null, asset: "USDC", detail: "Across all recorded pay runs" },
+      { label: "Prepared net entitlement", value: data ? usd(data.runs.reduce((sum, payrun) => sum + BigInt(payrun.total), 0n)) : loadError ? "Unavailable" : null, asset: "USDC",  },
       { label: "Draft pay runs", value: data ? data.runs.filter(payrun => payrun.status === "draft").length : loadError ? "Unavailable" : null, progress: data ? { value: proportion(data.runs.filter(payrun => payrun.status === "draft").length, data.runs.length), label: "Draft / recorded", detail: `${data.runs.filter(payrun => payrun.status === "draft").length} / ${data.runs.length}` } : undefined },
     ]} />
-    <Panel title="Pay runs" tone="white" description="Prepare, review and follow your team's payments." action={canPrepare ? <Action type="button" onClick={() => openTaskDrawer("payroll-create-flow")}><Plus size={15} />New pay run</Action> : undefined}>
+    <Panel title="Pay runs" tone="white" action={canPrepare ? <Action type="button" onClick={() => openTaskDrawer("payroll-create-flow")}><Plus size={15} />New pay run</Action> : undefined}>
       {loadError && <p role="alert" className="mb-4 text-sm text-destructive">Pay runs are unavailable. {loadError}</p>}
       {loading ? <Empty>Loading pay runs...</Empty> : !data ? <Empty>Refresh the workspace to load pay runs.</Empty> : !data.runs.length ? <Empty>Saved pay runs appear here for review and approval.</Empty> : <div className="divide-y rounded-2xl border bg-white">
         {data.runs.map(payrun => {
@@ -330,17 +333,19 @@ export function Payroll() {
             </div>
             <div className="mt-5 border-t pt-4"><details><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Recipients and delivery ({payrun.items.length})</summary><div className="mt-4 divide-y rounded-xl bg-muted/40 px-4">
               {payrun.items.map(item => <div key={item.id} className="grid gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_auto]"><div><p className="text-sm font-medium">{recordedPayee(item.payment, recipients.find(recipient => recipient.id === item.recipient_id))}</p><p className="mt-1 text-xs text-muted-foreground">{usd(item.deliveredAmount)} delivered · {usd(item.remainingLiability)} remaining</p></div><div className="flex items-center justify-between gap-4"><p className="text-sm font-medium tabular-nums">{usd(item.amount)}</p><Status value={item.remainingLiability === "0" ? "paid" : BigInt(item.deliveredAmount) > 0n ? "partially_paid" : item.payment?.status ?? "draft"} /></div></div>)}
-            </div></details><div className="mt-3 flex items-center justify-between gap-4"><p className="text-xs text-muted-foreground">{reviewFirst ? "Review amounts and receiving details before approval." : "Completion requires a reconciled delivery for every recipient."}</p><button type="button" className="shrink-0 text-xs text-primary" onClick={() => reviewFirst ? showExecution(payrun.id) : showReview(payrun.id)}>{reviewFirst ? "Delivery progress" : "Review amounts"}</button></div></div>
+            </div></details><div className="mt-3 flex items-center justify-between gap-4"><button type="button" className="shrink-0 text-xs text-primary" onClick={() => reviewFirst ? showExecution(payrun.id) : showReview(payrun.id)}>{reviewFirst ? "Delivery progress" : "Review amounts"}</button></div></div>
           </article>;
         })}
       </div>}
     </Panel>
-    {reviewRunId && <div id="payroll-review" className="scroll-mt-8"><PaymentManagementPanel mode="payroll" initialRunId={reviewRunId} /></div>}
-    {executionRunId && <div id="payroll-execution" className="scroll-mt-8"><PayrollExecution key={executionRunId} runId={executionRunId} onReview={() => showReview(executionRunId)} /></div>}
-    {canPrepare && <TaskDrawer id="payroll-create-flow" title="New pay run" description="Set your team's net pay, then save a draft for review and approval.">
+    </div>{runView !== "list" && <button type="button" className="inline-flex w-fit items-center gap-1 text-sm text-primary" onClick={() => { if (!document.querySelector('#payroll-review [aria-busy="true"], #payroll-execution [aria-busy="true"]')) setRunView("list"); }}><ChevronLeft size={16} />Pay runs</button>}
+    {reviewRunId && <div hidden={runView !== "review"} id="payroll-review" className="scroll-mt-8"><PaymentManagementPanel mode="payroll" initialRunId={reviewRunId} onRunChange={setReviewRunId} /></div>}
+    {executionRunId && <div hidden={runView !== "execution"} id="payroll-execution" className="scroll-mt-8"><PayrollExecution key={executionRunId} runId={executionRunId} active={runView === "execution"} onReview={() => showReview(executionRunId)} /></div>}
+    {canPrepare && <TaskDrawer id="payroll-create-flow" title="New pay run">
       <form id="payroll-compose" aria-busy={!!busy} className="grid gap-7"
           onSubmit={(event) => {
             event.preventDefault();
+            setErrorLocation("save");
             const form = event.currentTarget,
               values = new FormData(form);
             void run("create", async () => {
@@ -393,11 +398,12 @@ export function Payroll() {
         >
 
         <fieldset disabled={!!busy} className="grid min-w-0 gap-7">
-          <section className="grid gap-4"><h3 className="text-sm font-medium">Run details</h3><Field label="Pay-run reference"><input name="reference" className={control} required placeholder="November payroll" maxLength={120} /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Period start"><input name="start" type="date" className={control} required /></Field><Field label="Period end"><input name="end" type="date" className={control} required /></Field></div><details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Schedule payment (optional)</summary><div className="mt-4"><Field label="Scheduled payment" hint={`Company time: ${organization.timezone}`}><input name="scheduled" type="datetime-local" className={control} /></Field></div></details></section>
-          <section className="grid min-w-0 gap-4 border-t pt-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-medium">Recipient amounts</h3><p className="mt-1 text-xs text-muted-foreground">Enter net USDC pay. Leave an amount blank to exclude a payee.</p></div><div role="group" aria-label="Amount entry method" className="flex rounded-xl bg-muted p-1">{(["manual", "csv"] as const).map(mode => <button key={mode} type="button" aria-pressed={entryMode === mode} onClick={() => setEntryMode(mode)} className={`rounded-lg px-3 py-2 text-xs font-medium ${entryMode === mode ? "bg-white text-foreground shadow-sm" : "text-muted-foreground"}`}>{mode === "manual" ? "Enter amounts" : "Import CSV"}</button>)}</div></div>
-            {entryMode === "csv" && <div className="grid gap-4 rounded-xl border bg-white p-4"><div className="flex items-start gap-3"><FileSpreadsheet className="mt-1 shrink-0 text-primary" size={20} /><div><p className="text-sm font-medium">Import a standard payroll CSV</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Use recipient_id or email with amount in USDC. Uploaded amounts replace the current selection.</p></div></div><label className="flex w-fit cursor-pointer items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium focus-within:ring-2 focus-within:ring-primary"><Upload size={15} />{busy === "csv" ? "Reading CSV..." : "Choose CSV file"}<input type="file" accept=".csv,text/csv" className="sr-only" disabled={!!busy || !!recipientsLoading || !!recipientsError} onChange={event => {
+          <section className="grid gap-4"><Field label="Pay-run reference"><input name="reference" className={control} required placeholder="November payroll" maxLength={120} /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Period start"><input name="start" type="date" className={control} required /></Field><Field label="Period end"><input name="end" type="date" className={control} required /></Field></div><details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Schedule payment (optional)</summary><div className="mt-4"><Field label="Scheduled payment" hint={`Company time: ${organization.timezone}`}><input name="scheduled" type="datetime-local" className={control} /></Field></div></details></section>
+          <section className="grid min-w-0 gap-4 border-t pt-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-medium">Net pay (USDC)</h3></div><div role="group" aria-label="Amount entry method" className="flex rounded-xl bg-muted p-1">{(["manual", "csv"] as const).map(mode => <button key={mode} type="button" aria-pressed={entryMode === mode} onClick={() => setEntryMode(mode)} className={`rounded-lg px-3 py-2 text-xs font-medium ${entryMode === mode ? "bg-white text-foreground shadow-sm" : "text-muted-foreground"}`}>{mode === "manual" ? "Enter amounts" : "Import CSV"}</button>)}</div></div>
+            {entryMode === "csv" && <div className="grid gap-4 rounded-xl border bg-white p-4"><label className="flex w-fit cursor-pointer items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium focus-within:ring-2 focus-within:ring-primary"><Upload size={15} />{busy === "csv" ? "Reading CSV..." : "Choose CSV file"}<input type="file" accept=".csv,text/csv" className="sr-only" disabled={!!busy || !!recipientsLoading || !!recipientsError} onChange={event => {
               const input = event.currentTarget, file = input.files?.[0];
               if (!file) return;
+              setErrorLocation("csv");
               void run("csv", async () => {
                 try {
                   const { parsePayrollDetailsCsv } = await import("@/lib/csv");
@@ -406,26 +412,26 @@ export function Payroll() {
                   setImportedRows(parsed); setImportSelection(null); setCsvFilename(file.name);
                 } finally { input.value = ""; }
               });
-            }} /></label>{csvFilename && <p role="status" className="break-words text-xs text-muted-foreground">Loaded {csvFilename}</p>}<details className="text-xs text-muted-foreground"><summary className="cursor-pointer">CSV columns and adjustments</summary><p className="mt-3 leading-5">Required: recipient_id or email, amount (net USDC). Optional: base_amount, bonus_amount, adjustment_amount, note and max_fee. Bonuses or corrections need base_amount and a note. The amount must match their net total.</p></details><div className="border-t pt-3"><button type="button" className="text-sm text-primary" onClick={() => { closeTaskDrawer("payroll-create-flow"); openTaskDrawer("payroll-import-flow"); }}>Map columns or resume a saved import</button><p className="mt-1 text-xs text-muted-foreground">For other column names, number formats, row corrections and saved mappings.</p></div></div>}
-            {importSelection && <p role="status" className="rounded-xl bg-primary/5 p-3 text-xs leading-5">Reviewed import loaded. Its exact row amounts and cost caps will be used. Editing an amount switches this to a manual draft.</p>}
-            {Object.keys(importedRows).length > 0 && <button type="button" className="justify-self-start text-xs text-primary" onClick={() => { setItems({}); setImportedRows({}); setImportSelection(null); setCsvFilename(""); setEntryMode("manual"); }}>Clear imported amounts and enter manually</button>}
+            }} /></label>{error && errorLocation === "csv" && <p role="alert" className="text-sm text-destructive">{error}</p>}{csvFilename && <p role="status" className="break-words text-xs text-muted-foreground">Loaded {csvFilename}</p>}<details className="text-xs text-muted-foreground"><summary className="cursor-pointer">CSV columns and adjustments</summary><p className="mt-3 leading-5">Required: recipient_id or email, amount (net USDC). Optional: base_amount, bonus_amount, adjustment_amount, note and max_fee. Bonuses or corrections need base_amount and a note. The amount must match their net total.</p></details><div className="border-t pt-3"><button type="button" className="text-sm text-primary" onClick={() => { closeTaskDrawer("payroll-create-flow"); openTaskDrawer("payroll-import-flow"); }}>Map columns or resume a saved import</button></div></div>}
+            {importSelection && <p role="status" className="rounded-xl bg-primary/5 p-3 text-xs leading-5">Reviewed import</p>}
+            {Object.keys(importedRows).length > 0 && <button type="button" className="justify-self-start text-xs text-primary" onClick={() => { setItems({}); setImportedRows({}); setImportSelection(null); setCsvFilename(""); setEntryMode("manual"); }}>Clear imported amounts</button>}
             {recipientsLoading ? <Empty>Loading payees...</Empty> : recipientsError ? <div role="alert" className="rounded-xl border p-4 text-sm text-destructive">Payees could not be loaded. {recipientsError}</div> : !recipients.length ? <Empty><p>Add a payee to prepare payroll.</p>{organization.permissions?.includes("recipients:manage") && <Action type="button" className="mt-4" onClick={() => { closeTaskDrawer("payroll-create-flow"); navigate("recipients"); }}><Plus size={15} />Add payee</Action>}</Empty> : <div className="divide-y rounded-xl border bg-white px-4">
               {recipients.map(recipient => {
                 const token = assets.data?.tokens.find(value => value.assetId === recipient.primary_asset || recipient.primary_asset === "USDC" && value.symbol === "USDC" && value.blockchain === recipient.primary_network);
                 const components = importedRows[recipient.id]?.baseAmount !== undefined;
-                return <div key={recipient.id} className="grid gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_180px]"><div className="min-w-0"><p className="text-sm font-medium">{recipient.name}<span className="ml-2 text-xs font-normal capitalize text-muted-foreground">{recipient.kind}</span></p><div className="mt-2"><AssetIdentity symbol={token?.symbol || (recipient.primary_asset === "USDC" ? "USDC" : "Selected asset")} network={recipient.primary_network} assetId={recipient.primary_asset} size={20} /></div>{recipient.preference_status !== "confirmed" && <p className="mt-2 text-xs text-amber-800">Receiving details need confirmation before approval.</p>}</div><Field label="Net pay (USDC)"><input className={`${control} tabular-nums`} aria-label={`Net USDC for ${recipient.name}`} inputMode="decimal" placeholder="0.00" value={items[recipient.id] ?? ""} readOnly={components} onChange={event => {
+                return <div key={recipient.id} className="grid grid-cols-[minmax(0,1fr)_112px] items-center gap-3 py-4"><div className="min-w-0"><p className="text-sm font-medium">{recipient.name}<span className="ml-2 text-xs font-normal capitalize text-muted-foreground">{recipient.kind}</span></p><div className="mt-2"><AssetIdentity symbol={token?.symbol || (recipient.primary_asset === "USDC" ? "USDC" : "Selected asset")} network={recipient.primary_network} assetId={recipient.primary_asset} size={20} /></div>{recipient.preference_status !== "confirmed" && <p className="mt-2 text-xs text-amber-800">Receiving details need confirmation before approval.</p>}</div><input className={`${control} text-right tabular-nums`} aria-label={`Net USDC for ${recipient.name}`} inputMode="decimal" placeholder="-" value={items[recipient.id] ?? ""} readOnly={components} onChange={event => {
                   setImportSelection(null);
                   setItems(previous => ({ ...previous, [recipient.id]: event.target.value }));
                   setImportedRows(previous => previous[recipient.id] ? { ...previous, [recipient.id]: { ...previous[recipient.id], amount: event.target.value } } : previous);
-                }} /></Field>{components && <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">Imported base, bonus and correction are preserved. Edit these components in the saved run review.</p>}</div>;
+                }} />{(components || importedRows[recipient.id]?.maxFee) && <p className="col-span-2 text-xs text-muted-foreground">{[components && "Imported components", importedRows[recipient.id]?.maxFee && `Cost limit ${usd(microUsd(importedRows[recipient.id].maxFee!, true))}`].filter(Boolean).join(" · ")}</p>}</div>;
               })}
             </div>}
           </section>
-          <section className="grid gap-4 border-t pt-6"><h3 className="text-sm font-medium">Payment settings</h3><div className="grid gap-4 sm:grid-cols-[200px_minmax(0,1fr)]"><Field label="Default cost ceiling (USDC)"><input name="fee" className={control} value={fee} onChange={event => setFee(event.target.value)} required inputMode="decimal" /></Field><p className="text-xs leading-5 text-muted-foreground sm:pt-7">Maximum company routing cost per recipient, separate from net pay. Imported row caps take precedence. Receiving assets follow each payee's confirmed preferences.</p></div></section>
+          {usesDefaultFee ? <div className="flex items-center justify-between gap-4 border-t pt-5"><label htmlFor="payroll-cost-limit" className="text-sm font-medium">Default cost limit</label><div className="relative w-28 shrink-0"><span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">$</span><input id="payroll-cost-limit" name="fee" aria-label="Default routing cost limit in USDC" className={`${control} pl-7 text-right tabular-nums`} value={fee} onChange={event => setFee(event.target.value)} required inputMode="decimal" /></div></div> : <input type="hidden" name="fee" value={fee} />}
         </fieldset>
-        <footer className="grid gap-4 border-t pt-5"><div aria-live="polite" className="flex flex-wrap items-end justify-between gap-3"><p className="text-sm text-muted-foreground">{selected.length} {selected.length === 1 ? "recipient" : "recipients"} selected</p><div className="min-w-0 text-right"><p className="break-words text-lg font-semibold tabular-nums">{selectedTotal === null ? "Check entered amounts" : `${usd(selectedTotal)} net USDC`}</p><p className="mt-1 text-xs text-muted-foreground">{selectedFees === null ? "Enter valid amounts and cost caps to see the total." : `Maximum costs ${usd(selectedFees)}`}</p></div></div>{error && <p role="alert" className="rounded-xl bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}<div className="flex flex-wrap items-center justify-between gap-3"><button type="button" className="text-sm text-muted-foreground" disabled={!!busy} onClick={() => closeTaskDrawer("payroll-create-flow")}>Close</button><Action busy={busy === "create"} disabled={!!busy || !!recipientsLoading || !!recipientsError || !selected.length || selectedTotal === null}>Save draft</Action></div><p className="text-xs text-muted-foreground">Saving a draft does not approve or send payments.</p></footer>
+        <footer className="grid gap-5 border-t pt-5">{error && errorLocation === "save" && <p role="alert" className="text-sm text-destructive">{error}</p>}<div aria-live="polite" className="flex items-center justify-between gap-4"><div><p className="text-sm text-muted-foreground">{selected.length} {selected.length === 1 ? "recipient" : "recipients"}</p><p className="mt-1 text-xs text-muted-foreground">{selectedFees === null ? "Check cost limits" : `Costs up to ${usd(selectedFees)}`}</p></div><p className="flex min-w-0 items-center gap-2 text-2xl font-semibold tabular-nums"><TokenLogo symbol="USDC" size={24} /><span className="min-w-0 break-words">{selectedTotal === null ? "Check amounts" : usd(selectedTotal)}</span></p></div><div className="flex items-center justify-between gap-4"><button type="button" className="text-sm text-muted-foreground" disabled={!!busy} onClick={() => closeTaskDrawer("payroll-create-flow")}>Close</button><Action className="min-w-36" busy={busy === "create"} disabled={!!busy || !!recipientsLoading || !!recipientsError || !selected.length || selectedTotal === null}>Save draft</Action></div></footer>
       </form>
     </TaskDrawer>}
-    {canPrepare && <TaskDrawer id="payroll-import-flow" title="Import payroll" description="Map your spreadsheet, confirm its number format and review each allocation." wide><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); setEntryMode("csv"); closeTaskDrawer("payroll-import-flow"); openTaskDrawer("payroll-create-flow"); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={id => { showReview(id); closeTaskDrawer("payroll-import-flow", true); }} /></TaskDrawer>}
+    {canPrepare && <TaskDrawer id="payroll-import-flow" title="Import payroll"><PayrollImport onUse={(rows, selection) => { setImportedRows(rows); setItems(Object.fromEntries(Object.entries(rows).map(([id, value]) => [id, value.amount]))); setImportSelection(selection); setEntryMode("csv"); closeTaskDrawer("payroll-import-flow"); openTaskDrawer("payroll-create-flow"); }} onInvalidated={() => { if (importSelection) { setImportedRows({}); setItems({}); setImportSelection(null); } }} onOpenRun={id => { showReview(id); closeTaskDrawer("payroll-import-flow", true); }} /></TaskDrawer>}
   </div>;
 }
