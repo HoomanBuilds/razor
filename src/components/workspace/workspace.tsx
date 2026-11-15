@@ -34,7 +34,7 @@ import {
 } from "@/components/auth/identity-provider";
 import { SignInPanel } from "@/components/auth/sign-in-panel";
 import { api, errorMessage } from "@/lib/api";
-import { canOpenSection, workspacePath } from "@/lib/workspace-access";
+import { canOpenSection, workspacePath, WORKSPACE_NAVIGATION_EVENT } from "@/lib/workspace-access";
 import { WorkspaceContext, type InvoiceReview } from "./context";
 import { InvoiceInbox } from "./invoice-inbox";
 import { useAction, useResource } from "./hooks";
@@ -292,6 +292,7 @@ function Workspace() {
     setSection(next);
     setSidebar(false);
     window.history.pushState(null, "", workspacePath(organization.id, next, paymentId));
+    window.dispatchEvent(new Event(WORKSPACE_NAVIGATION_EVENT));
   };
   const currentTitle = visibleSection === "assistant" && !organization.permissions.includes("documents:manage") ? "Finance insights" : navigation.find(item => item.id === visibleSection)?.title;
   const allowedNavigation = navigation.filter(item => canOpenSection(item.id, organization.permissions));

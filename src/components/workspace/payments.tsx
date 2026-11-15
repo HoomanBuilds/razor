@@ -1,5 +1,7 @@
 "use client";
 
+import { WORKSPACE_NAVIGATION_EVENT } from "@/lib/workspace-access";
+
 import { proportion } from "@/lib/payment-activity";
 import { useEffect, useState } from "react";
 import { api, RequestError } from "@/lib/api";
@@ -44,7 +46,11 @@ export function Payments() {
     const readLocation = () => setDetailId(new URLSearchParams(window.location.search).get("payment") ?? "");
     readLocation();
     window.addEventListener("popstate", readLocation);
-    return () => window.removeEventListener("popstate", readLocation);
+    window.addEventListener(WORKSPACE_NAVIGATION_EVENT, readLocation);
+    return () => {
+      window.removeEventListener("popstate", readLocation);
+      window.removeEventListener(WORKSPACE_NAVIGATION_EVENT, readLocation);
+    };
   }, []);
   useEffect(() => { if (preview) document.getElementById("payment-review")?.scrollIntoView({block:"start"}); }, [preview?.attempt.id]);
   useEffect(() => { if (fundingId) document.getElementById("payment-funding-review")?.scrollIntoView({block:"start"}); }, [fundingId]);

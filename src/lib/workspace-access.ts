@@ -1,5 +1,7 @@
 import type { Section } from "../components/workspace/types";
 
+export const WORKSPACE_NAVIGATION_EVENT = "razor:workspace-navigation";
+
 const requirements: Record<Section, readonly string[]> = {
   overview: ["company:read"],
   payments: ["company:read", "payments:read"],
