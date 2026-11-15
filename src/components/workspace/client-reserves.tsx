@@ -37,7 +37,7 @@ export function ClientReservesPanel() {
     ...(BigInt(selected.paymentCovered) > 0n ? [["Payment coverage", selected.paymentCovered] as [string, string]] : []),
     ...(BigInt(selected.principalInFlight) > 0n ? [["In flight", selected.principalInFlight] as [string, string]] : []),
   ] : [];
-  if (selected && BigInt(selected.outstandingPrincipal) > 0n && selected.outstandingPrincipal !== selected.amount && !reserveFigures.some(([, value]) => value === selected.outstandingPrincipal)) reserveFigures.push(["Unpaid principal", selected.outstandingPrincipal]);
+  if (selected && BigInt(selected.outstandingPrincipal) > 0n && selected.outstandingPrincipal !== selected.amount) reserveFigures.push(["Unpaid principal", selected.outstandingPrincipal]);
   const canManage = canApprove && data?.canManage;
   const locked = !!busy || resource.refreshing || !!resource.error;
   const eligible = payments.data?.payments.filter(payment => selected && payment.amount === selected.amount && !!payment.approved_at && ["approved_unfunded", "approved"].includes(payment.status) && (!selected.paymentId || payment.id === selected.paymentId)) ?? [];
