@@ -1,193 +1,27 @@
 "use client";
 
 import { formatUnits } from "@/lib/money";
-import {
-  capabilityLabels,
-  OPTIONAL_CAPABILITIES,
-  type CapabilityPolicy,
-} from "@/server/billing/capability-model";
+import { capabilityLabels, OPTIONAL_CAPABILITIES, type CapabilityPolicy } from "@/server/billing/capability-model";
 import type { OptionalCapabilityStatus } from "@/server/billing/capabilities";
-import { DataTable, Panel, Status } from "./shared";
+import { CapsuleMeter } from "./dashboard-visuals";
+import { Panel, Status } from "./shared";
 
-export function OptionalPlanCapabilities({
-  policy,
-}: {
-  policy?: CapabilityPolicy;
-}) {
-  if (!policy)
-    return (
-      <p className="text-xs text-muted-foreground">
-        This historical offer has no attached new optional-feature quota. Its
-        frozen terms remain in force.
-      </p>
-    );
-  return (
-    <div className="grid min-w-0 grid-cols-1 gap-3 text-xs">
-      <p className="font-medium">
-        {policy.mode === "calibrated"
-          ? "Operator-reviewed cost calibration"
-          : policy.mode === "pilot"
-            ? "Non-calibrated pilot allowance"
-            : "Existing version: no new commercial creation quota"}
-      </p>
-      <p className="break-words leading-5 text-muted-foreground">
-        {policy.notice}
-      </p>
-      {policy.mode !== "legacy" ? (
-        <ul className="grid min-w-0 grid-cols-1 gap-1">
-          {OPTIONAL_CAPABILITIES.map((key) => (
-            <li key={key}>
-              {capabilityLabels[key]}:{" "}
-              <span className="tabular-nums">
-                {policy.limits[key]?.toLocaleString() ?? "No new quota"}
-              </span>{" "}
-              per usage period
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {policy.mode === "calibrated" ? (
-        <p className="leading-5 text-muted-foreground">
-          Capacities use exact budget / observed unit-cost ratios rounded down.
-          These are operator-reviewed service expenses, not independently
-          verified costs or network-gas estimates. Runtime safety limits and
-          service configuration still apply.
-        </p>
-      ) : policy.mode === "pilot" ? (
-        <p className="leading-5 text-muted-foreground">
-          Pilot limits are a deliberate offer, not measured-cost or
-          unlimited-capacity claims.
-        </p>
-      ) : null}
-    </div>
-  );
+export function OptionalPlanCapabilities({ policy }: { policy?: CapabilityPolicy }) {
+  if (!policy) return <p className="text-xs text-muted-foreground">Historical plan terms apply.</p>;
+  return <div className="grid gap-3 text-xs">
+    {policy.mode !== "legacy" ? <ul className="divide-y">{OPTIONAL_CAPABILITIES.map(key => <li key={key} className="flex items-start justify-between gap-4 py-2"><span>{capabilityLabels[key]}</span><span className="shrink-0 tabular-nums">{policy.limits[key]?.toLocaleString() ?? "No creation quota"}</span></li>)}</ul> : <p>Existing plan terms</p>}
+    <p className="text-muted-foreground">Per usage period · {policy.mode === "pilot" ? "Pilot allowances" : policy.mode === "calibrated" ? "Published allowances" : "Legacy terms"}</p>
+  </div>;
 }
-export function OptionalCapabilityUsage({
-  value,
-}: {
-  value?: OptionalCapabilityStatus;
-}) {
-  if (!value)
-    return (
-      <Panel collapsible title="Optional feature capacities">
-        <p className="text-sm text-muted-foreground">
-          Refresh the plan to read its versioned creation policy. Existing
-          payments and recovery remain available.
-        </p>
-      </Panel>
-    );
+
+export function OptionalCapabilityUsage({ value }: { value?: OptionalCapabilityStatus }) {
+  if (!value) return <Panel collapsible title="Feature usage"><p className="text-sm text-muted-foreground">Refresh your plan to load usage.</p></Panel>;
   const { policy } = value;
-  return (
-    <Panel
-      collapsible title="Optional feature capacities"
-      description="Your plan's optional resource allowances." help="Creation allowances are fixed to your current plan version and usage period. Using an allowance never creates a charge or automatic upgrade."
-    >
-      <div className="grid min-w-0 grid-cols-1 gap-4">
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <p className="break-all text-xs text-muted-foreground">
-            Plan {value.planVersionId}
-          </p>
-          <Status
-            value={
-              policy.mode === "legacy"
-                ? "legacy_terms"
-                : policy.mode === "pilot"
-                  ? "non_calibrated_pilot"
-                  : "operator_calibrated"
-            }
-          />
-        </div>
-        <p className="break-words text-sm leading-6">{policy.notice}</p>
-        <DataTable
-          columns={[
-            "Optional new resource",
-            "Created this period",
-            "Published allowance",
-            "Remaining",
-          ]}
-        >
-          {OPTIONAL_CAPABILITIES.map((key) => {
-            const cap = policy.limits[key],
-              used = value.usage[key];
-            return (
-              <tr key={key}>
-                <td className="min-w-44">{capabilityLabels[key]}</td>
-                <td className="text-right tabular-nums">
-                  {used.toLocaleString()}
-                </td>
-                <td className="text-right tabular-nums">
-                  {cap === null
-                    ? "No new commercial quota"
-                    : cap.toLocaleString()}
-                </td>
-                <td className="text-right tabular-nums">
-                  {cap === null
-                    ? "Subject to product safety limits"
-                    : Math.max(0, cap - used).toLocaleString()}
-                </td>
-              </tr>
-            );
-          })}
-        </DataTable>
-        <p className="text-xs leading-5 text-muted-foreground">
-          {value.notice} Deleting a resource does not refill a consumed creation
-          allowance. Existing resources can still be managed. Retries with the
-          same resource identity do not consume another allowance. Paid upgrades
-          sharing a usage window retain its existing usage.
-        </p>
-        <p className="text-xs leading-5 text-muted-foreground">
-          Commercial allowance is separate from software safety bounds,
-          native-token scope, operator eligibility, provider credentials,
-          approved financial terms, and actual funds. It does not guarantee
-          financing, execution or staff availability. Recipients pay no Razor
-          subscription to receive.
-        </p>
-        {policy.allocations ? (
-          <details className="min-w-0 rounded-lg border p-3">
-            <summary className="cursor-pointer text-sm">
-              Reviewed budget and measurement basis
-            </summary>
-            <div className="mt-3 grid min-w-0 grid-cols-1 gap-4">
-              {OPTIONAL_CAPABILITIES.map((key) => {
-                const basis = policy.allocations![key];
-                return (
-                  <div key={key} className="min-w-0 text-xs leading-5">
-                    <p className="font-medium">{capabilityLabels[key]}</p>
-                    <p>
-                      Allocated budget: {formatUnits(basis.budgetAtomicUSDC, 6)}{" "}
-                      USDC. Observed sample:{" "}
-                      {basis.sampleCount.toLocaleString()} successful creations.
-                    </p>
-                    <p>
-                      Period: {new Date(basis.periodStart).toLocaleDateString()}{" "}
-                      to {new Date(basis.periodEnd).toLocaleDateString()}.
-                    </p>
-                    <p className="break-all">
-                      Exact unit-cost ratio: {basis.unitCostNumerator} /{" "}
-                      {basis.unitCostDenominator} atomic USDC per creation.
-                    </p>
-                    <p className="break-all text-muted-foreground">
-                      Immutable reviewed observation: {basis.observationId}
-                    </p>
-                  </div>
-                );
-              })}
-              <p className="text-xs text-muted-foreground">
-                Explicit operator subsidy budget:{" "}
-                {formatUnits(policy.subsidyBudgetAtomicUSDC ?? "0", 6)} USDC.
-                Source documents and conversion evidence are retained for local
-                operator review, not customer financial data.
-              </p>
-            </div>
-          </details>
-        ) : null}
-        {policy.termsHash ? (
-          <p className="break-all text-xs text-muted-foreground">
-            Frozen policy SHA-256: {policy.termsHash}. This identifies published
-            terms and is not a payment receipt or audit certification.
-          </p>
-        ) : null}
-      </div>
-    </Panel>
-  );
+  return <Panel collapsible title="Feature usage"><div className="grid gap-5">
+    <div className="grid gap-5 sm:grid-cols-2">{OPTIONAL_CAPABILITIES.map(key => {
+      const cap = policy.limits[key], used = value.usage[key];
+      return <div key={key} className="rounded-2xl bg-white p-4"><div className="flex items-start justify-between gap-3 text-sm"><p>{capabilityLabels[key]}</p><p className="shrink-0 tabular-nums">{used.toLocaleString()}{cap !== null ? ` / ${cap.toLocaleString()}` : ""}</p></div>{cap !== null ? <div className="mt-4"><CapsuleMeter value={cap>0?Math.min(1,used/cap):used>0?1:0} label={`${capabilityLabels[key]}: ${used} of ${cap}`}/><p className="mt-2 text-xs text-muted-foreground">{Math.max(0,cap-used).toLocaleString()} remaining</p></div> : <p className="mt-2 text-xs text-muted-foreground">No new commercial quota</p>}</div>;
+    })}</div>
+    <details className="border-t pt-4 text-xs text-muted-foreground"><summary className="cursor-pointer">Allowance terms</summary><div className="mt-4 grid gap-4"><Status value={policy.mode==="pilot"?"pilot":policy.mode==="legacy"?"legacy terms":"published"}/><p>{policy.notice}</p><p>{value.notice}</p><p>Creation usage does not reset when a resource is deleted. Existing resources remain manageable.</p>{policy.allocations && <div className="grid gap-4">{OPTIONAL_CAPABILITIES.map(key => {const basis=policy.allocations![key];return <div key={key}><p className="font-medium text-foreground">{capabilityLabels[key]}</p><p className="mt-1">Budget {formatUnits(basis.budgetAtomicUSDC,6)} USDC · {basis.sampleCount.toLocaleString()} observations</p><p>{new Date(basis.periodStart).toLocaleDateString()} to {new Date(basis.periodEnd).toLocaleDateString()}</p><p className="break-all">Unit-cost ratio {basis.unitCostNumerator} / {basis.unitCostDenominator} atomic USDC</p><p className="break-all">Observation {basis.observationId}</p></div>;})}<p>Operator subsidy {formatUnits(policy.subsidyBudgetAtomicUSDC ?? "0",6)} USDC</p></div>}<p className="break-all">Plan version {value.planVersionId}</p>{policy.termsHash && <p className="break-all">Terms hash {policy.termsHash}</p>}</div></details>
+  </div></Panel>;
 }
