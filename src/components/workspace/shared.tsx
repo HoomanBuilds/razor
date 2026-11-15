@@ -45,7 +45,7 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="rounded-xl border border-dashed border-border bg-white/60 px-5 py-12 text-center text-sm leading-6 text-muted-foreground">{children}</div>;
 }
 
-export function Address({ value, network, label = "address" }: { value: string; network?: string; label?: string }) {
+export function Address({ value, network, label = "address", full = false }: { value: string; network?: string; label?: string; full?: boolean }) {
   const [copied, setCopied] = useState(false), [manual, setManual] = useState(false);
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null), currentValue = useRef(value);
   currentValue.current = value;
@@ -64,7 +64,7 @@ export function Address({ value, network, label = "address" }: { value: string; 
       timeout.current = setTimeout(() => setCopied(false), 2000);
     } catch { if (currentValue.current === value) setManual(true); }
   };
-  return <span className="inline-flex max-w-full flex-wrap items-center gap-1 font-mono text-xs"><span title={value}>{value.length > 24 ? `${value.slice(0, 12)}...${value.slice(-6)}` : value}</span><button type="button" className="rounded p-1 hover:bg-muted" aria-label={copied ? `Copied ${label}` : `Copy ${label}`} onClick={() => void copy()}><Copy size={13} /></button>{copied && <span role="status">Copied</span>}{explorer && <a href={explorer} target="_blank" rel="noreferrer" aria-label="View address in explorer"><ExternalLink size={13} /></a>}{manual && <span className="w-full"><span role="status" className="mb-1 block font-sans">Copy is unavailable. Select this {label} to copy it.</span><input aria-label={`Full ${label} for manual copy`} className={`${control} font-mono text-xs`} readOnly value={value} onFocus={event => event.currentTarget.select()} /></span>}</span>;
+  return <span className="inline-flex max-w-full flex-wrap items-center gap-1 font-mono text-xs"><span className={full ? "break-all" : undefined} title={value}>{!full && value.length > 24 ? `${value.slice(0, 12)}...${value.slice(-6)}` : value}</span><button type="button" className="rounded p-1 hover:bg-muted" aria-label={copied ? `Copied ${label}` : `Copy ${label}`} onClick={() => void copy()}><Copy size={13} /></button>{copied && <span role="status">Copied</span>}{explorer && <a href={explorer} target="_blank" rel="noreferrer" aria-label="View address in explorer"><ExternalLink size={13} /></a>}{manual && <span className="w-full"><span role="status" className="mb-1 block font-sans">Copy is unavailable. Select this {label} to copy it.</span><input aria-label={`Full ${label} for manual copy`} className={`${control} font-mono text-xs`} readOnly value={value} onFocus={event => event.currentTarget.select()} /></span>}</span>;
 }
 
 export function DataTable({ columns, children }: { columns: string[]; children: ReactNode }) {
