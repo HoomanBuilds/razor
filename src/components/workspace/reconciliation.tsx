@@ -40,7 +40,11 @@ function ReconciliationWorkspace() {
   const [view, setView] = useState<"payments" | "funding">("payments");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [nestedBusy, setNestedBusy] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{ page: number; view: "payments" | "funding" } | null>(null);
   const container = useRef<HTMLDivElement>(null);
+  const queueElement = useRef<HTMLElement>(null);
+  const keepReviewing = useRef<HTMLButtonElement>(null);
+  const navigationTrigger = useRef<HTMLElement | null>(null);
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   const resource = useResource<Queue>(`${base}/reconciliation?page=${page}`, revision);
   const { busy, error, run } = useAction();
@@ -82,16 +86,47 @@ function ReconciliationWorkspace() {
   useEffect(() => {
     if (prepared) reviewHeading.current?.focus();
   }, [prepared]);
+  useEffect(() => {
+    if (pendingNavigation) keepReviewing.current?.focus();
+  }, [pendingNavigation]);
   const queue = resource.data;
   const locked = !!busy || nestedBusy;
-  const navigatingLocked = locked || !!prepared || resource.loading;
+  const navigatingLocked = locked || !!prepared || resource.loading || !!pendingNavigation;
   const total = queue ? queue.totals.payments + queue.totals.funding : 0;
   const currentRows = view === "payments" ? queue?.payments : queue?.funding;
   const hasMore = queue?.more[view] ?? false;
-  const selectView = (next: "payments" | "funding") => {
+  const navigateQueue = (nextPage: number, nextView = view) => {
     if (navigatingLocked) return;
-    setView(next);
-    setPage(1);
+    if (nextPage !== page) {
+      const controls = queueElement.current?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea");
+      const edited = Array.from(controls ?? []).some(control => {
+        if (control instanceof HTMLSelectElement) {
+          const options = Array.from(control.options);
+          const hasDefault = options.some(option => option.defaultSelected);
+          return options.some((option, index) => option.selected !== (hasDefault ? option.defaultSelected : !control.multiple && index === 0));
+        }
+        if (control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)) return control.checked !== control.defaultChecked;
+        return control.value !== control.defaultValue;
+      });
+      if (edited) {
+        navigationTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setPendingNavigation({ page: nextPage, view: nextView });
+        return;
+      }
+    }
+    setView(nextView);
+    setPage(nextPage);
+  };
+  const cancelNavigation = () => {
+    setPendingNavigation(null);
+    requestAnimationFrame(() => navigationTrigger.current?.focus());
+  };
+  const discardAndNavigate = () => {
+    if (!pendingNavigation || locked || prepared || resource.loading) return;
+    setView(pendingNavigation.view);
+    setPage(pendingNavigation.page);
+    setPendingNavigation(null);
+    setExpanded(null);
   };
   const toggleRecord = (id: string) => {
     if (navigatingLocked) return;
@@ -137,7 +172,7 @@ function ReconciliationWorkspace() {
 
       {(error || resource.error) && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-destructive/20 bg-red-50/40 px-5 py-4 text-sm text-destructive">
-          <p className="min-w-0 flex-1">{error || resource.error}</p>
+          <div className="min-w-0 flex-1"><p>{error || resource.error}</p>{resource.error && queue && <p className="mt-1 text-xs">Your open review is kept. Retry to load current records.</p>}</div>
           {resource.error && <button type="button" className="font-medium underline underline-offset-4" disabled={locked} onClick={refresh}>Try again</button>}
         </div>
       )}
@@ -164,27 +199,43 @@ function ReconciliationWorkspace() {
         </section>
       )}
 
-      <section className="min-w-0 overflow-hidden rounded-3xl border bg-white" aria-label="Review queue">
+      <section ref={queueElement} className="min-w-0 overflow-hidden rounded-3xl border bg-white" aria-label="Review queue">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 sm:px-6">
           <div className="flex flex-wrap gap-1" role="group" aria-label="Reconciliation record type">
             {(["payments", "funding"] as const).map(kind => (
               <button key={kind} type="button" aria-pressed={view === kind} disabled={navigatingLocked}
-                onClick={() => selectView(kind)}
+                onClick={() => { if (kind !== view) navigateQueue(1, kind); }}
                 className={"inline-flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-colors disabled:opacity-60 " + (view === kind ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                 {kind === "payments" ? "Payments" : "Funding"}
                 {queue && <span className={"min-w-5 rounded-full px-1.5 py-0.5 text-center text-[11px] tabular-nums " + (view === kind ? "bg-white/15" : "bg-muted")}>{queue.totals[kind]}</span>}
               </button>
             ))}
           </div>
-          {queue && !resource.error && <span className="text-xs text-muted-foreground">{total === 0 ? "All caught up" : total + (total === 1 ? " item needs review" : " items need review")}</span>}
+          {queue && !resource.error && !resource.refreshing && <span className="text-xs text-muted-foreground">{total === 0 ? "All caught up" : total + (total === 1 ? " item needs review" : " items need review")}</span>}
         </div>
 
-        {resource.loading ? <QueueLoading /> : resource.error ? (
+        {pendingNavigation && (
+          <section role="alertdialog" aria-labelledby="reconciliation-discard-title" aria-describedby="reconciliation-discard-description"
+            className="m-4 rounded-2xl border border-primary/20 bg-secondary/40 p-5 sm:m-6"
+            onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); cancelNavigation(); } }}>
+            <h3 id="reconciliation-discard-title" className="text-sm font-medium">Keep your unfinished review?</h3>
+            <p id="reconciliation-discard-description" className="mt-2 text-sm leading-6 text-muted-foreground">Changing pages will clear the inputs you have edited. No payment will be changed.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button ref={keepReviewing} type="button" className="min-h-10 rounded-full bg-primary px-4 text-sm font-medium text-white" onClick={cancelNavigation}>Keep reviewing</button>
+              <button type="button" className="min-h-10 rounded-full border bg-white px-4 text-sm font-medium hover:bg-muted disabled:opacity-50" disabled={locked || !!prepared || resource.loading} onClick={discardAndNavigate}>Discard inputs and continue</button>
+            </div>
+          </section>
+        )}
+
+        {!queue && (resource.loading ? <QueueLoading /> : resource.error ? (
           <QueueEmpty title="Review queue unavailable" description="Refresh to load the latest payment and funding records." icon={<RefreshCw size={22} />} />
-        ) : !queue ? null : (
-          <>
+        ) : null)}
+        {queue && (
+          <fieldset className="min-w-0" disabled={!!resource.error} inert={!!pendingNavigation}>
             <div hidden={view !== "payments"}>
-              {!queue.payments.length ? (
+              {!queue.payments.length ? resource.error ? (
+                <QueueEmpty title="Payments could not refresh" description="Retry to check whether any payments need review." icon={<RefreshCw size={22} />} />
+              ) : (
                 <QueueEmpty
                   title={queue.totals.payments === 0 ? "No payments need review" : "No payments on this page"}
                   description={queue.totals.payments === 0 ? "Payment exceptions will appear here when they need your attention." : "Return to an earlier page to review outstanding payments."}
@@ -316,7 +367,9 @@ function ReconciliationWorkspace() {
             </div>
 
             <div hidden={view !== "funding"}>
-              {!queue.funding.length ? (
+              {!queue.funding.length ? resource.error ? (
+                <QueueEmpty title="Funding could not refresh" description="Retry to check whether any deposits need verification." icon={<RefreshCw size={22} />} />
+              ) : (
                 <QueueEmpty title={queue.totals.funding === 0 ? "No funding needs verification" : "No funding on this page"}
                   description={queue.totals.funding === 0 ? "Incoming deposits that need a receipt check will appear here." : "Return to an earlier page to review outstanding funding."} icon={<ArrowDownToLine size={24} />} />
               ) : (
@@ -360,14 +413,14 @@ function ReconciliationWorkspace() {
                 </div>
               )}
             </div>
-          </>
+          </fieldset>
         )}
 
         {queue && !resource.loading && !resource.error && (page > 1 || hasMore) && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4">
-            <button type="button" className="min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted disabled:opacity-40" disabled={navigatingLocked || page === 1} onClick={() => setPage(value => value - 1)}>Previous</button>
+            <button type="button" className="min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted disabled:opacity-40" disabled={navigatingLocked || page === 1} onClick={() => navigateQueue(page - 1)}>Previous</button>
             <span className="text-xs text-muted-foreground">Page {page}{currentRows?.length ? " - " + currentRows.length + " records" : ""}</span>
-            <button type="button" className="min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted disabled:opacity-40" disabled={navigatingLocked || !hasMore} onClick={() => setPage(value => value + 1)}>Next</button>
+            <button type="button" className="min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted disabled:opacity-40" disabled={navigatingLocked || !hasMore} onClick={() => navigateQueue(page + 1)}>Next</button>
           </div>
         )}
       </section>
