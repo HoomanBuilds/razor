@@ -110,7 +110,7 @@ const shortNavigationTitles: Partial<Record<Section,string>> = { clearing: "Clea
 const descriptions: Record<Section, string> = {
   overview: "Your money, payments and next steps. All in one place.",
   payments: "Prepare, approve and track every company payment.",
-  treasury: "Manage company funds and move money across supported networks.",
+  treasury: "",
   payroll: "Pay your team, on their terms.",
   bills: "Keep supplier invoices and payments in sync.",
   recipients: "One place for your employees, contractors and suppliers.",

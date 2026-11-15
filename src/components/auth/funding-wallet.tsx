@@ -14,6 +14,7 @@ import { DIRECT_USDC_ASSET, isDirectFunding, validateDirectFunding } from "@/lib
 import { NATIVE_USDC } from "@/lib/native-usdc";
 
 export interface FundingWalletActionProps {
+  compact?: boolean;
   upgradePolicy?:ContractUpgradePolicy|null;
   funding:{id:string;origin_asset:string;amount_in:string;deposit_address:string;deposit_memo:string|null;quote:string|object;status:string;source_tx_hash?:string|null};
   token:{assetId:string;symbol:string;blockchain:string;decimals:number;contractAddress?:string|null};
@@ -179,11 +180,12 @@ function explorer(network:string,hash:string):string|undefined {
 }
 
 export function FundingWalletAction(props:FundingWalletActionProps) {
+  const [manual, setManual] = useState(false);
   const {funding,token,onSubmitted}=props,[phase,setPhase]=useState<"idle"|"signing"|"confirming"|"confirmed">("idle"),[hash,setHash]=useState<string|null>(funding.source_tx_hash || null),[error,setError]=useState<string|null>(null),[copied,setCopied]=useState(false),busy=useRef(false);
   useEffect(()=>{
     let cached:string|null=null;
     try{cached=sessionStorage.getItem(storageKey(funding.id));}catch{}
-    setHash(funding.source_tx_hash || cached);setPhase("idle");setError(null);
+    setHash(funding.source_tx_hash || cached);setPhase("idle");setError(null);setManual(false);
   },[funding.id]);
   useEffect(()=>{if(funding.source_tx_hash)setHash(funding.source_tx_hash);},[funding.source_tx_hash]);
   let invalid:string|null=null,quote:BoundQuote|null=null;
@@ -219,6 +221,16 @@ export function FundingWalletAction(props:FundingWalletActionProps) {
   const txUrl=hash?explorer(token.blockchain,hash):undefined;
   const tracking=props.depositAllowed===false||!!hash;
   const direct=quote&&isDirectFunding(quote)?quote:null;
+  if (props.compact) return <section aria-busy={pending} className="grid gap-4">
+    {props.upgradePolicy && props.depositAllowed !== false && !hash && <details className="border-t pt-4 text-sm"><summary className="cursor-pointer">Contract upgrades: {props.upgradePolicy.upgradable ? "operator-controlled" : "immutable"}</summary><div className="mt-3"><ContractUpgradeDisclosure policy={props.upgradePolicy}/></div></details>}
+    {direct && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Company deposit message</summary><dl className="mt-3 grid gap-3"><div><dt>Token contract</dt><dd className="mt-1 break-all">{token.contractAddress}</dd></div><div><dt>Message</dt><dd className="mt-1 break-all font-mono">{direct.quoteRequest.customRecipientMsg}</dd></div><div><dt>Wallet action</dt><dd className="mt-1">120 Tgas limit · 1 yoctoNEAR attached</dd></div></dl></details>}
+    {invalid && !hash && props.depositAllowed !== false && <p role="alert" className="text-sm text-destructive">{invalid}</p>}
+    {props.depositAllowed !== false && (!supported || funding.deposit_memo) && <p className="text-xs text-muted-foreground">Send with an external wallet, then track its transaction below.</p>}
+    {!hash && supported && !funding.deposit_memo && props.depositAllowed !== false && <button type="button" disabled={!canSend} onClick={() => void send()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground disabled:opacity-50"><Wallet size={16}/>{phase === "signing" ? "Confirm in wallet" : phase === "confirming" ? "Awaiting confirmation" : "Send from wallet"}</button>}
+    {hash && <div className="grid gap-3"><p role="status" className="text-sm">{phase === "confirming" ? "Checking source transfer..." : phase === "confirmed" ? "Source transfer confirmed" : "Source transaction recorded"}</p><div className="flex flex-wrap items-center justify-between gap-3">{txUrl ? <a href={txUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary">Source transaction <ExternalLink size={13}/></a> : <details className="text-xs"><summary className="cursor-pointer">Source transaction</summary><code className="mt-2 block break-all">{hash}</code></details>}<button type="button" disabled={pending} className="min-h-9 text-sm text-primary disabled:opacity-50" onClick={() => void check()}>Check transfer</button></div></div>}
+    {!hash && ["pending_deposit", "source_unknown", "unknown", "processing", "recovery_pending", "reported_delivered", "closed_unsent", "cancelled"].includes(funding.status) && <div>{manual ? <form className="grid gap-4 border-t pt-4" onSubmit={event => void trackManual(event)}><label className="grid gap-2 text-sm"><span>Source transaction hash</span><input name="sourceHash" required maxLength={160} className="min-h-11 w-full rounded-xl border bg-white px-3 py-2 text-sm"/></label><div className="flex items-center justify-between gap-3"><button type="button" disabled={pending} className="text-sm text-muted-foreground" onClick={() => setManual(false)}>Cancel</button><button type="submit" disabled={pending} className="min-h-10 rounded-full bg-primary px-4 text-sm text-white disabled:opacity-50">Track transfer</button></div></form> : <button type="button" className="min-h-9 text-sm text-primary" onClick={() => setManual(true)}>Track an existing transfer</button>}</div>}
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+  </section>;
   return <section aria-busy={pending} className="space-y-4 rounded-lg border border-border bg-card p-4">
     <ContractUpgradeDisclosure policy={props.upgradePolicy}/>
     <div><p className="text-sm font-semibold">{tracking?"Source transfer tracking":"Fund from your wallet"}</p><AssetIdentity symbol={token.symbol} network={token.blockchain} assetId={token.assetId} showAssetId className="my-3"/><p className="mt-1 text-xs text-muted-foreground">{tracking?"Original quoted deposit:":"Send exactly"} {amount} {token.symbol} on {token.blockchain}. Your source wallet pays its network fees.</p></div>
