@@ -22,7 +22,7 @@ export function SupportInbox({organizationId}:{organizationId?:string}) {
  const ticket=thread.data?.case,removed=ticket&&["deleted","expired"].includes(ticket.status),createFlowId=`support-create-${organizationId || "personal"}`;
  function keyFor(operation:string,payload:unknown){const fingerprint=JSON.stringify([operation,payload]),key=keys.current.get(fingerprint)??crypto.randomUUID();keys.current.set(fingerprint,key);return {key,done:()=>keys.current.delete(fingerprint)};}
  function refresh(){setRevision(value=>value+1);}
- return <Panel title="Support inbox" tone="white" action={<Action type="button" onClick={()=>openTaskDrawer(createFlowId)}>New case</Action>}>
+ return <Panel title="Support inbox" tone="white" action={<Action type="button" disabled={!!busy} onClick={()=>openTaskDrawer(createFlowId)}>New case</Action>}>
   <div className="grid min-w-0 grid-cols-1 gap-6">
    {!selected && <SupportPublication revision={revision}/>}
    {!selected && <div className="flex items-center justify-between gap-3"><a href="/help" className="text-sm text-primary">Product guides</a><button type="button" className="min-h-10 text-sm text-muted-foreground" disabled={!!busy||cases.refreshing||thread.refreshing} onClick={refresh}>Refresh</button></div>}
