@@ -121,7 +121,7 @@ const descriptions: Record<Section, string> = {
   financing: "Manage invoice financing and working capital.",
   assistant: "Make sense of your finances with private intelligence.",
   activity: "Follow your company's payment activity and financial records.",
-  accounting: "Keep payment records ready for your books.",
+  accounting: "",
   billing: "Your plan, usage and subscription payments.",
   settings: "Manage company preferences, access and recovery.",
   support: "Find answers and get help with your workspace.",
@@ -385,7 +385,7 @@ function Workspace() {
         </header>
         <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-6">
           <div className="dashboard-page-heading mb-7 flex flex-wrap items-start justify-between gap-4">
-            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div>{visibleSection !== "overview" && visibleSection !== "payroll" && visibleSection !== "bills" && visibleSection !== "procurement" && visibleSection !== "recipients" && visibleSection !== "payments" && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
+            <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-[30px] font-medium leading-tight tracking-[-.04em] sm:text-4xl">{currentTitle}</h1>{organization.near_network && <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] text-muted-foreground"><NetworkLogo network="near" size={14}/>NEAR {organization.near_network}</span>}</div>{visibleSection !== "overview" && visibleSection !== "payroll" && visibleSection !== "bills" && visibleSection !== "procurement" && visibleSection !== "recipients" && visibleSection !== "payments" && descriptions[visibleSection] && <p className="mt-2 text-sm leading-6 text-muted-foreground">{descriptions[visibleSection]}</p>}</div>
             {visibleSection === "overview" && organization.permissions.includes("payments:prepare") && organization.permissions.includes("recipients:read") && <button className="inline-flex min-h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-white transition-colors hover:bg-primary/90" onClick={() => { navigate("payments"); focusWorkspaceForm("payment-compose"); }}><Plus size={17}/>New payment</button>}
           </div>
           {notice && <div role="status" className="mb-6 flex items-center justify-between gap-3 rounded-2xl border bg-muted p-4 text-sm">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss notice" className="rounded-full p-1 hover:bg-white"><X size={16}/></button></div>}
