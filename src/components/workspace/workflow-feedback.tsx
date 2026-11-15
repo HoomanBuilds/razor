@@ -204,7 +204,7 @@ export function WorkflowFeedbackSummary() {
   return (
     <details className="rounded-lg border p-4">
       <summary className="cursor-pointer text-sm font-medium">
-        Company workflow friction
+        Workflow reports
       </summary>
       {resource.loading && (
         <p className="mt-3 text-sm">Loading workflow reports...</p>
@@ -216,9 +216,7 @@ export function WorkflowFeedbackSummary() {
       )}
       {!resource.error && resource.data && (
         <div className="mt-3 space-y-3 text-sm">
-          <p className="text-xs leading-5 text-muted-foreground">
-            {resource.data.notice}
-          </p>
+
           {!resource.data.groups.length ? (
             <p>No workflow reports in the last 30 days.</p>
           ) : (
@@ -227,13 +225,12 @@ export function WorkflowFeedbackSummary() {
                 <li
                   key={`${group.workflow}:${group.category}:${group.severity}:${group.status}`}
                 >
-                  {readable(group.workflow)}: {readable(group.category)},{" "}
-                  {group.severity}, {group.status}:{" "}
-                  {group.count.toLocaleString("en-US")}
+                  <div className="flex items-center justify-between gap-4 border-b py-3"><div><p className="font-medium capitalize">{readable(group.workflow)}</p><p className="mt-1 text-xs text-muted-foreground">{readable(group.category)} · {readable(group.severity)} · {readable(group.status)}</p></div><span className="font-medium tabular-nums">{group.count.toLocaleString("en-US")}</span></div>
                 </li>
               ))}
             </ul>
           )}
+          <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Report scope</summary><p className="mt-2 leading-5">{resource.data.notice}</p></details>
         </div>
       )}
     </details>
