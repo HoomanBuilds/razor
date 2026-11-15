@@ -10,7 +10,7 @@
   <a href="https://razorfi.xyz">Website</a> |
   <a href="https://razorfi.xyz/app">Company workspace</a> |
   <a href="https://razorfi.xyz/receive">Recipient workspace</a> |
-  <a href="https://razorfi.xyz/demo">Product preview</a> |
+  <a href="https://razorfi.xyz/demo">Interactive demo</a> |
   <a href="docs/README.md">Documentation</a>
 </p>
 
@@ -165,7 +165,15 @@ Run `npm run worker` in another terminal when background processing is needed. C
 
 ### Explore without funds
 
-The public [product preview](https://razorfi.xyz/demo) is read-only and needs no wallet. For an interactive local recording workspace, keep the UI running on port 3000 and start:
+The public [interactive demo](https://razorfi.xyz/demo) uses the actual company and recipient dashboards with fictional companies, payroll, bills, expenses and payment history. Each visitor has a separate in-memory workspace. Switch between company and receiver profiles, simulate funding and approved payouts, or reset the example. No wallet connection or real funds are required, and demo actions cannot send email or blockchain transactions.
+
+To run the hosted-demo service locally alongside the application on port 3000:
+
+```sh
+PUBLIC_DEMO_ORIGIN=http://localhost:3000 node --max-old-space-size=384 --import tsx scripts/public-demo/server.ts
+```
+
+The demo service binds to loopback port 8831. The application proxies its demo requests separately from normal authenticated APIs. For the separate local video-recording workspace, keep the UI running on port 3000 and start:
 
 ```sh
 npm run demo:local
