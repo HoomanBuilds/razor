@@ -44,7 +44,7 @@ function recordedPayee(payment: Payment | null, recipient?: Recipient) {
 
 export function Bills() {
   const [selectedBill, setSelectedBill] = useState("");
-  const [approvalBillId, setApprovalBillId] = useState<string | null>(null);
+  const [approvalBillId, setApprovalBillId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("reviewBill"));
   const { base, recipients, organization, revision, refresh, navigate } =
     useWorkspace();
   const canRead = organization.permissions?.includes("payments:read") === true;
@@ -297,7 +297,7 @@ export function Payroll() {
   const [items, setItems] = useState<Record<string, string>>({});
   const [importedRows, setImportedRows] = useState<Record<string, PayrollCsvItem>>({});
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
-  const [reviewRunId, setReviewRunId] = useState("");
+  const [reviewRunId, setReviewRunId] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("reviewRun") ?? "");
   const [executionRunId, setExecutionRunId] = useState("");
   useEffect(() => { if (reviewRunId) document.getElementById("payroll-review")?.scrollIntoView({block:"start"}); }, [reviewRunId]);
   useEffect(() => { if (executionRunId) document.getElementById("payroll-execution")?.scrollIntoView({block:"start"}); }, [executionRunId]);

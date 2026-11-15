@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, CircleCheck, FileText, History, LockKeyhole, RefreshCw, Search, ShieldCheck, Wallet, X } from "lucide-react";
+import { AssetIdentity, TokenLogo } from "@/components/assets/asset-identity";
+import { focusWorkspaceForm } from "./page-metrics";
+import type { Token } from "./types";
 import { api, RequestError } from "@/lib/api";
 import { microUsd, usdcInput, usd } from "@/lib/format";
 import { paymentLabel } from "@/lib/payment-label";
+import { canCancelManagedPayment } from "@/lib/payment-management-eligibility";
 import { signNearActions, type NearWalletAction } from "@/lib/near-actions";
 import type { managementOverview, managedPaymentReview, payrollPreview, billBatchPreview } from "@/server/payment-management/service";
 import type { RecipientSnapshot } from "@/server/payments/types";
@@ -41,7 +46,203 @@ function FundingReview({ value, openTreasury }: { value: RunReview["funding"]; o
 export function PaymentManagementPanel(props: Props) {
   const { base, organization } = useWorkspace();
   if (!organization.permissions?.includes("payments:read")) return null;
+  if (props.mode === "payments") return <PaymentToolsWorkspace key={`${base}:${props.initialPaymentId}`} initialPaymentId={props.initialPaymentId} />;
   return <ManagementWorkspace key={`${base}:${props.mode}:${props.initialRunId}:${props.initialBillId}:${props.initialPaymentId}`} {...props} />;
+}
+
+function PaymentToolsWorkspace({ initialPaymentId = "" }: { initialPaymentId?: string }) {
+  const { base, revision, refresh, notify, navigate, organization } = useWorkspace();
+  const overview = useResource<Overview>(`${base}/payment-management`, revision);
+  const [paymentId, setPaymentId] = useState(initialPaymentId);
+  const review = useResource<PaymentReview>(paymentId ? `${base}/payment-management/payments/${paymentId}` : null, revision);
+  const assets = useResource<{ tokens: Token[] }>(paymentId ? "/assets" : null, revision);
+  const { busy, error, run, setError } = useAction();
+  const [search, setSearch] = useState("");
+  const [choosing, setChoosing] = useState(!initialPaymentId);
+  const [task, setTask] = useState<"cancel" | "replace" | null>(null);
+  const [reason, setReason] = useState("");
+  const [cancellation, setCancellation] = useState<{ paymentId: string; walletActions: NearWalletAction[]; treasuryNetwork: string } | null>(null);
+  const taskHeading = useRef<HTMLHeadingElement>(null);
+  const activePaymentId = useRef(paymentId);
+  activePaymentId.current = paymentId;
+  const current = review.data;
+  const allowed = (permission: string) => organization.permissions?.includes(permission) === true;
+  const selectionLocked = !!busy || !!cancellation || !!task;
+  const actionLocked = !!busy || review.refreshing || !!review.error;
+  const blockedAttempts = current?.attempts.some(attempt => ["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered", "reported_partial"].includes(attempt.state));
+  const partial = !!current && (current.payment.status === "partially_paid" || !!current.payment.partial_delivery_observed || BigInt(current.payment.delivered_amount) > 0n && current.payment.status !== "paid");
+  const needsReconciliation = !!current && (partial || blockedAttempts || ["in_flight", "recovery_pending", "unknown"].includes(current.payment.status));
+  const canCancel = canCancelManagedPayment(current, allowed("payments:approve"));
+  const canReplace = !!current?.canReplace && !current.activeClearingRound && !partial && allowed("payments:prepare");
+  const payments = overview.data?.payments ?? [];
+  const term = search.trim().toLowerCase();
+  const matches = payments.filter(item => `${paymentLabel(item.payment)} ${item.recipientName} ${item.payment.status.replaceAll("_", " ")}`.toLowerCase().includes(term));
+
+  useEffect(() => { if (task || cancellation) taskHeading.current?.focus(); }, [task, cancellation]);
+
+  const choosePayment = (id: string) => {
+    if (selectionLocked) return;
+    setPaymentId(id);
+    setReason("");
+    setChoosing(false);
+    setError("");
+  };
+  const openQueue = () => { if (!selectionLocked) { navigate("payments", paymentId || undefined); focusWorkspaceForm("payment-queue"); } };
+  const openReconciliation = () => { if (!selectionLocked) focusWorkspaceForm("payment-reconciliation"); };
+  const openLinkedReview = () => {
+    if (!current || selectionLocked) return;
+    const isBill = !!current.billId;
+    const linkedId = current.billId || current.payrollRunId;
+    if (!linkedId) { openQueue(); return; }
+    navigate(isBill ? "bills" : "payroll");
+    const location = new URL(window.location.href);
+    location.searchParams.set(isBill ? "reviewBill" : "reviewRun", linkedId);
+    window.history.replaceState(null, "", location);
+    focusWorkspaceForm(isBill ? "bill-batch-review" : "payroll-review");
+  };
+  const cancel = () => run("cancel", async () => {
+    if (!current || current.payment.id !== activePaymentId.current) return;
+    const capturedId = current.payment.id;
+    const result = await api<{ payment: { status: string }; walletActions: NearWalletAction[]; treasuryNetwork: string | null; cancellationConfirmed: boolean }>(`${base}/payment-management/payments/${capturedId}/cancel`, {});
+    if (activePaymentId.current !== capturedId) return;
+    if (result.walletActions.length && result.treasuryNetwork) setCancellation({ paymentId: capturedId, walletActions: result.walletActions, treasuryNetwork: result.treasuryNetwork });
+    else { notify(result.cancellationConfirmed ? "Cancellation confirmed. The original obligation remains in history." : "Refresh cancellation status before replacing this payment."); refresh(); }
+    setTask(null);
+  });
+  const confirmCancellation = () => run("sign-cancel", async () => {
+    if (!cancellation || cancellation.paymentId !== activePaymentId.current) return;
+    const captured = cancellation;
+    try {
+      await signNearActions(captured.walletActions, captured.treasuryNetwork);
+      const result = await api<{ cancellationConfirmed: boolean }>(`${base}/payment-management/payments/${captured.paymentId}/cancel`, {});
+      notify(result.cancellationConfirmed ? "NEAR cancellation confirmed. A replacement may now be prepared." : "Cancellation is not final yet. Check its status before replacing the obligation.");
+      refresh();
+    } finally { setCancellation(null); }
+  });
+  const replacement = () => run("replace", async () => {
+    if (!current || current.payment.id !== activePaymentId.current || !canReplace) return;
+    const capturedId = current.payment.id;
+    const result = await api<{ payment: { id: string } }>(`${base}/payment-management/payments/${capturedId}/replace`, { reason });
+    if (activePaymentId.current !== capturedId) return;
+    setPaymentId(result.payment.id);
+    setTask(null);
+    setReason("");
+    notify("Replacement saved as a new draft. Fresh approval is required.");
+    refresh();
+  });
+
+  let nextTitle = "Ready for your review";
+  let nextDescription = "Review this payment's business terms before approving or funding it.";
+  let nextLabel = current?.billId ? "Review invoice" : current?.payrollRunId ? "Review pay run" : "Review payment";
+  let nextAction = openLinkedReview;
+  let nextIcon = <FileText size={19} />;
+  if (current?.activeClearingRound) {
+    nextTitle = "Included in business clearing";
+    nextDescription = "Review its clearing commitment before changing this payment.";
+    nextLabel = "Review clearing";
+    nextAction = () => navigate("clearing");
+    nextIcon = <LockKeyhole size={19} />;
+  } else if (needsReconciliation) {
+    nextTitle = partial ? "Partial delivery needs review" : "Resolve the existing delivery first";
+    nextDescription = partial ? "Review the amount received and the unpaid remainder. This payment cannot be cancelled or replaced in full." : "Confirm the original outcome before cancelling, replacing or sending again.";
+    nextLabel = "Review in Reconciliation";
+    nextAction = openReconciliation;
+    nextIcon = <ShieldCheck size={19} />;
+  } else if (canReplace) {
+    nextTitle = "Ready for a replacement draft";
+    nextDescription = "Keep the unpaid amount and use the recipient's current receiving details. Fresh approval is required.";
+    nextLabel = "Create replacement";
+    nextAction = () => setTask("replace");
+    nextIcon = <RefreshCw size={19} />;
+  } else if (current?.payment.status === "cancelled") {
+    nextTitle = "Payment cancelled";
+    nextDescription = "The original record remains in your payment history.";
+    nextLabel = allowed("payments:approve") ? "Check cancellation" : "View payment queue";
+    nextAction = allowed("payments:approve") ? () => { void cancel(); } : openQueue;
+    nextIcon = <CircleCheck size={19} />;
+  } else if (current?.payment.status === "paid") {
+    nextTitle = "Payment completed";
+    nextDescription = "Completed payments remain in history and cannot be replaced.";
+    nextLabel = "View payment queue";
+    nextAction = openQueue;
+    nextIcon = <CircleCheck size={19} />;
+  } else if (current?.profileChanged) {
+    nextTitle = "Receiving details have changed";
+    nextDescription = "This payment still uses its recorded receiving details. Review the change before proceeding.";
+  } else if (current?.payment.status === "held") {
+    nextTitle = "Payment needs attention";
+    nextDescription = "Review the hold in the payment queue before continuing.";
+    nextLabel = "Review payment hold";
+    nextAction = openQueue;
+  }
+
+  return <div className="grid min-w-0 gap-5">
+    <header className="px-1"><h2 className="text-xl font-medium tracking-tight">Payment tools</h2><p className="mt-1.5 text-sm text-muted-foreground">Review unpaid payments, receiving changes and replacements.</p></header>
+    {(overview.error || review.error || error) && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-destructive/20 bg-red-50/40 px-5 py-4 text-sm text-destructive"><p className="min-w-0 flex-1">{error || review.error || overview.error}</p>{(overview.error || review.error) && <button type="button" className="font-medium underline underline-offset-4" disabled={!!busy} onClick={refresh}>Try again</button>}</div>}
+    <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(16rem,0.85fr)_minmax(0,2fr)]">
+      <aside className="min-w-0 overflow-hidden rounded-3xl border bg-white" aria-label="Choose a payment">
+        <div className="flex items-center justify-between gap-3 px-5 py-4"><h3 className="text-sm font-medium">{paymentId ? "Your payments" : "Choose a payment"}</h3>{paymentId && <button type="button" className="flex min-h-9 items-center gap-1 rounded-full px-2 text-xs font-medium text-primary lg:hidden" disabled={selectionLocked} aria-expanded={choosing || !paymentId} aria-controls="payment-tools-chooser" onClick={() => setChoosing(value => !value)}>{choosing || !paymentId ? "Hide" : "Change"}<ChevronDown size={14} /></button>}{overview.data && <span className="hidden text-xs tabular-nums text-muted-foreground lg:block">{payments.length}</span>}</div>
+        <div id="payment-tools-chooser" className={!choosing && paymentId ? "hidden lg:block" : ""}>
+          {!overview.loading && payments.length > 0 && <label className="mx-4 mb-3 flex items-center gap-2 rounded-xl bg-muted px-3"><Search size={15} className="shrink-0 text-muted-foreground" aria-hidden="true" /><input aria-label="Find a payment" className="min-h-11 min-w-0 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground" placeholder="Find a payee or reference" value={search} disabled={selectionLocked} onChange={event => setSearch(event.target.value)} /></label>}
+          {overview.loading ? <ToolsLoading /> : overview.error && !overview.data ? <ToolsEmpty title="Payments unavailable" description="Retry to load your company's records." /> : !payments.length ? <ToolsEmpty title="No unpaid payments" description="New payment drafts will appear here." /> : !matches.length ? <ToolsEmpty title="No matching payments" description="Try another payee or reference." /> : <div className="dashboard-nav-scroll max-h-[28rem] overflow-y-auto overscroll-contain border-t p-2">
+            {matches.map(item => <button key={item.payment.id} type="button" disabled={selectionLocked} onClick={() => choosePayment(item.payment.id)} aria-pressed={item.payment.id === paymentId}
+              className={"mb-1 grid w-full gap-2 rounded-2xl p-3 text-left transition-colors disabled:cursor-not-allowed " + (item.payment.id === paymentId ? "bg-secondary/70 ring-1 ring-inset ring-primary/15" : "hover:bg-muted")}>
+              <span className="flex min-w-0 items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-medium">{paymentLabel(item.payment)}</span>{item.payment.id === paymentId && <ChevronRight size={15} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />}</span>
+              <span className="block truncate text-xs text-muted-foreground">{item.recipientName}</span>
+              <span className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm tabular-nums">{usd(item.payment.amount)}</span><Status value={item.payment.status} /></span>
+            </button>)}
+          </div>}
+        </div>
+        {selectionLocked && <p className="border-t px-5 py-3 text-xs leading-5 text-muted-foreground">Finish or close the current review to choose another payment.</p>}
+      </aside>
+
+      <div className="grid min-w-0 gap-4">
+        {!paymentId ? <section className="rounded-3xl border bg-white px-6 py-14 text-center"><span className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-secondary text-primary"><FileText size={23} aria-hidden="true" /></span><h3 className="text-lg font-medium">Start with a payment</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">Choose a payee or reference to see the next step and its payment history.</p><button type="button" className="mt-6 min-h-10 rounded-full border px-4 text-sm font-medium hover:bg-muted" onClick={openQueue}>Open payment queue</button></section>
+          : review.loading ? <div className="rounded-3xl border bg-white"><ToolsLoading /></div>
+          : !current ? <section className="rounded-3xl border bg-white"><ToolsEmpty title="Payment unavailable" description="Refresh the records or choose another payment." /></section>
+          : <section className="min-w-0 overflow-hidden rounded-3xl border bg-white">
+            <div className="border-b p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs capitalize text-muted-foreground">{current.payment.kind.replaceAll("_", " ")}</p><h3 className="mt-2 break-words text-xl font-medium tracking-tight">{paymentLabel(current.payment)}</h3><p className="mt-1.5 break-words text-sm text-muted-foreground">{current.recipientName}</p></div><Status value={current.payment.status} /></div>
+              <div className="mt-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs text-muted-foreground">Payment amount</p><div className="flex items-center gap-2.5"><TokenLogo symbol="USDC" size={24} /><p className="break-all text-3xl font-medium tracking-tight tabular-nums">{usd(current.payment.amount)}<span className="ml-2 text-xs font-normal text-muted-foreground">USDC</span></p></div></div><div className="text-sm sm:text-right"><p className="text-xs text-muted-foreground">Maximum payment cost</p><p className="mt-2 tabular-nums">{usd(current.payment.max_fee)} USDC</p></div></div>
+            </div>
+
+            <div className="space-y-5 p-5 sm:p-6">
+              {!task && !cancellation && <div className="rounded-2xl bg-muted/70 p-5"><div className="flex items-start gap-3"><span className="mt-0.5 text-primary" aria-hidden="true">{nextIcon}</span><div className="min-w-0"><h4 className="text-sm font-medium">{nextTitle}</h4><p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{nextDescription}</p></div></div><Action className="mt-4" disabled={actionLocked} busy={busy === "cancel"} onClick={nextAction}>{nextLabel}<ChevronRight size={15} aria-hidden="true" /></Action></div>}
+
+              {task === "cancel" && <form className="grid gap-4 rounded-2xl border border-destructive/20 bg-red-50/30 p-5" onSubmit={event => { event.preventDefault(); if (canCancel && !actionLocked) void cancel(); }}>
+                <div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Cancel this payment?</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">Cancel {usd(current.payment.amount)} to {current.recipientName}. Its history stays available, and any replacement requires a new approval.</p></div>
+                <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" required disabled={!!busy} className="mt-1.5 size-4 shrink-0 accent-primary" /><span>I want to cancel this unpaid payment.</span></label>
+                <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setTask(null)}>Keep payment</button><Action className="bg-destructive text-white hover:bg-destructive/90" busy={busy === "cancel"} disabled={actionLocked || !canCancel}>{busy === "cancel" ? "Preparing cancellation..." : "Cancel payment"}</Action></div>
+              </form>}
+
+              {cancellation && <div className="rounded-2xl border border-primary/20 bg-secondary/40 p-5"><div className="flex items-start gap-3"><Wallet size={20} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" /><div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Confirm cancellation in your wallet</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">Reserved funds stay protected until the original treasury confirms cancellation on {cancellation.treasuryNetwork}.</p></div></div><details className="mt-4 rounded-xl border bg-white p-4"><summary className="cursor-pointer text-xs font-medium">Exact cancellation action</summary><pre className="mt-3 max-h-52 overflow-auto text-xs">{JSON.stringify(cancellation.walletActions, null, 2)}</pre></details><div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setCancellation(null)}>Close review</button><Action busy={busy === "sign-cancel"} disabled={actionLocked || cancellation.paymentId !== paymentId} onClick={() => void confirmCancellation()}>{busy === "sign-cancel" ? "Confirming cancellation..." : "Confirm in NEAR wallet"}</Action></div></div>}
+
+              {task === "replace" && <form className="grid gap-4 rounded-2xl border bg-muted/40 p-5" onSubmit={event => { event.preventDefault(); if (!actionLocked) void replacement(); }}><div><h4 ref={taskHeading} tabIndex={-1} className="text-base font-medium outline-none">Prepare a replacement</h4><p className="mt-2 text-sm leading-6 text-muted-foreground">The new draft keeps {usd(current.payment.amount)} unpaid and uses the current receiving profile. Earlier costs reduce its remaining cost budget.</p></div><Field label="Why does this payment need replacing?"><textarea className={control} required minLength={3} maxLength={1000} rows={3} value={reason} disabled={!!busy} onChange={event => setReason(event.target.value)} placeholder="For example, the recipient confirmed a different wallet" /></Field><p className="text-xs leading-5 text-muted-foreground">The original record stays in history. This creates a draft, not another transfer.</p><div className="flex flex-wrap justify-end gap-2 border-t pt-4"><button type="button" className="min-h-10 rounded-full px-4 text-sm font-medium hover:bg-white" disabled={!!busy} onClick={() => setTask(null)}>Close without saving</button><Action busy={busy === "replace"} disabled={actionLocked || !canReplace}>{busy === "replace" ? "Creating draft..." : "Create replacement draft"}</Action></div></form>}
+
+              <details className="rounded-2xl border px-4 py-4"><summary className="flex cursor-pointer items-center justify-between gap-3 text-sm font-medium"><span>Receiving details</span><span className={"text-xs font-normal " + (current.profileChanged ? "text-amber-800" : "text-muted-foreground")}>{current.profileChanged ? "Changed" : "Unchanged"}</span></summary><div className="mt-4 grid gap-4"><PaymentReceivingProfile profile={current.recordedProfile} tokens={assets.data?.tokens ?? []} title={current.profileChanged ? "Recorded for this payment" : "Recorded receiving profile"} />{current.profileChanged && <PaymentReceivingProfile profile={current.currentProfile} tokens={assets.data?.tokens ?? []} title="Current receiving profile" />}</div>{current.profileChanged && <p className="mt-4 text-xs leading-5 text-muted-foreground">A recipient change does not redirect an approved payment.</p>}</details>
+
+              <details className="rounded-2xl border px-4 py-4"><summary className="flex cursor-pointer items-center justify-between gap-3 text-sm font-medium"><span className="inline-flex items-center gap-2"><History size={15} aria-hidden="true" />Payment history</span><span className="text-xs font-normal text-muted-foreground">{current.history.length} {current.history.length === 1 ? "record" : "records"}</span></summary><div className="mt-4 divide-y">{current.history.map(entry => <div key={entry.id} className="py-4 first:pt-0 last:pb-0"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">{paymentLabel(entry)}</p><Status value={entry.status} /></div><div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{usd(entry.amount)} USDC</span><span>Receiving profile v{entry.recipient_version}</span></div><details className="mt-3 text-xs"><summary className="cursor-pointer text-muted-foreground">Record identifier</summary><Address value={entry.id} /></details></div>)}</div>{current.replacements.length > 0 && <div className="mt-4 space-y-3 border-t pt-4">{current.replacements.map(entry => <p key={entry.old_payment_id} className="text-xs leading-5 text-muted-foreground">{entry.reason}</p>)}</div>}</details>
+
+              {current.payment.hold_reason && <details className="rounded-2xl border px-4 py-4 text-sm"><summary className="cursor-pointer font-medium">Why this payment is held</summary><p className="mt-3 text-xs leading-6 text-muted-foreground">{current.payment.hold_reason}</p></details>}
+              {!task && !cancellation && <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4"><button type="button" className="min-h-10 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" disabled={actionLocked} onClick={openQueue}>All payment records</button>{canCancel && <button type="button" className="inline-flex min-h-10 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-destructive hover:bg-red-50 disabled:opacity-50" disabled={actionLocked} onClick={() => setTask("cancel")}><X size={14} aria-hidden="true" />Cancel payment</button>}{current.payment.status === "cancelled" && canReplace && allowed("payments:approve") && <button type="button" className="min-h-10 text-xs font-medium text-muted-foreground disabled:opacity-50" disabled={actionLocked} onClick={() => void cancel()}>Check cancellation on NEAR</button>}</div>}
+            </div>
+          </section>}
+      </div>
+    </div>
+  </div>;
+}
+
+function PaymentReceivingProfile({ profile, tokens, title }: { profile: RecipientSnapshot; tokens: Token[]; title: string }) {
+  const asset = tokens.find(token => token.assetId === profile.primary_asset || profile.primary_asset === "USDC" && token.symbol === "USDC" && token.blockchain === profile.primary_network);
+  return <section className="min-w-0 rounded-xl bg-muted/50 p-4"><div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h5 className="text-xs font-medium">{title}</h5><Status value={profile.preference_status ?? "pending_confirmation"} /></div><div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-2 text-xs text-muted-foreground">Primary destination</p><AssetIdentity symbol={asset?.symbol || (profile.primary_asset === "USDC" ? "USDC" : "Selected asset")} network={profile.primary_network} /><div className="mt-3"><Address value={profile.primary_address} network={profile.primary_network} /></div>{profile.primary_memo != null && <p className="mt-2 text-xs">XRP tag: {profile.primary_memo} (encoded in address)</p>}</div><div><p className="mb-2 text-xs text-muted-foreground">USDC backup</p>{profile.backup_address && profile.backup_network ? <><AssetIdentity symbol="USDC" network={profile.backup_network} /><div className="mt-3"><Address value={profile.backup_address} network={profile.backup_network} /></div><p className="mt-2 text-xs text-muted-foreground">{profile.fallback_consent ? "Recipient consent confirmed" : "Fallback not consented"}</p></> : <p className="text-sm">No backup destination</p>}</div></div><details className="mt-4 border-t pt-3 text-xs"><summary className="cursor-pointer text-muted-foreground">Asset identifier and profile version</summary><div className="mt-3 space-y-2"><p>Profile version {profile.version}</p><p className="break-all font-mono">{profile.primary_asset}</p></div></details></section>;
+}
+
+function ToolsEmpty({ title, description }: { title: string; description: string }) {
+  return <div className="px-5 py-10 text-center"><h3 className="text-sm font-medium">{title}</h3><p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-muted-foreground">{description}</p></div>;
+}
+
+function ToolsLoading() {
+  return <div role="status" aria-label="Loading payment records" className="space-y-5 p-5">{[0, 1, 2].map(index => <div key={index} className="space-y-2"><div className="h-4 w-32 animate-pulse rounded bg-muted" /><div className="h-3 w-44 max-w-full animate-pulse rounded bg-muted" /></div>)}<span className="sr-only">Loading payment records...</span></div>;
 }
 
 function ManagementWorkspace({ mode = "all", initialRunId = "", initialBillId = "", initialPaymentId = "" }: Props) {
@@ -66,7 +267,7 @@ function ManagementWorkspace({ mode = "all", initialRunId = "", initialBillId = 
   });
   const reviewed = runReview.data;
   const current = paymentReview.data;
-  const canCancel = !!current && !current.activeClearingRound && allowed("payments:approve") && !["cancelled", "paid", "partially_paid", "in_flight", "recovery_pending", "unknown"].includes(current.payment.status) && current.payment.delivered_amount === "0" && current.attempts.every(attempt => !["prepared", "submitted", "processing", "unknown", "recovery_pending", "reported_delivered", "reported_partial"].includes(attempt.state));
+  const canCancel = canCancelManagedPayment(current, allowed("payments:approve"));
   const canApproveRun = reviewed?.run.status !== "cancelled" && reviewed?.items.every((item) => item.payment.status === "paid" || ["draft", "approved_unfunded", "approved"].includes(item.payment.status) && !item.profileChanged && item.currentProfile.preference_status === "confirmed" && !item.currentProfile.archived);
   const canApproveBatch = batch?.bills.every((bill) => !bill.activeClearingRound && !bill.vendorCommitment?.problems.length && bill.status !== "disputed" && (!bill.requires_acceptance || bill.milestone_accepted_at) && ["draft", "approved_unfunded", "approved"].includes(bill.payment.status) && !bill.profileChanged && bill.currentProfile.preference_status === "confirmed" && !bill.currentProfile.archived);
   return <div className="grid gap-6">

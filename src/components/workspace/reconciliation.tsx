@@ -134,7 +134,7 @@ function ReconciliationWorkspace() {
   };
 
   return (
-    <div ref={container} className="grid min-w-0 gap-6">
+    <div id="payment-reconciliation" ref={container} className="grid min-w-0 gap-6">
       <header className="flex flex-wrap items-start justify-between gap-4 px-1">
         <div>
           <h2 className="text-xl font-medium tracking-tight">Reconciliation</h2>
