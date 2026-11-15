@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronRight, Plus } from "lucide-react";
+import { TaskDrawer, closeTaskDrawer, openTaskDrawer } from "./task-drawer";
 import { WorkspaceTabs } from "./workspace-tabs";
 import { AccountingRegister } from "./accounting-register";
 import { NetSuitePanel } from "./netsuite";
@@ -22,7 +24,6 @@ import { useAction, useResource } from "./hooks";
 import {
   Action,
   control,
-  DataTable,
   Empty,
   Field,
   Panel,
@@ -39,7 +40,9 @@ export function AccountingPanel() {
     (permission) => organization.permissions?.includes(permission),
   );
   const canApprove = !!organization.permissions?.includes("payments:approve");
-  const [view,setView] = useState(0);
+  const [view, setView] = useState(0);
+  const [connectionTask, setConnectionTask] = useState<"overview" | "catalog" | "mapping" | "disconnect">("overview");
+  const [jobId, setJobId] = useState("");
   const [page, setPage] = useState(1),
     [selected, setSelected] = useState(""),
     [catalogPage, setCatalogPage] = useState(1),
@@ -55,7 +58,7 @@ export function AccountingPanel() {
     allowed && selected ? `${endpoint}/connections/${selected}/catalog` : null,
     revision,
   );
-  const { busy, error, run } = useAction(),
+  const { busy, error, run, setError } = useAction(),
     data = resource.data;
   const connection = data?.connections.find((item) => item.id === selected),
     mapping = catalog.data?.mapping;
@@ -86,202 +89,43 @@ export function AccountingPanel() {
                 .filter((item) => item.connection_id === selected)
                 .map((item) => ({
                   id: item.id,
-                  label: `${signedCents(item.terms.differenceCents)} ${connection?.currency ?? "functional units"} · ${item.id}`,
+                  label: `${signedCents(item.terms.differenceCents)} ${connection?.currency ?? "functional units"} · ${item.created_at.slice(0, 10)}`,
                 }));
   const sourceBill =
     kind === "bill" ? data?.bills.find((item) => item.id === sourceId) : null;
+  const job = data?.jobs.find(item => item.id === jobId);
+  const disabled = !!busy || resource.refreshing || !!resource.error;
+  const chooseConnection = (id: string) => { setSelected(id); setSourceId(""); setCatalogPage(1); setNotice(""); setError(""); setConnectionTask("overview"); };
+  const providerName = (provider: string) => provider === "quickbooks" ? "QuickBooks Online" : "Xero";
+  const kindLabels: Record<PostingKind, string> = { bill: "Invoice", settlement: "Installment credit", credit: "Supplier credit", fee: "Network fees", fx: "FX adjustment" };
+  const jobReference = (item: Overview["jobs"][number]) => item.kind === "fee" ? "NEAR fee batch" : item.kind === "fx" ? "FX adjustment" : item.posting.source?.reference || kindLabels[item.kind];
+  const connectionSelect = <Field label="Accounting connection"><select className={control} value={selected} disabled={!!busy} onChange={event => chooseConnection(event.target.value)}><option value="">Choose a connection</option>{data?.connections.map(item => <option key={item.id} value={item.id}>{providerName(item.provider)} · {item.entity_name ?? "Company not selected"}</option>)}</select></Field>;
+  const feedback = <>{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}{(resource.error || catalog.error || error) && <p role="alert" className="text-sm text-destructive">{resource.error || catalog.error || error}</p>}</>;
   if (!allowed) return null;
-  return (<div className="grid min-w-0 gap-5">
-{notice && (
-          <p role="status" className="text-sm">
-            {notice}
-          </p>
-        )}{(resource.error || catalog.error || error) && (
-          <p role="alert" className="text-sm text-destructive">
-            {resource.error || catalog.error || error}
-          </p>
-        )}
-<WorkspaceTabs activeIndex={view} onActiveChange={setView} tabs={[
-{label:"Ledger",content:resource.loading&&!data?<Panel title="Company ledger"><Empty>Loading company records...</Empty></Panel>:data?<AccountingRegister data={data} onConnect={()=>setView(1)}/>:<Panel title="Company ledger"><Empty>Company records could not be loaded. Refresh the workspace to try again.</Empty></Panel>},
-{label:"Connections",content:<Panel title="Accounting apps" tone="white" description="Connect an app, choose its company, then review mappings." help="Bookkeeping entries only. These connections do not move bank or crypto funds."><div className="grid min-w-0 gap-5"><div className="grid gap-4 sm:grid-cols-2">
-          {data?.providers.map((provider) => (
-            <div
-              key={provider.provider}
-              className="grid min-w-0 content-start gap-3 rounded-2xl border border-border bg-muted/50 p-5 text-sm"
-            >
-              <strong>
-                {provider.provider === "quickbooks"
-                  ? "QuickBooks Online"
-                  : "Xero"}
-              </strong>
-              <p className="text-xs text-muted-foreground">
-                {provider.environment}
-                {!provider.configured
-                  ? " · Operator setup required"
-                  : " · Company consent required"}
-              </p>
-              <Action
-                type="button"
-                disabled={!!busy || !provider.configured}
-                busy={busy === provider.provider}
-                onClick={() =>
-                  void run(provider.provider, async () => {
-                    const result = await api<{ authorizationUrl: string }>(
-                      `${endpoint}/connect/${provider.provider}`,
-                      {},
-                    );
-                    window.location.assign(result.authorizationUrl);
-                  })
-                }
-              >
-                Authorize company connection
-              </Action>
-            </div>
-          ))}
-        </div>{resource.loading ? (
-          <Empty>Loading accounting connections...</Empty>
-        ) : !data?.connections.length ? (
-          <Empty>No company accounting connection has been authorized.</Empty>
-        ) : (
-          <Field label="Accounting connection">
-            <select
-              className={control}
-              value={selected}
-              onChange={(event) => {
-                setSelected(event.target.value);
-                setCatalogPage(1);
-                setNotice("");
-              }}
-            >
-              <option value="">Choose a connection</option>
-              {data.connections.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.provider} · {item.entity_name ?? "Select legal entity"}{" "}
-                  · {item.status}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}{connection?.last_error && <p role="alert" className="rounded-xl border border-destructive/20 bg-white p-3 text-sm text-destructive">{connection.last_error}. Review provider access before posting.</p>}{connection && (
-          <details className="grid min-w-0 rounded-2xl border border-border bg-white p-5" open={connection.status === "select_entity"}><summary className="cursor-pointer text-sm font-medium">Configure {connection.entity_name ?? connection.provider}</summary><div className="mt-5 grid gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm font-medium">
-                {connection.entity_name ?? "Company selection"}{" "}
-                <Status value={connection.status} />
-              </p>
-              <Action
-                type="button"
-                disabled={!!busy || resource.refreshing || !!resource.error}
-                busy={busy === "disconnect"}
-                onClick={() =>
-                  void run("disconnect", async () => {
-                    const result = await api<{ note: string }>(
-                      `${endpoint}/connections/${selected}/disconnect`,
-                      {},
-                    );
-                    setNotice(result.note);
-                    refresh();
-                  })
-                }
-              >
-                Disconnect and stop future work
-              </Action>
-            </div>
-            {connection.last_error && (
-              <p role="alert" className="text-sm text-destructive">
-                {connection.last_error}. Review provider access and reconnect if
-                needed. Sent requests may still complete after disconnection.
-              </p>
-            )}
-            {connection.status === "select_entity" && (
-              <form
-                className="flex min-w-0 flex-wrap items-end gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const values = new FormData(event.currentTarget);
-                  void run("entity", async () => {
-                    await api(`${endpoint}/connections/${selected}/entity`, {
-                      entityId: values.get("entity"),
-                    });
-                    setNotice(
-                      "Verified legal entity selected. Review the actual chart of accounts and FX mapping next.",
-                    );
-                    refresh();
-                  });
-                }}
-              >
-                <div className="min-w-0 flex-1">
-                  <Field label="Verified legal entity">
-                    <select name="entity" required className={control}>
-                      <option value="">Select explicitly</option>
-                      {connection.entities.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} · {item.id}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-                <Action
-                  busy={busy === "entity"}
-                  disabled={!!busy || resource.refreshing || !!resource.error}
-                >
-                  Use this company
-                </Action>
-              </form>
-            )}
-            {connection.status === "active" && (
-              <>
-                <p className="text-sm">
-                  Functional currency: <strong>{connection.currency}</strong>.
-                  USDC conversion needs an accountant-reviewed rate. No peg or
-                  current FX rate is assumed.
-                </p>
-                <form
-                  className="flex min-w-0 flex-wrap items-end gap-3"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void run("catalog", async () => {
-                      const result = await api<{ mayHaveMore: boolean }>(
-                        `${endpoint}/connections/${selected}/catalog`,
-                        { page: catalogPage },
-                      );
-                      setNotice(
-                        result.mayHaveMore
-                          ? "Catalog page loaded. Load the next page if a required record is missing."
-                          : "Catalog page loaded. Review active accounts, contacts and zero-tax codes.",
-                      );
-                      refresh();
-                    });
-                  }}
-                >
-                  <Field label="Provider catalog page">
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      className={control}
-                      value={catalogPage}
-                      onChange={(event) =>
-                        setCatalogPage(Number(event.target.value))
-                      }
-                    />
-                  </Field>
-                  <Action
-                    busy={busy === "catalog"}
-                    disabled={!!busy || resource.refreshing || !!resource.error}
-                  >
-                    Load accounts, contacts and tax codes
-                  </Action>
-                </form>
-                {canApprove && catalog.data?.items.length ? (
-                  <details className="min-w-0 rounded-xl border border-border bg-white p-4">
-                    <summary className="cursor-pointer text-sm font-medium">
-                      Review account, contact and FX mappings
-                    </summary>
-                    <form
+  return <div className="grid min-w-0 gap-5">{feedback}<WorkspaceTabs activeIndex={view} onActiveChange={index => { if (!busy) setView(index); }} tabs={[
+    { label: "Ledger", content: resource.loading && !data ? <Empty>Loading ledger...</Empty> : data ? <AccountingRegister data={data} onConnect={() => setView(1)}/> : <Empty>Ledger unavailable. Refresh to try again.</Empty> },
+    { label: "Connections", content: <Panel title="Accounting apps" tone="white"><div className="grid gap-5">
+      {data?.connections.length ? <div className="divide-y">{data.connections.map(item => <article key={item.id} className="flex flex-wrap items-center justify-between gap-4 py-4 first:pt-0"><div><p className="text-sm font-medium">{item.entity_name ?? providerName(item.provider)}</p><p className="mt-1 text-xs text-muted-foreground">{providerName(item.provider)}{item.currency ? ` · ${item.currency}` : ""}</p><div className="mt-2"><Status value={item.status}/></div></div><button type="button" disabled={!!busy} className="min-h-10 text-sm font-medium text-primary" onClick={() => { chooseConnection(item.id); openTaskDrawer("accounting-connection-task"); }}>Manage<ChevronRight className="ml-1 inline" size={15}/></button></article>)}</div> : null}
+      <div className="grid gap-3 sm:grid-cols-2">{data?.providers.map(provider => <div key={provider.provider} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-muted/50 p-4"><div><p className="text-sm font-medium">{providerName(provider.provider)}</p><p className="mt-1 text-xs text-muted-foreground">{provider.configured ? provider.environment : "Setup required"}</p></div><Action type="button" disabled={!!busy || !provider.configured} busy={busy === provider.provider} onClick={() => void run(provider.provider, async () => { const result = await api<{ authorizationUrl: string }>(`${endpoint}/connect/${provider.provider}`, {}); window.location.assign(result.authorizationUrl); })}>Connect</Action></div>)}</div>
+      <details className="border-t pt-4 text-xs"><summary className="cursor-pointer text-muted-foreground">Data sharing</summary><p className="mt-3 leading-5 text-muted-foreground">Reviewed bill titles and mapped contacts are shared with the connected provider. Bookkeeping connections do not move funds.</p><p className="mt-3 leading-5 text-muted-foreground">{data?.scope}</p></details>
+    </div></Panel> },
+    { label: "Posting requests", content: <Panel title="Posting requests" tone="white" action={<Action type="button" disabled={disabled} onClick={() => openTaskDrawer("accounting-posting-create")}><Plus size={15}/>New posting</Action>}><div className="grid gap-5">
+      {canApprove && <div className="flex justify-end"><button type="button" disabled={disabled} className="min-h-10 text-sm font-medium text-primary" onClick={() => void run("dispatch", async () => { await api(`${endpoint}/dispatch`, {}); setNotice("Request processed. Review its provider status."); refresh(); })}>{busy === "dispatch" ? "Processing..." : "Process next approved request"}</button></div>}
+      {!data?.jobs.length ? <Empty>No posting requests.</Empty> : <div className="divide-y">{data.jobs.map(item => <article key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[minmax(0,1fr)_auto_140px_auto]"><div className="min-w-0"><p className="truncate text-sm font-medium">{jobReference(item)}</p><p className="mt-1 text-xs text-muted-foreground">{kindLabels[item.kind]} · {item.posting.source?.date}</p></div><p className="text-right text-sm font-medium tabular-nums">{item.posting.amount?.text} <span className="text-xs text-muted-foreground">{item.posting.functionalCurrency}</span></p><div className="justify-self-start sm:ml-4"><Status value={item.state}/></div><button type="button" disabled={!!busy} className="justify-self-end text-sm font-medium text-primary" onClick={() => { setJobId(item.id); setError(""); setNotice(""); openTaskDrawer("accounting-posting-review"); }}>Review<ChevronRight size={15} className="ml-1 inline"/></button></article>)}</div>}
+      {(page > 1 || data?.hasMore) && <div className="flex items-center justify-between gap-4 border-t pt-4 text-xs"><span className="text-muted-foreground">Page {page}</span><div className="flex gap-4"><button type="button" disabled={page === 1 || !!busy} onClick={() => setPage(value => value - 1)} className="text-primary disabled:opacity-40">Previous</button><button type="button" disabled={!data?.hasMore || !!busy} onClick={() => setPage(value => value + 1)} className="text-primary disabled:opacity-40">Next</button></div></div>}
+    </div></Panel> },
+    { label: "Fees & valuations", content: <Panel title="Fees and valuations" tone="white">{data && <AccountingLedgerTools endpoint={endpoint} data={data} connectionId={selected} canApprove={canApprove} disabled={disabled} onChange={refresh}/>}</Panel> },
+    { label: "Provider activity", content: <Panel title="Provider activity" tone="white" action={<button type="button" className="min-h-10 text-sm text-primary" onClick={() => setView(3)}>Import tools</button>}>{data?.observations.length ? <div className="divide-y">{data.observations.map(item => <details key={`${item.kind}:${item.external_id}`} className="py-4"><summary className="flex cursor-pointer items-center justify-between gap-3 text-sm"><span className="capitalize">{item.kind} <span className="ml-2 text-xs text-muted-foreground">{new Date(item.observed_at).toLocaleDateString()}</span></span><Status value={item.state}/></summary><dl className="mt-4 grid gap-3 text-xs"><div><dt className="text-muted-foreground">Provider record</dt><dd className="mt-1 break-all font-mono">{item.external_id}</dd></div><div><dt className="text-muted-foreground">Revision</dt><dd className="mt-1 break-all">{item.revision || "Not supplied"}</dd></div></dl></details>)}</div> : <Empty>No imported provider activity.</Empty>}</Panel> },
+    { label: "NetSuite", content: <NetSuitePanel/> },
+  ]}/>
+  <TaskDrawer id="accounting-connection-task" title={connectionTask === "mapping" ? "Account mapping" : connectionTask === "catalog" ? "Provider catalog" : connectionTask === "disconnect" ? "Disconnect app" : "Connection settings"}><div aria-busy={!!busy} className="grid gap-5">{connection && <><div><p className="text-lg font-medium">{connection.entity_name ?? providerName(connection.provider)}</p><p className="mt-1 text-xs text-muted-foreground">{providerName(connection.provider)}{connection.currency ? ` · ${connection.currency}` : ""}</p></div>{connectionTask !== "overview" && <button type="button" className="justify-self-start text-sm text-primary" disabled={!!busy} onClick={() => setConnectionTask("overview")}>Back to settings</button>}
+    {connection.last_error && <p role="alert" className="text-sm text-destructive">{connection.last_error}</p>}
+    {connectionTask === "overview" && <><div><Status value={connection.status}/></div>{connection.status === "select_entity" && <form key={connection.id} className="grid gap-4" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); void run("entity", async () => { await api(`${endpoint}/connections/${selected}/entity`, { entityId: values.get("entity") }); setNotice("Company selected."); refresh(); }); }}><Field label="Company"><select name="entity" required className={control}><option value="">Choose company</option>{connection.entities.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Action busy={busy === "entity"} disabled={disabled} className="justify-self-start">Confirm company</Action></form>}{connection.status === "active" && <div className="divide-y"><button type="button" disabled={!!busy} className="flex min-h-14 w-full items-center justify-between text-sm" onClick={() => setConnectionTask("catalog")}>Load provider catalog<ChevronRight size={15}/></button>{canApprove && <button type="button" disabled={!!busy || !catalog.data?.items.length} className="flex min-h-14 w-full items-center justify-between text-sm disabled:opacity-40" onClick={() => setConnectionTask("mapping")}>Account mapping<ChevronRight size={15}/></button>}</div>}<button type="button" disabled={disabled} className="justify-self-start text-sm text-destructive" onClick={() => setConnectionTask("disconnect")}>Disconnect</button></>}
+    {connectionTask === "catalog" && connection.status === "active" && <form className="grid gap-4" onSubmit={event => { event.preventDefault(); void run("catalog", async () => { const result = await api<{ mayHaveMore: boolean }>(`${endpoint}/connections/${selected}/catalog`, { page: catalogPage }); setNotice(result.mayHaveMore ? "Catalog loaded. More pages are available." : "Catalog loaded."); refresh(); }); }}><Field label="Catalog page"><input type="number" min={1} max={100} className={control} value={catalogPage} onChange={event => setCatalogPage(Number(event.target.value))}/></Field><Action busy={busy === "catalog"} disabled={disabled} className="justify-self-start">Load accounts and contacts</Action></form>}
+    {connectionTask === "mapping" && connection.status === "active" && canApprove && catalog.data?.items.length ?                     <form
                       key={`${selected}:${mapping?.version ?? 0}`}
-                      className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
+                      aria-busy={!!busy}
+                      className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const values = new FormData(event.currentTarget);
@@ -334,12 +178,14 @@ export function AccountingPanel() {
                             "PUT",
                           );
                           setNotice(
-                            "Mapping version saved. Previously prepared requests require fresh review.",
+                            "Mapping saved. Existing requests need fresh review.",
                           );
+                          closeTaskDrawer("accounting-connection-task", true);
                           refresh();
                         });
                       }}
                     >
+                      <h3 className="font-medium sm:col-span-2">Accounts</h3>
                       <Field label="Expense account">
                         <select
                           name="expense"
@@ -348,7 +194,7 @@ export function AccountingPanel() {
                           defaultValue={mapping?.value.expenseAccountId}
                         >
                           <option value="">
-                            Choose actual provider account
+                            Choose an account
                           </option>
                           {catalog.data.items
                             .filter(
@@ -361,7 +207,7 @@ export function AccountingPanel() {
                             ))}
                         </select>
                       </Field>
-                      <Field label="Bookkeeping clearing bank account">
+                      <Field label="USDC clearing bank account">
                         <select
                           name="bank"
                           className={control}
@@ -369,7 +215,7 @@ export function AccountingPanel() {
                           defaultValue={mapping?.value.bankAccountId}
                         >
                           <option value="">
-                            Choose the USDC clearing account in your books
+                            Choose a clearing account
                           </option>
                           {catalog.data.items
                             .filter(
@@ -390,17 +236,17 @@ export function AccountingPanel() {
                         [
                           [
                             "journalClearing",
-                            "Nonbank crypto journal clearing account",
+                            "Crypto journal account (optional)",
                             mapping?.value.journalClearingAccountId,
                           ],
                           [
                             "feeExpense",
-                            "Actual network-fee expense account",
+                            "Network-fee account (optional)",
                             mapping?.value.feeExpenseAccountId,
                           ],
                           [
                             "fxAccount",
-                            "FX difference account",
+                            "FX account (optional)",
                             mapping?.value.fxAccountId,
                           ],
                         ] as const
@@ -451,27 +297,28 @@ export function AccountingPanel() {
                             ))}
                         </select>
                       </Field>
-                      <Field label="Functional units per USDC: numerator">
+                      <h3 className="mt-3 border-t pt-5 font-medium sm:col-span-2">{connection.currency} per USDC</h3>
+                      <Field label="Rate numerator">
                         <input
                           name="numerator"
                           className={control}
                           required
                           pattern="[1-9][0-9]{0,17}"
                           defaultValue={mapping?.value.fxNumerator}
-                          placeholder="Reviewed integer numerator"
+                          placeholder="Numerator"
                         />
                       </Field>
-                      <Field label="Functional units per USDC: denominator">
+                      <Field label="Rate denominator">
                         <input
                           name="denominator"
                           className={control}
                           required
                           pattern="[1-9][0-9]{0,17}"
                           defaultValue={mapping?.value.fxDenominator}
-                          placeholder="Reviewed integer denominator"
+                          placeholder="Denominator"
                         />
                       </Field>
-                      <Field label="Rate source and approval reference">
+                      <Field label="Rate source / approval">
                         <input
                           name="fxSource"
                           className={control}
@@ -481,7 +328,7 @@ export function AccountingPanel() {
                           defaultValue={mapping?.value.fxSource}
                         />
                       </Field>
-                      <Field label="Reviewed FX date">
+                      <Field label="Rate date">
                         <input
                           name="fxDate"
                           className={control}
@@ -498,9 +345,9 @@ export function AccountingPanel() {
                           defaultValue={mapping?.value.closedThrough ?? ""}
                         />
                       </Field>
-                      <div className="grid min-w-0 grid-cols-1 gap-3 sm:col-span-2">
+                      <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 border-t pt-5 sm:col-span-2">
                         <p className="text-sm font-medium">
-                          Original company payees and accounting contacts
+                          Payee contacts
                         </p>
                         {catalog.data.recipients.map((recipient) => (
                           <Field key={recipient.id} label={recipient.name}>
@@ -530,9 +377,7 @@ export function AccountingPanel() {
                       </div>
                       <label className="flex items-start gap-2 text-xs sm:col-span-2">
                         <input type="checkbox" required className="mt-1" />I
-                        reviewed the legal entity, clearing account, zero-tax
-                        treatment and exact FX rate. These entries record
-                        bookkeeping and do not prove bank settlement.
+                        reviewed the company, accounts, tax treatment and exact FX rate.
                       </label>
                       <div>
                         <Action
@@ -541,58 +386,16 @@ export function AccountingPanel() {
                             !!busy || resource.refreshing || !!resource.error
                           }
                         >
-                          Save reviewed mapping version
+                          Save mapping
                         </Action>
                       </div>
-                    </form>
-                  </details>
-                ) : (
-                  <Empty>
-                    Load the actual provider catalogs before mapping. An
-                    authorized finance approver reviews mappings.
-                  </Empty>
-                )}
-
-              </>
-            )}
-          </div></details>
-        )}<details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Connection scope and data sharing</summary><div className="mt-3 leading-6"><p className="text-xs leading-5 text-muted-foreground">
-          {data?.scope ??
-            "The operator configures a confidential accounting app before consent is available. Missing credentials never appear as a completed connection."}{" "}
-          Exported bill titles and chosen payee contacts are disclosed to your
-          accounting provider only after posting review.
-        </p></div></details></div></Panel>},
-{label:"Posting requests",content:<Panel title="Posting requests" tone="white" description="Review exact bookkeeping requests and follow their provider status."><div className="grid min-w-0 gap-5">{resource.loading ? (
-          <Empty>Loading accounting connections...</Empty>
-        ) : !data?.connections.length ? (
-          <Empty>No company accounting connection has been authorized.</Empty>
-        ) : (
-          <Field label="Accounting connection">
-            <select
-              className={control}
-              value={selected}
-              onChange={(event) => {
-                setSelected(event.target.value);
-                setCatalogPage(1);
-                setNotice("");
-              }}
-            >
-              <option value="">Choose a connection</option>
-              {data.connections.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.provider} · {item.entity_name ?? "Select legal entity"}{" "}
-                  · {item.status}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}{connection?.status==="active"&&mapping?<details className="rounded-2xl border border-border bg-white p-5"><summary className="cursor-pointer text-sm font-medium">Prepare a new posting</summary><div className="mt-5 grid gap-4"><p className="text-sm">
-                  Functional currency: <strong>{connection.currency}</strong>.
-                  USDC conversion needs an accountant-reviewed rate. No peg or
-                  current FX rate is assumed.
-                </p>{mapping && (
-                  <form
-                    className="grid min-w-0 grid-cols-1 gap-3 rounded-xl border border-border bg-white p-4 sm:grid-cols-2"
+                    </form> : null}
+    {connectionTask === "disconnect" && <><p className="text-sm text-muted-foreground">New posting work stops. Requests already sent may still complete.</p><Action type="button" className="justify-self-start" disabled={disabled} busy={busy === "disconnect"} onClick={() => void run("disconnect", async () => { const result = await api<{ note: string }>(`${endpoint}/connections/${selected}/disconnect`, {}); setNotice(result.note); closeTaskDrawer("accounting-connection-task", true); refresh(); })}>Disconnect app</Action></>}
+  </>}{feedback}</div></TaskDrawer>
+  <TaskDrawer id="accounting-posting-create" title="New posting"><div aria-busy={!!busy} className="grid gap-5">{connectionSelect}{connection?.status === "active" && mapping ?                   <form
+                    key={`${selected}:${mapping?.version ?? 0}`}
+                    aria-busy={!!busy}
+                    className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
                     onSubmit={(event) => {
                       event.preventDefault();
                       const values = new FormData(event.currentTarget);
@@ -609,13 +412,14 @@ export function AccountingPanel() {
                             : {}),
                         });
                         setNotice(
-                          "Exact posting plan prepared. Review it below before approving any provider write.",
+                          "Posting prepared for review.",
                         );
+                        closeTaskDrawer("accounting-posting-create", true);
                         refresh();
                       });
                     }}
                   >
-                    <Field label="Record to prepare">
+                    <Field label="Record type">
                       <select
                         className={control}
                         value={kind}
@@ -624,22 +428,22 @@ export function AccountingPanel() {
                           setSourceId("");
                         }}
                       >
-                        <option value="bill">Accepted company bill</option>
+                        <option value="bill">Company bill</option>
                         <option value="settlement">
-                          Verified full or terminal partial payment
+                          Verified installment
                         </option>
                         <option value="credit">
-                          Accepted supplier credit, unapplied provider draft
+                          Supplier credit
                         </option>
                         <option value="fee">
-                          Grouped exact NEAR token-burn fees
+                          NEAR fee batch
                         </option>
                         <option value="fx">
-                          Approved crypto-clearing FX difference
+                          Approved FX difference
                         </option>
                       </select>
                     </Field>
-                    <Field label="Original record">
+                    <Field label="Company record">
                       <select
                         key={kind}
                         name="source"
@@ -658,12 +462,8 @@ export function AccountingPanel() {
                     </Field>
                     {kind === "bill" && (
                       <Field
-                        label="Invoice maturity date"
-                        hint={
-                          sourceBill?.dueDate
-                            ? "Original invoice maturity in the company timezone. Resolve changes in the original bill before posting."
-                            : "This source has no scheduled maturity. Explicitly choose the due date for the accounting record; no default is assumed."
-                        }
+                        label="Invoice due date"
+
                       >
                         <input
                           key={`${sourceId}:${sourceBill?.dueDate ?? "manual"}`}
@@ -695,67 +495,11 @@ export function AccountingPanel() {
                           !!busy || resource.refreshing || !!resource.error
                         }
                       >
-                        Prepare bookkeeping review
+                        Prepare posting
                       </Action>
                     </div>
-                  </form>
-                )}</div></details>:<div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted p-4 text-xs"><p>Connect an accounting app and review its mapping before preparing a posting.</p><button type="button" className="font-medium text-primary" onClick={()=>setView(1)}>Manage connections</button></div>}<div className="grid min-w-0 grid-cols-1 gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-medium">
-              Posting requests and recovery
-            </h3>
-            {canApprove && (
-              <Action
-                type="button"
-                disabled={!!busy || resource.refreshing || !!resource.error}
-                busy={busy === "dispatch"}
-                onClick={() =>
-                  void run("dispatch", async () => {
-                    await api(`${endpoint}/dispatch`, {});
-                    setNotice(
-                      "One approved request processed. Review its actual provider status below.",
-                    );
-                    refresh();
-                  })
-                }
-              >
-                Process one approved request
-              </Action>
-            )}
-          </div>
-          {!data?.jobs.length ? (
-            <Empty>No posting plans on this page.</Empty>
-          ) : (
-            data.jobs.map((job) => (
-              <article
-                key={job.id}
-                className="grid min-w-0 grid-cols-1 gap-3 rounded-2xl border border-border bg-white p-5"
-              >
-                <div className="flex flex-wrap justify-between gap-3">
-                  <p className="text-sm font-medium">
-                    {job.kind} · {job.marker}
-                  </p>
-                  <Status value={job.state} />
-                </div>
-                <p className="break-all text-xs">
-                  Source {job.source_id}. Mapping {job.mapping_version}.
-                  Provider record {job.external_id ?? "not confirmed"}.
-                </p>
-                {job.last_error && (
-                  <p role="alert" className="text-xs text-destructive">
-                    {job.last_error}. An unknown result does not authorize
-                    another write.
-                  </p>
-                )}
-                <details className="min-w-0">
-                  <summary className="cursor-pointer text-sm">
-                    Inspect exact disclosure and accounting terms
-                  </summary>
-                  <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-muted p-3 text-xs">
-                    {JSON.stringify(job.posting, null, 2)}
-                  </pre>
-                </details>
-                <div className="flex flex-wrap gap-3">
+                  </form> : <div className="grid gap-3"><p className="text-sm text-muted-foreground">Choose a connected company with reviewed account mapping.</p><button type="button" className="justify-self-start text-sm text-primary" onClick={() => { closeTaskDrawer("accounting-posting-create"); setView(1); }}>Manage connections</button></div>}{feedback}</div></TaskDrawer>
+  <TaskDrawer id="accounting-posting-review" title="Review posting"><div aria-busy={!!busy} className="grid gap-5">{job && <div key={`${job.id}:${job.review_hash}`} className="grid gap-5"><header className="flex flex-wrap items-start justify-between gap-4"><div><h3 className="text-xl font-medium">{jobReference(job)}</h3><p className="mt-1 text-xs text-muted-foreground">{kindLabels[job.kind]}</p></div><Status value={job.state}/></header><div><p className="text-xs text-muted-foreground">Bookkeeping amount</p><p className="mt-1 text-2xl font-medium tabular-nums">{job.posting.amount?.text} <span className="text-sm text-muted-foreground">{job.posting.functionalCurrency}</span></p></div><dl className="grid gap-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Company</dt><dd>{data?.connections.find(item => item.id === job.connection_id)?.entity_name ?? "Not available"}</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Posting date</dt><dd>{job.posting.source?.date}</dd></div>{job.kind === "bill" && <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Due date</dt><dd>{job.posting.source?.dueDate}</dd></div>}</dl>{job.last_error && <p role="alert" className="text-sm text-destructive">{job.last_error}</p>}{job.state === "unknown" && <p className="text-sm text-amber-900">Outcome unconfirmed. Check the provider before any new write.</p>}<details className="border-t pt-4 text-xs"><summary className="cursor-pointer text-muted-foreground">Exact posting and shared data</summary><pre className="mt-3 max-h-96 overflow-auto rounded-xl bg-muted p-3">{JSON.stringify(job.posting, null, 2)}</pre><dl className="mt-4 grid gap-3 break-all text-muted-foreground"><div><dt>Source ID</dt><dd>{job.source_id}</dd></div><div><dt>Mapping version</dt><dd>{job.mapping_version}</dd></div><div><dt>Provider record</dt><dd>{job.external_id ?? "Not confirmed"}</dd></div><div><dt>Request marker</dt><dd>{job.marker}</dd></div></dl></details>                <div className="flex flex-wrap gap-3">
                   {canApprove && job.state === "review" && (
                     <Action
                       type="button"
@@ -772,7 +516,7 @@ export function AccountingPanel() {
                         })
                       }
                     >
-                      Approve this exact posting
+                      Approve posting
                     </Action>
                   )}
                   {["done", "unknown", "held"].includes(job.state) && (
@@ -786,13 +530,13 @@ export function AccountingPanel() {
                         void run(`reconcile:${job.id}`, async () => {
                           await api(`${endpoint}/jobs/${job.id}/reconcile`, {});
                           setNotice(
-                            "Read-only provider lookup completed. Missing results remain held and are never automatically re-posted.",
+                            "Provider status checked.",
                           );
                           refresh();
                         })
                       }
                     >
-                      Read provider record
+                      Check provider
                     </Action>
                   )}
                   {canApprove &&
@@ -829,72 +573,15 @@ export function AccountingPanel() {
                             acknowledgeMatchingRevision: true,
                           });
                           setNotice(
-                            "A matching external revision was reviewed. Financially conflicting values stay held.",
+                            "Matching revision reviewed. Conflicts remain held.",
                           );
                           refresh();
                         })
                       }
                     >
-                      Review matching external revision
+                      Accept matching revision
                     </Action>
                   )}
-                </div>
-              </article>
-            ))
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Action
-              type="button"
-              disabled={page === 1}
-              onClick={() => setPage((value) => value - 1)}
-            >
-              Previous requests
-            </Action>
-            <span className="text-xs">Page {page}</span>
-            <Action
-              type="button"
-              disabled={!data?.hasMore}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              Next requests
-            </Action>
-          </div>
-        </div></div></Panel>},
-{label:"Fees & valuations",content:<Panel title="Fees and valuations" tone="white" description="Exact network fees and reviewed accounting adjustments.">{data && (
-          <AccountingLedgerTools
-            endpoint={endpoint}
-            data={data}
-            connectionId={selected}
-            canApprove={canApprove}
-            disabled={!!busy || resource.refreshing || !!resource.error}
-            onChange={refresh}
-          />
-        )}</Panel>},
-{label:"Provider activity",content:<Panel title="Provider activity" tone="white" description="Latest imported bookkeeping records. Importing does not change company funds.">{data?.observations.length ? (
-          <DataTable
-            columns={["Provider record", "Observed revision", "Reconciliation"]}
-          >
-            {data.observations.map((item) => (
-              <tr key={`${item.kind}:${item.external_id}`}>
-                <td className="break-all text-xs">
-                  {item.kind} · {item.external_id}
-                </td>
-                <td className="break-all text-xs">
-                  {item.revision || "Not supplied"}
-                </td>
-                <td>
-                  <Status value={item.state} />
-                  <p className="text-xs">
-                    Provider observations do not mutate the Razor financial
-                    ledger.
-                  </p>
-                </td>
-              </tr>
-            ))}
-          </DataTable>
-        ) : null}{!data?.observations.length&&<Empty>No provider activity imported yet.</Empty>}<div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted p-4 text-xs"><span>Use the connected app's read-only import tools.</span><button type="button" className="font-medium text-primary" onClick={()=>setView(3)}>Open import tools</button></div></Panel>},
-{label:"NetSuite",content:<NetSuitePanel/>},
-]}/>
-</div>
-  );
+                </div></div>}{feedback}</div></TaskDrawer>
+</div>;
 }
