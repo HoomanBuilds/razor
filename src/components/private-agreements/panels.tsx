@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { usd } from "@/lib/format";
 import {
@@ -34,6 +35,7 @@ import { useWorkspace } from "../workspace/context";
 import { useAction, useResource } from "../workspace/hooks";
 import {
   Action,
+  Address,
   control,
   Empty,
   Field,
@@ -72,7 +74,9 @@ function KeyControl({
   busy,
   onLoad,
   run,
+  compact = false,
 }: {
+  compact?: boolean;
   value: LocalKey | null;
   busy: boolean;
   onLoad: (key: LocalKey | null) => void;
@@ -84,10 +88,7 @@ function KeyControl({
       aria-label="Local agreement encryption key"
     >
       <p className="text-sm font-medium">Local encryption key</p>
-      <p className="text-xs leading-5 text-muted-foreground">
-        {disclosure} Creating a key uses your device and costs no NEAR. Neither
-        the key nor its file is uploaded.
-      </p>
+      <p className="text-xs leading-5 text-muted-foreground">{compact ? "Stored in this tab, not uploaded. Keep your downloaded key safe." : `${disclosure} Creating a key uses your device and costs no NEAR. Neither the key nor its file is uploaded.`}</p>
       <div className="flex flex-wrap items-center gap-3">
         <Action
           type="button"
@@ -142,17 +143,15 @@ function KeyControl({
         )}
       </div>
       {value && (
-        <p className="break-all text-xs">
-          Loaded public key SHA-256: {value.keyId}
-        </p>
+        <Field as="div" label="Public key fingerprint"><Address value={value.keyId} label="public key fingerprint"/></Field>
       )}
-      <p className="text-xs text-muted-foreground">
+      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Key and privacy details</summary><p className="mt-3 leading-5">{compact ? disclosure : ""}</p><p className="mt-3 leading-5">
         Forgetting the key does not delete downloaded files, browser memory
         copies or backups. Delete company files through your normal
         operating-system controls. NEAR AI credentials, if used by the optional
         local CLI, remain in that process environment; revoke them in your NEAR
         AI account.
-      </p>
+      </p></details>
     </section>
   );
 }
@@ -194,8 +193,10 @@ function TenderContent({
   onMutate,
   run,
   busy,
+  onRequestKey,
 }: {
   tender: Detail;
+  onRequestKey?: () => void;
   mode: Mode;
   base: string;
   localKey: LocalKey | null;
@@ -208,6 +209,8 @@ function TenderContent({
   run: (key: string, action: () => Promise<void>) => Promise<void>;
   busy: string | null;
 }) {
+  const [supplierTask, setSupplierTask] = useState("overview"), [supplierInvite, setSupplierInvite] = useState(tender.invites[0]?.id || ""), [supplierRecord, setSupplierRecord] = useState(""), [supplierMandate, setSupplierMandate] = useState(""), [supplierAgreement, setSupplierAgreement] = useState(""), [recordTool, setRecordTool] = useState("open");
+  function supplierView(task: string) { setSupplierTask(task); setRecordTool("open"); }
   const [opened, setOpened] = useState<Opened | null>(null),
     active = !tender.historical && ["open", "revealed"].includes(tender.state),
     now = Date.now();
@@ -218,6 +221,7 @@ function TenderContent({
   const mutate = async (path: string, input: unknown) => {
     await api(path, input);
     setOpened(null);
+    if (mode === "supplier") supplierView("overview");
     onMutate();
   };
   async function seal(
@@ -266,6 +270,7 @@ function TenderContent({
       binding: record.binding,
       value,
     });
+    if (mode === "supplier") supplierView("opened");
   }
   function records(
     invite: Invite,
@@ -276,7 +281,9 @@ function TenderContent({
     const authorization =
       mandate ??
       invite.mandates.filter((value) => value.state === "approved").at(-1);
-    return values.map((record) => (
+    if (mode === "supplier" && ["offers", "mandate"].includes(supplierTask)) return values.length ? <div className="divide-y rounded-2xl border px-4">{values.map(record => <button type="button" key={record.id} disabled={!fresh} onClick={() => { setSupplierRecord(record.id); setSupplierMandate(mandate?.id || ""); setOpened(null); supplierView("record"); }} className="flex w-full items-center justify-between gap-3 py-4 text-left"><div><p className="text-sm font-medium">{kind === "offer" ? `Offer v${"revision" in record ? record.revision : record.binding.revision}` : `Message ${"sequence" in record ? record.sequence : record.binding.revision}`}</p><p className="mt-1 text-xs text-muted-foreground">{new Date(record.created_at).toLocaleDateString()}</p></div>{"status" in record && <Status value={record.status}/>}<ChevronRight size={16}/></button>)}</div> : <Empty>No {kind === "offer" ? "offers" : "messages"} yet.</Empty>;
+    if (mode === "supplier" && supplierTask !== "record") return null;
+    return values.filter(record => mode !== "supplier" || record.id === supplierRecord).map((record) => (
       <section
         key={record.id}
         className="grid min-w-0 gap-3 rounded-lg border p-3 text-xs"
@@ -290,17 +297,12 @@ function TenderContent({
           </p>
           {"status" in record && <Status value={record.status} />}
         </div>
-        <p className="break-all">Full sealed commitment: {record.commitment}</p>
-        <p>
-          Encrypted content{" "}
-          {record.contentAvailable
-            ? `retained until ${new Date(record.purge_at).toLocaleString()}`
-            : "deleted"}
-          . Amounts and private transcript text are absent from this hosted
-          view.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Action
+        <p className="text-xs text-muted-foreground">{record.contentAvailable ? `Encrypted until ${new Date(record.purge_at).toLocaleString()}` : "Encrypted content deleted"}</p>
+        <details><summary className="cursor-pointer text-muted-foreground">Sealed commitment</summary><div className="mt-3"><Address value={record.commitment} label="sealed commitment"/></div></details>
+        {mode === "supplier" && <div className="flex flex-wrap gap-3 text-sm">{["open", "import", ...(canDelete && record.contentAvailable ? ["delete"] : [])].map(tool => <button type="button" key={tool} disabled={!fresh} className={recordTool === tool ? "font-medium text-foreground" : "text-primary"} onClick={() => setRecordTool(tool)}>{tool === "open" ? "Open offer" : tool === "import" ? "Import local review" : "Delete ciphertext"}</button>)}</div>}
+        {(mode !== "supplier" || recordTool === "open") && <div className="flex flex-wrap gap-3">
+          {mode === "supplier" && !localKey && <Action disabled={!fresh} onClick={onRequestKey}>Load privacy key</Action>}
+          {(mode !== "supplier" || localKey) && <Action
             type="button"
             disabled={
               !fresh ||
@@ -312,8 +314,8 @@ function TenderContent({
               void run(`open:${record.id}`, () => openRecord(record, kind));
             }}
           >
-            Open selected content in this tab
-          </Action>
+            Open sealed content
+          </Action>}
           <Action
             type="button"
             disabled={
@@ -344,10 +346,11 @@ function TenderContent({
               });
             }}
           >
-            Export encrypted job for local CLI
+            Export encrypted job
           </Action>
-          <label className="text-xs">
-            Import a locally opened review
+        </div>}
+          {(mode !== "supplier" || recordTool === "import") && <label className="text-xs">
+            Local review JSON
             <input
               type="file"
               accept="application/json,.json"
@@ -389,13 +392,14 @@ function TenderContent({
                     value: review.opened,
                     suggestion: review.suggestedTerms,
                   });
+                  if (mode === "supplier") supplierView("opened");
                 });
               }}
             />
-          </label>
-        </div>
-        {canDelete && record.contentAvailable && (
+          </label>}
+        {canDelete && record.contentAvailable && (mode !== "supplier" || recordTool === "delete") && (
           <form
+            key={`${record.id}:${record.commitment}`}
             className="flex flex-wrap items-center gap-3"
             onSubmit={(event) => {
               event.preventDefault();
@@ -420,6 +424,7 @@ function TenderContent({
   }
   return (
     <div className="grid min-w-0 gap-5">
+      {mode === "supplier" && supplierTask !== "overview" && <button type="button" disabled={!fresh} className="inline-flex items-center gap-1 justify-self-start text-sm text-muted-foreground" onClick={() => supplierView(supplierTask === "record" ? supplierMandate ? "mandate" : "offers" : supplierTask === "opened" ? "record" : supplierTask === "reply" ? "mandate" : supplierTask === "decision" ? "agreement" : "overview")}><ChevronLeft size={16}/>Back</button>}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">
@@ -432,6 +437,8 @@ function TenderContent({
         </div>
         <Status value={tender.historical ? "historical" : tender.state} />
       </div>
+      {mode === "supplier" && supplierTask === "overview" && <><div className="grid gap-3 rounded-2xl bg-muted/50 p-5"><p className="text-xs text-muted-foreground">Commercial budget</p><p className="text-2xl font-medium">{usd(tender.terms.budget)} USDC</p><p className="text-sm">{tender.terms.minimumQuantity} to {tender.terms.quantity} {tender.terms.unit}</p><p className="text-xs text-muted-foreground">Bids close {new Date(tender.terms.bidDeadline).toLocaleString()}</p></div><div className="flex flex-wrap gap-2">{[["terms", "Tender terms"], ["offers", "Offers"], ["mandates", "Negotiations"], ["agreements", "Agreements"], ["history", "History"]].map(([task, label]) => <button key={task} type="button" disabled={!fresh} className="rounded-full bg-muted px-4 py-2 text-sm" onClick={() => supplierView(task)}>{label}</button>)}</div>{tender.invites.length > 1 && <Field label="Business profile"><select className={control} value={supplierInvite} disabled={!fresh} onChange={event => { setSupplierInvite(event.target.value); setOpened(null); setSupplierMandate(""); setSupplierRecord(""); }}>{tender.invites.map(invite => <option key={invite.id} value={invite.id}>{invite.supplier.name} · v{invite.supplierVersion}</option>)}</select></Field>}</>}
+      {(mode !== "supplier" || supplierTask === "terms") && <>
       <p className="whitespace-pre-wrap break-words text-sm">
         {tender.terms.specification}
       </p>
@@ -452,9 +459,7 @@ function TenderContent({
         <br />
         Award rules: {tender.terms.awardRule}
       </p>
-      <p className="break-all text-xs">
-        Tender terms SHA-256: {tender.termsHash}
-      </p>
+      <Field as="div" label="Tender terms hash"><Address value={tender.termsHash} label="tender terms hash"/></Field></>}
       {mode === "company" && !tender.historical && (
         <form
           className="grid gap-3 rounded-lg border p-3"
@@ -519,7 +524,7 @@ function TenderContent({
           </div>
         </form>
       )}
-      {tender.invites.map((invite) => (
+      {tender.invites.filter(invite => mode !== "supplier" || invite.id === supplierInvite && ["overview", "offer", "withdraw", "offers", "record", "mandates", "mandate", "reply"].includes(supplierTask)).map((invite) => (
         <article
           key={invite.id}
           className="grid min-w-0 gap-4 rounded-lg border p-4"
@@ -533,26 +538,23 @@ function TenderContent({
               network={invite.supplier.network}
               assets={assets}
             />
-            <p className="mt-2 text-xs text-muted-foreground">
-              Actual confirmed payout preference snapshot. This workflow cannot
-              redirect funds or replace that destination.
-            </p>
+            {mode !== "supplier" && <p className="mt-2 text-xs text-muted-foreground">Confirmed receiving profile. Sourcing cannot redirect payouts.</p>}
           </div>
           {!invite.identityCurrent && (
             <p role="status" className="text-sm text-amber-900">
-              This invitation is historical or its supplier identity changed.
-              New offers, negotiation and agreement acceptance are held.
-              Existing obligations and history remain.
+              Supplier profile changed. New offers and acceptance are held.
             </p>
           )}
-          {mode === "supplier" &&
+          {mode === "supplier" && supplierTask === "overview" && <div className="flex flex-wrap gap-3">{active && invite.identityCurrent && tender.state === "open" && now < Date.parse(tender.terms.bidDeadline) && !liveAgreement && <Action disabled={!fresh} onClick={() => localKey ? supplierView("offer") : onRequestKey?.()}>{localKey ? "Prepare offer" : "Load privacy key"}</Action>}{active && invite.identityCurrent && invite.offers[0]?.status === "submitted" && !liveAgreement && <button type="button" disabled={!fresh} className="text-sm text-muted-foreground" onClick={() => supplierView("withdraw")}>Withdraw current offer</button>}</div>}
+          {mode === "supplier" && supplierTask === "offer" &&
             active &&
             invite.identityCurrent &&
             tender.state === "open" &&
             now < Date.parse(tender.terms.bidDeadline) &&
             !liveAgreement && (
               <OfferEditor
-                key={`${invite.id}:${invite.offers[0]?.id ?? "new"}:${opened?.suggestion ? "suggestion" : "manual"}`}
+                compact
+                key={`${tender.generation}:${invite.id}:${invite.offers[0]?.id ?? "new"}:${opened?.suggestion ? "suggestion" : "manual"}`}
                 tender={tender.terms}
                 initial={
                   opened?.binding.inviteId === invite.id
@@ -560,7 +562,7 @@ function TenderContent({
                     : undefined
                 }
                 busy={!fresh || !localKey || invite.offers.length >= 20}
-                label="Seal and submit immutable offer revision"
+                label="Seal and submit offer"
                 onSave={(terms) =>
                   run("offer", async () => {
                     const envelope = await seal(
@@ -577,13 +579,14 @@ function TenderContent({
                 }
               />
             )}
-          {mode === "supplier" &&
+          {mode === "supplier" && supplierTask === "withdraw" &&
             active &&
             invite.identityCurrent &&
             invite.offers[0]?.status === "submitted" &&
             !liveAgreement && (
               <form
-                className="flex flex-wrap gap-3"
+                key={`${invite.id}:${invite.offers[0]?.id}:${tender.generation}`}
+                className="grid gap-4"
                 onSubmit={(event) => {
                   event.preventDefault();
                   const value = new FormData(event.currentTarget);
@@ -607,19 +610,19 @@ function TenderContent({
                 <Action disabled={!fresh}>Withdraw current offer</Action>
               </form>
             )}
-          <details>
+          {(mode !== "supplier" || supplierTask === "offers" || supplierTask === "record" && !supplierMandate) && <details open={mode === "supplier"}>
             <summary className="cursor-pointer text-sm">
-              Sealed offer history ({invite.offers.length})
+              Sealed offers ({invite.offers.length})
             </summary>
             <div className="mt-3 grid gap-3">
               {records(invite, invite.offers, "offer")}
               {!invite.offers.length && (
                 <Empty>
-                  No sealed offers submitted. No bid means no agreement or PO.
+                  No sealed offers yet.
                 </Empty>
               )}
             </div>
-          </details>
+          </details>}
           {mode === "company" &&
             canPrepare &&
             active &&
@@ -648,7 +651,8 @@ function TenderContent({
                 </div>
               </details>
             )}
-          {invite.mandates.map((mandate) => (
+          {mode === "supplier" && supplierTask === "mandates" && (invite.mandates.length ? <div className="divide-y rounded-2xl border px-4">{invite.mandates.map((mandate, index) => <button type="button" key={mandate.id} disabled={!fresh} onClick={() => { setSupplierMandate(mandate.id); supplierView("mandate"); }} className="flex w-full items-center justify-between gap-3 py-4 text-left"><div><p className="text-sm font-medium">Negotiation {index + 1}</p><p className="mt-1 text-xs text-muted-foreground">Up to {usd(mandate.terms.maximumTotal)} USDC</p></div><Status value={mandate.state}/><ChevronRight size={16}/></button>)}</div> : <Empty>No negotiation mandates.</Empty>)}
+          {invite.mandates.filter(mandate => mode !== "supplier" || mandate.id === supplierMandate && ["mandate", "reply", "record"].includes(supplierTask)).map((mandate) => (
             <section
               key={mandate.id}
               className="grid min-w-0 gap-3 rounded-lg border p-3"
@@ -670,9 +674,7 @@ function TenderContent({
               <p className="whitespace-pre-wrap text-xs">
                 {mandate.terms.instruction}
               </p>
-              <p className="break-all text-xs">
-                Authorized terms SHA-256: {mandate.terms_hash}
-              </p>
+              <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Authorized terms hash</summary><div className="mt-3"><Address value={mandate.terms_hash} label="mandate terms hash"/></div></details>
               {mode === "company" &&
                 canApprove &&
                 active &&
@@ -716,7 +718,8 @@ function TenderContent({
                   </form>
                 )}
               {records(invite, mandate.rounds, "negotiation", mandate)}
-              {active &&
+              {mode === "supplier" && supplierTask === "mandate" && active && tender.state === "revealed" && !liveAgreement && invite.identityCurrent && mandate.state === "approved" && now < Date.parse(mandate.terms.expiresAt) && mandate.rounds.length < mandate.terms.maximumRounds * 2 && mandate.rounds.length % 2 === 1 && <div><Action disabled={!fresh} onClick={() => localKey ? supplierView("reply") : onRequestKey?.()}>{localKey ? "Prepare response" : "Load privacy key"}</Action></div>}
+              {(mode !== "supplier" || supplierTask === "reply") && active &&
                 tender.state === "revealed" &&
                 !liveAgreement &&
                 invite.identityCurrent &&
@@ -727,7 +730,8 @@ function TenderContent({
                   (mandate.rounds.length % 2 === 0 ? "company" : "supplier") &&
                 (mode !== "company" || canPrepare) && (
                   <OfferEditor
-                    key={`${mandate.id}:${mandate.rounds.length}:${opened?.id ?? "new"}`}
+                    compact={mode === "supplier"}
+                    key={`${tender.generation}:${mandate.terms_hash}:${mandate.id}:${mandate.rounds.length}:${opened?.id ?? "new"}`}
                     tender={tender.terms}
                     mandate={mandate.terms}
                     initial={
@@ -761,7 +765,7 @@ function TenderContent({
           ))}
         </article>
       ))}
-      {opened && (
+      {opened && (mode !== "supplier" || supplierTask === "opened") && (
         <section
           className="grid min-w-0 gap-3 rounded-lg border p-4"
           aria-label="Locally opened commercial terms"
@@ -778,7 +782,7 @@ function TenderContent({
             <button
               type="button"
               className="text-xs text-primary"
-              onClick={() => setOpened(null)}
+              onClick={() => { setOpened(null); if (mode === "supplier") supplierView("record"); }}
             >
               Forget plaintext from this view
             </button>
@@ -796,9 +800,8 @@ function TenderContent({
           </p>
           <p className="text-xs">
             Delivery {opened.value.terms.deliveryDate}, valid until{" "}
-            {new Date(opened.value.terms.validUntil).toLocaleString()}. Opening
-            is not supplier acceptance, an award, proof of truthful source
-            claims or a payment.
+            {new Date(opened.value.terms.validUntil).toLocaleString()}.
+            Opening does not accept these terms.
           </p>
           {opened.suggestion && (
             <p className="text-xs">
@@ -847,7 +850,8 @@ function TenderContent({
             )}
         </section>
       )}
-      {tender.agreements.map((value) => (
+      {mode === "supplier" && supplierTask === "agreements" && (tender.agreements.length ? <div className="divide-y rounded-2xl border px-4">{tender.agreements.map(value => <button type="button" key={value.id} disabled={!fresh} onClick={() => { setSupplierAgreement(value.id); supplierView("agreement"); }} className="flex w-full items-center justify-between gap-3 py-4 text-left"><div><p className="text-sm font-medium">Agreement v{value.version}</p><p className="mt-1 text-xs text-muted-foreground">{usd(value.total)} USDC</p></div><Status value={value.state}/><ChevronRight size={16}/></button>)}</div> : <Empty>No final agreements.</Empty>)}
+      {tender.agreements.filter(value => mode !== "supplier" || value.id === supplierAgreement && ["agreement", "decision"].includes(supplierTask)).map((value) => (
         <section
           key={value.id}
           className="grid min-w-0 gap-3 rounded-lg border p-4"
@@ -884,16 +888,15 @@ function TenderContent({
               : "pending"}
             .
           </p>
-          <p className="break-all text-xs">
-            Exact immutable agreement SHA-256: {value.terms_hash}
-          </p>
-          <p className="text-xs text-muted-foreground">{value.disclosure}</p>
-          {!tender.historical &&
+          <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Agreement hash and disclosure</summary><div className="mt-3 grid gap-3"><Address value={value.terms_hash} label="agreement terms hash"/><p>{value.disclosure}</p></div></details>
+          {mode === "supplier" && supplierTask === "agreement" && !tender.historical && value.state !== "cancelled" && value.state !== "disputed" && <div><Action disabled={!fresh} onClick={() => supplierView("decision")}>Review decision</Action></div>}
+          {(mode !== "supplier" || supplierTask === "decision") && !tender.historical &&
             value.state !== "cancelled" &&
             value.state !== "disputed" &&
             (mode !== "company" || canApprove) && (
               <form
-                className="grid gap-3"
+                key={`${value.id}:${value.version}:${value.terms_hash}:${tender.generation}`}
+                className="grid gap-4"
                 onSubmit={(event) => {
                   event.preventDefault();
                   const values = new FormData(event.currentTarget);
@@ -999,19 +1002,12 @@ function TenderContent({
                 </div>
               </form>
             )}
-          {value.commitment_id && (
-            <p className="break-all text-xs">
-              Existing PO: {value.commitment_id}. Inspect it in Purchase
-              commitments. A sourcing dispute does not revoke an already
-              approved PO, pause its payments or erase delivered funds; use that
-              PO's normal controls.
-            </p>
-          )}
+          {value.commitment_id && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Linked purchase commitment</summary><div className="mt-3 grid gap-2"><Address value={value.commitment_id} label="purchase commitment ID"/><p>Existing purchase and payment approvals remain separate.</p></div></details>}
         </section>
       ))}
-      <details>
+      {(mode !== "supplier" || supplierTask === "history") && <details open={mode === "supplier"}>
         <summary className="cursor-pointer text-sm">
-          Party-scoped decision history
+          Decision history
         </summary>
         <div className="mt-3 grid gap-3">
           {tender.history.map((value) => (
@@ -1024,14 +1020,8 @@ function TenderContent({
             </div>
           ))}
         </div>
-      </details>
-      <p className="text-xs leading-5 text-muted-foreground">
-        {tender.privacy} Ciphertext deletion keeps commitments, decision history
-        and any already disclosed final terms. Local downloads, backups and
-        provider records require separate company controls. Optional verified AI
-        suggestions hold without configured credentials and approved
-        measurements; no hosted fallback exists.
-      </p>
+      </details>}
+      {(mode !== "supplier" || supplierTask === "terms") && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Privacy and retention</summary><p className="mt-3 leading-5">{tender.privacy} Ciphertext deletion keeps commitments and disclosed terms. Local files need separate deletion. Verified AI suggestions require configured credentials and approved measurements; no hosted fallback.</p></details>}
     </div>
   );
 }
@@ -1093,7 +1083,7 @@ function AgreementPanel({
     [selected, setSelected] = useState(""),
     [selectedVersion, setSelectedVersion] = useState(""),
     [localKey, setLocalKey] = useState<LocalKey | null>(null),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""), [showKeys, setShowKeys] = useState(false);
   const { busy, error, run } = useAction(),
     resource = useResource<
       ReturnType<typeof companyOverview> | ReturnType<typeof supplierOverview>
@@ -1108,20 +1098,22 @@ function AgreementPanel({
   const refresh = () => {
     setRevision((value) => value + 1);
     onRefresh?.();
-    setNotice("Recorded. No financial signature or funds movement occurred.");
+    setNotice("Saved.");
   };
   return (
     <Panel
       title={
         mode === "company"
           ? "Private sourcing and agreements"
-          : "My sealed sourcing invitations"
+          : showKeys ? "Privacy key" : selected ? "Private agreement" : "Private invitations"
       }
-      description="Your sealed offers, negotiations and commercial agreements." help="Company-owned sealed offers use exact-party commercial acceptance. Ordinary purchase and payment approvals stay separate."
+      action={mode === "supplier" && !showKeys ? <button type="button" disabled={!!busy} className="text-sm text-primary" onClick={() => setShowKeys(true)}>{localKey ? "Manage privacy key" : "Privacy key"}</button> : undefined}
     >
       <div className="grid min-w-0 gap-5">
-        <details className="rounded-2xl border border-border bg-white px-5 py-4"><summary className="cursor-pointer text-sm font-medium">{localKey?"Private key loaded":"Privacy keys and operator tools"}</summary><div className="mt-4 grid gap-4"><KeyControl
+        {mode === "supplier" && showKeys && <button type="button" disabled={!!busy} className="inline-flex items-center gap-1 justify-self-start text-sm text-muted-foreground" onClick={() => setShowKeys(false)}><ChevronLeft size={16}/>{selected ? "Tender" : "Invitations"}</button>}
+        {(mode !== "supplier" || showKeys) && <details open={mode === "supplier"} className="rounded-2xl border border-border bg-white px-5 py-4"><summary className="cursor-pointer text-sm font-medium">{localKey?"Private key loaded":"Privacy keys and operator tools"}</summary><div className="mt-4 grid gap-4"><KeyControl
           value={localKey}
+          compact={mode === "supplier"}
           busy={!!busy}
           run={run}
           onLoad={setLocalKey}
@@ -1136,13 +1128,14 @@ function AgreementPanel({
           from a reviewed local checkout. Only the optional suggestion command
           contacts NEAR AI Cloud. Its fees, credentials and local file retention
           belong to that company.
-        </p></div></details>
-        {resource.loading ? (
+        </p></div></details>}
+        {!showKeys && !selected && (resource.loading ? (
           <Empty>Loading private sourcing records...</Empty>
         ) : resource.data?.tenders.length ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="divide-y rounded-2xl border px-4">
             {resource.data.tenders.map((value) => (
-              <Action
+              <button
+                className="flex w-full items-center justify-between gap-3 py-4 text-left text-sm"
                 key={value.id}
                 type="button"
                 disabled={!!busy || resource.refreshing}
@@ -1152,17 +1145,17 @@ function AgreementPanel({
                   setNotice("");
                 }}
               >
-                {value.reference} · {value.state}
-              </Action>
+                <span className="font-medium">{value.reference}</span><span className="ml-auto"><Status value={value.state}/></span><ChevronRight size={16}/>
+              </button>
             ))}
           </div>
         ) : (
           <Empty>
             {mode === "company"
               ? "No private tenders yet. Load or create a local key, then save your first sourcing draft."
-              : "No sealed tender invitations. A company must invite your confirmed business receiving profile first."}
+              : "No private invitations yet."}
           </Empty>
-        )}
+        ))}
         {resource.data &&
           mode === "company" &&
           canPrepare &&
@@ -1188,10 +1181,10 @@ function AgreementPanel({
               </div>
             </details>
           )}
-        {selected && (
+        {selected && !showKeys && (
           <section className="grid min-w-0 gap-4 rounded-lg border p-4">
             <div className="flex flex-wrap justify-between gap-3">
-              <h3 className="text-sm font-medium">Selected tender</h3>
+              <span/>
               <button
                 type="button"
                 className="text-xs text-primary"
@@ -1201,7 +1194,7 @@ function AgreementPanel({
                   setSelectedVersion("");
                 }}
               >
-                Close tender
+                All invitations
               </button>
             </div>
             {detail.loading ? (
@@ -1213,7 +1206,7 @@ function AgreementPanel({
             ) : (
               tender && (
                 <>
-                  <Field label="Immutable tender version history">
+                  <Field label="Tender version">
                     <select
                       className={control}
                       value={String(tender.selectedVersion)}
@@ -1251,6 +1244,7 @@ function AgreementPanel({
                     canDelete={canDelete}
                     run={run}
                     onMutate={refresh}
+                    onRequestKey={() => setShowKeys(true)}
                   />
                   {mode === "company" &&
                     canPrepare &&
