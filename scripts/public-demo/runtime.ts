@@ -96,6 +96,10 @@ export class PublicDemoRuntime {
     if(access&&method==="GET"&&/^\/api\/organizations\/[^/]+\/distributions\/[^/]+$/.test(path))return Response.json({distribution:inspectDemoDistribution(access,path.split("/").at(-1)!,session.scenario.distributionStates)});
     if(method==="GET"&&/^\/api\/recipient-distributions\/[^/]+$/.test(path))return Response.json(inspectDemoClaim(identities[profile].id,path.split("/").at(-1)!,session.scenario.distributionStates));
     if(access&&method==="GET"&&path===`/api/organizations/${organizationId}/treasury-policy`)return Response.json({configured:true,config:getTreasury(access).config,current:{...demoPolicy(organizationId!),token_contract:getTreasury(access).config?.token_contract},treasury:getTreasury(access),localPaused:demoPolicy(organizationId!).paused,simulated:true});
+    if(access&&method==="GET"&&path===`/api/organizations/${organizationId}/access-recovery/status`){
+      requirePermission(access,"company:manage");const config=getTreasury(access).config;
+      return Response.json({configured:!!config,treasuryAccount:config?.near_account_id,network:config?.network,chain:{...demoPolicy(organizationId!),token_contract:config?.token_contract},codeHash:null,companyOwner:access.userId===identities.owner.id,requests:[],simulated:true});
+    }
     if(access&&method==="POST"&&path===`/api/organizations/${organizationId}/funding`)return Response.json(previewDemoFunding(access,this.tokens,JSON.parse(body)),{status:201});
     if(access&&method==="POST"&&/^\/api\/organizations\/[^/]+\/funding\/[^/]+\/reconcile$/.test(path)){
       const id=path.split("/").at(-2)!;creditDemoFunding(access,id);session.funded=true;return Response.json(row("SELECT * FROM funding_legs WHERE id=? AND organization_id=?",id,organizationId!));

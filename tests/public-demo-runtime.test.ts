@@ -87,6 +87,7 @@ test("active demo distributions and personal claims inspect without RPC and pres
   const detail=await request(`${base}/distributions/${active.id}`,visitor.cookie);assert.equal(detail.status,200);
   const pool=(await detail.json()).distribution;assert.equal(pool.chain.total,"400000000");assert.equal(pool.source_tx_hash,null);assert.equal(pool.simulated,true);
   assert.equal((await request(`${base}/treasury-policy`,visitor.cookie)).status,200);
+  const recovery=await request(`${base}/access-recovery/status`,visitor.cookie);assert.equal(recovery.status,200);assert.equal((await recovery.json()).simulated,true);
   await request("/action",visitor.cookie,{action:"profile",profile:"maya"});
   const own=await(await request("/api/recipient-distributions",visitor.cookie)).json();assert(own.claims.length);
   const claim=await request(`/api/recipient-distributions/${own.claims[0].id}`,visitor.cookie);assert.equal(claim.status,200);assert.equal((await claim.json()).amount,"400000000");
