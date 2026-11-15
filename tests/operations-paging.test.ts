@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { getDb, row, transaction } from "../src/server/db";
 import { PERMISSIONS } from "../src/server/identity/session";
+import { encrypt } from "../src/server/identity/crypto";
+import { getRecipient, saveVersion } from "../src/server/identity/recipients";
 import type { AccessContext } from "../src/server/context";
 import { createBill, approveBill } from "../src/server/business/service";
 import { jobPage, recurringPage, templatePage, noticePage, overview, readNotice, retryJob, setRecurring } from "../src/server/operations/service";
@@ -90,4 +92,25 @@ test("notice authorization precedes paging and older read receipts preserve accu
   const foreign = fixture(); assert.throws(() => readNotice(foreign.viewer, earliest), /not found/);
   const privateId = row<{ id: string }>("SELECT id FROM notices WHERE organization_id=? AND required_permission='documents:manage'", access.organizationId)!.id;
   assert.throws(() => readNotice(viewer, privateId), /not found/);
+});
+
+test("notice payment context uses business labels and respects company and payment access", () => {
+  const { access, viewer, recipientId, at } = fixture(), foreign = fixture(), db = getDb();
+  db.prepare("UPDATE recipients SET name=? WHERE id=?").run(encrypt("Recorded supplier"), recipientId);
+  saveVersion(getRecipient(access.organizationId, recipientId), access.userId);
+  const bill = createBill(access, { recipientId, reference: "DESIGN-NOV", title: "Design services", amount: "1250000000", maxFee: "1000000" });
+  db.prepare("UPDATE recipients SET name=?,version=version+1 WHERE id=?").run(encrypt("Renamed supplier"), recipientId);
+  const otherBill = createBill(foreign.access, { recipientId: foreign.recipientId, reference: "PRIVATE-INVOICE", title: "Private services", amount: "9000000000", maxFee: "1000000" });
+  const insert = (id: string, entityId: string | null, permission = "company:read") => db.prepare("INSERT INTO notices(id,organization_id,title,body,entity_id,required_permission,created_at) VALUES(?,?,'Payment update','Review the record',?,?,?)").run(id, access.organizationId, entityId, permission, at);
+  insert("local-notice", bill.payment_id);
+  insert("foreign-notice", otherBill.payment_id);
+  insert("missing-notice", "deleted-payment");
+  insert("general-notice", null);
+  insert("restricted-notice", bill.payment_id, "documents:manage");
+  const notices = new Map(noticePage(viewer, 1, 25).notices.map(notice => [notice.id, notice]));
+  assert.deepEqual(notices.get("local-notice")?.payment, { reference: "DESIGN-NOV", recipientName: "Recorded supplier", amount: "1250000000" });
+  for (const id of ["foreign-notice", "missing-notice", "general-notice"]) assert.equal(notices.get(id)?.payment, null);
+  assert.equal(notices.has("restricted-notice"), false);
+  assert.ok(noticePage({ ...viewer, permissions: ["company:read"] }, 1, 25).notices.every(notice => notice.payment === null));
+  assert.equal(noticePage(viewer, 2, 25).notices.length, 0);
 });

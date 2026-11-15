@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { assertFeature } from "../billing/entitlements";
 import { companyDate } from "../../lib/company-time";
+import { paymentLabel } from "../../lib/payment-label";
 import { ApiError, requirePermission, type AccessContext } from "../context";
 import { getDb, row, rows, transaction } from "../db";
 import { decrypt, encrypt } from "../identity/crypto";
 import { treasuryArgs, view, validNearAccount } from "../payments/near";
+import { recordedRecipientName } from "../payments/recipient-names";
 import { purgePrivateEvidence } from "../reconciliation/evidence";
 import { purgeFinancePlans } from "../assistant/finance";
 import { purgeDocumentRetention } from "../document-intake/service";
@@ -120,7 +122,13 @@ export function noticePage(access: AccessContext, page: number, pageSize: number
     const counts = row<{ total: number; unread: number }>(`SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN ${readAt} IS NULL THEN 1 ELSE 0 END),0) AS unread ${from}`, ...values)!;
     const total = status === "unread" ? counts.unread : counts.total;
     const notices = rows<Notice>(`SELECT n.id,n.title,n.body,n.entity_id,n.required_permission,n.created_at,${readAt} AS read_at ${from} ${status === "unread" ? `AND ${readAt} IS NULL` : ""} ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`, ...values, pageSize, (page - 1) * pageSize);
-    return { notices, page, pageSize, total, unreadTotal: counts.unread, hasMore: page * pageSize < total };
+    const entityIds = notices.flatMap(notice => notice.entity_id ? [notice.entity_id] : []);
+    const context = access.permissions.includes("payments:read") && entityIds.length
+      ? rows<{ id: string; reference: string; kind: string; metadata: string; recipient_id: string; recipient_version: number; amount: string }>(
+        `SELECT id,reference,kind,metadata,amount,recipient_id,recipient_version FROM payments WHERE organization_id=? AND id IN (${entityIds.map(() => "?").join(",")})`, access.organizationId, ...entityIds,
+      ) : [];
+    const payments = new Map(context.map(payment => [payment.id, { reference: paymentLabel(payment), recipientName: recordedRecipientName(access.organizationId, payment), amount: payment.amount }]));
+    return { notices: notices.map(notice => ({ ...notice, payment: notice.entity_id ? payments.get(notice.entity_id) ?? null : null })), page, pageSize, total, unreadTotal: counts.unread, hasMore: page * pageSize < total };
   });
 }
 export function readNotice(access: AccessContext, noticeId: string) {

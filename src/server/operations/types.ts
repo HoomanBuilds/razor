@@ -16,6 +16,7 @@ export type RecurringRuleView = Omit<RecurringRule, "snapshot_ciphertext">;
 export interface Notice {
   id: string; title: string; body: string; entity_id: string | null; read_at: string | null;
   required_permission: string; created_at: string;
+  payment?: { reference: string; recipientName: string; amount: string } | null;
 }
 export interface AgentMandate {
   organization_id: string; executor_account_id: string; max_amount: string; expires_at: string;
