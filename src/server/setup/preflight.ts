@@ -97,6 +97,12 @@ export async function setupPreflight(options: Options = {}) {
   add("executor", !executorConfigured ? "disabled" : workerReady ? "pass" : "blocked", !executorConfigured ? "Optional automatic execution is disabled until a real company has a dedicated restricted executor and owner-approved grant. Manual wallet-authorized payments remain available." : "Automatic execution requires a dedicated executor account, the shared treasury account, exact company ID, matching network and an ed25519 key. Only an execute_payment function-call key is accepted remotely.");
   if (!env.RESEND_API_KEY && !env.NOTIFICATION_FROM_EMAIL) add("email", "disabled", "Optional email transport is disabled; in-app notifications remain available.");
   else add("email", env.RESEND_API_KEY && env.NOTIFICATION_FROM_EMAIL ? "pass" : "blocked", "Optional email requires both RESEND_API_KEY and NOTIFICATION_FROM_EMAIL. Domain verification and actual delivery remain separate.");
+  if (env.RESEND_API_KEY && env.NOTIFICATION_FROM_EMAIL) {
+    const sender = env.NOTIFICATION_FROM_EMAIL.trim().match(/^(?:[^<>\r\n]+<)?([^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>?$/)?.[1];
+    if (!sender) add("email-sender", "blocked", "Configure a valid single sender email address, optionally with a display name.");
+    else if (sender.toLowerCase().endsWith("@resend.dev")) add("email-sender", "warning", "The shared Resend test sender cannot deliver invitations to arbitrary employees. Verify your own domain in Resend and configure its sender address before enabling company invitation email.");
+    else add("email-sender", "not_checked", "The sender uses a custom domain. Verify its DNS records in Resend; configured credentials alone do not establish domain verification or email delivery.");
+  }
 
   const billingMode=env.RAZOR_BILLING_MODE || "pilot";
   add("billing-mode",billingMode==="pilot"?"warning":billingMode==="enforced"?"pass":"blocked","Pilot mode grants bounded complimentary Pro access. Enforced mode requires a paid period for new commercial operations; neither mode charges wallets automatically.");

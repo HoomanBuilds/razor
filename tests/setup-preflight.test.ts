@@ -123,6 +123,17 @@ test("incomplete or invalid capability groups remain blocked instead of claiming
   assert.equal(report.configurationReady, false); assert(!JSON.stringify(report).includes("private-mail-secret"));
 });
 
+test("email readiness distinguishes the shared test sender from a verified custom domain", async () => {
+  const configured = { ...env, RESEND_API_KEY: "private-mail-secret", NOTIFICATION_FROM_EMAIL: "Razor <onboarding@resend.dev>" };
+  const shared = await setupPreflight({ env: configured, artifactDirectory: absentArtifacts, nodeVersion: "24.22.1" });
+  assert.equal(status(shared, "email-sender"), "warning");
+  const custom = await setupPreflight({ env: { ...configured, NOTIFICATION_FROM_EMAIL: "Razor <notifications@razorfi.xyz>" }, artifactDirectory: absentArtifacts, nodeVersion: "24.22.1" });
+  assert.equal(status(custom, "email-sender"), "not_checked");
+  const malformed = await setupPreflight({ env: { ...configured, NOTIFICATION_FROM_EMAIL: "invalid\r\nBcc: hidden@example.com" }, artifactDirectory: absentArtifacts, nodeVersion: "24.22.1" });
+  assert.equal(status(malformed, "email-sender"), "blocked");
+  assert(!JSON.stringify(shared).includes(configured.RESEND_API_KEY));
+});
+
 test("unconfigured optional AI and automatic execution do not block manual company operations", async () => {
   const configured = { ...env };
   for (const key of ["RAZOR_EXECUTOR_ACCOUNT_ID", "RAZOR_EXECUTOR_TREASURY_ACCOUNT_ID", "RAZOR_EXECUTOR_COMPANY_ID", "RAZOR_EXECUTOR_NETWORK", "RAZOR_EXECUTOR_PRIVATE_KEY", "NEAR_AI_API_KEY", "NEAR_AI_MODEL", "NEAR_AI_MODEL_COMPOSE_SHA256", "NEAR_AI_GATEWAY_COMPOSE_SHA256"]) delete configured[key];
