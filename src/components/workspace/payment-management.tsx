@@ -1,5 +1,6 @@
 "use client";
 
+import { BillApproval } from "./bill-approval";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, CircleCheck, FileText, History, LockKeyhole, RefreshCw, Search, ShieldCheck, Wallet, X } from "lucide-react";
 import { AssetIdentity, TokenLogo } from "@/components/assets/asset-identity";
@@ -23,7 +24,7 @@ type Overview = ReturnType<typeof managementOverview>;
 type RunReview = Awaited<ReturnType<typeof payrollPreview>>;
 type PaymentReview = ReturnType<typeof managedPaymentReview>;
 type BillReview = Awaited<ReturnType<typeof billBatchPreview>>;
-interface Props { mode?: "all" | "payroll" | "bills" | "payments"; initialRunId?: string; initialBillId?: string; initialPaymentId?: string; onRunChange?: (id: string) => void }
+interface Props { mode?: "all" | "payroll" | "bills" | "payments"; initialRunId?: string; initialBillId?: string; initialPaymentId?: string; onRunChange?: (id: string) => void; onBusyChange?: (busy: boolean) => void }
 
 function moneyInput(value: FormDataEntryValue | null, signed = false) {
   const text = String(value ?? "0").trim();
@@ -48,6 +49,7 @@ function FundingReview({ value, openTreasury }: { value: RunReview["funding"]; o
 export function PaymentManagementPanel(props: Props) {
   const { base, organization } = useWorkspace();
   if (!organization.permissions?.includes("payments:read")) return null;
+  if (props.mode === "bills") return <BillApproval key={`${base}:${props.initialBillId}`} initialBillId={props.initialBillId} onBusyChange={props.onBusyChange} />;
   if (props.mode === "payments") return <PaymentToolsWorkspace key={`${base}:${props.initialPaymentId}`} initialPaymentId={props.initialPaymentId} />;
   return <ManagementWorkspace key={`${base}:${props.mode}:${props.initialRunId}:${props.initialBillId}:${props.initialPaymentId}`} {...props} />;
 }

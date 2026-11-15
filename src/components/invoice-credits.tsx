@@ -1,12 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { dateLabel, microUsd, usdcInput, usd } from "@/lib/format";
 import { useWorkspace } from "./workspace/context";
 import { useAction, useResource } from "./workspace/hooks";
 import { Action, control, Empty, Field, Panel, Status } from "./workspace/shared";
-import { InvoiceLiability } from "./workspace/invoice-liability";
 import type { CreditNote, CreditReview, SupplierBill } from "@/server/invoice-credits/service";
 
 interface NotePage { notes: CreditNote[]; page: number; pageSize: number; hasMore: boolean }
@@ -119,44 +118,51 @@ export function SupplierInvoiceCredits({ refreshRevision }: { refreshRevision: n
 export function CompanyInvoiceCredits({ billId }: { billId: string }) {
   const { base, revision, refresh, organization } = useWorkspace();
   const [page, setPage] = useState(1), [selected, setSelected] = useState(""), [notice, setNotice] = useState("");
+  const [rejecting, setRejecting] = useState(false);
   const canRead = organization.permissions?.includes("payments:read"), canApprove = organization.permissions?.includes("payments:approve");
   const notes = useResource<NotePage>(canRead ? `${base}/invoice-credits?billId=${encodeURIComponent(billId)}&page=${page}` : null, revision);
   const note = notes.data?.notes.find(value => value.id === selected);
   const review = useResource<CreditReview>(canApprove && note?.status === "proposed" ? `${base}/invoice-credits/${note.id}/review` : null, revision);
   const currentReview = !notes.error && !review.error && review.data?.note.id === note?.id && review.data?.note.version === note?.version ? review.data : null;
-  const { busy, error, run } = useAction(), requestKey = useRequestKey();
+  const { busy, error, run, setError } = useAction(), requestKey = useRequestKey();
+  useEffect(() => { setError(""); }, [selected, rejecting, page, setError]);
+  const locked = !!busy || review.refreshing || notes.refreshing || !!notes.error || !!review.error;
   if (!canRead) return null;
-  return <section className="grid min-w-0 gap-4 rounded-lg border p-4" aria-label="Supplier credit notes">
-    <div><h3 className="font-medium">Supplier credit notes</h3><p className="mt-1 text-xs text-muted-foreground">A supplier proposal changes no liability until finance accepts its exact terms. Accepted credits do not return previously delivered money.</p></div>
-    {notes.error ? <p role="alert" className="text-sm text-destructive">{notes.error}</p> : notes.loading ? <Empty>Loading invoice credits...</Empty> : notes.data?.notes.length ? <div className="flex flex-wrap gap-3">{notes.data.notes.map(item => <Action key={item.id} type="button" disabled={!!busy} onClick={() => { setSelected(item.id); setNotice(""); }}>{item.reference} · {usd(item.amount)} · {item.status.replaceAll("_", " ")}</Action>)}</div> : <p className="text-sm text-muted-foreground">No supplier credit notes for this invoice.</p>}
-    {notes.data && (notes.data.hasMore || page > 1) ? <CreditPager {...notes.data} disabled={!!busy || notes.refreshing || !!notes.error || !!review.error} label="Company invoice credit pages" onPage={setPage} /> : null}
-    {note ? <CreditHistory note={note} /> : null}
-    {review.error ? <p role="alert" className="text-sm text-destructive">{review.error}</p> : null}
-    {currentReview && note?.status === "proposed" ? <div className="grid gap-4">
-      <p className="break-words rounded-lg bg-muted p-3 text-sm">Original invoice: <strong>{currentReview.bill.reference}</strong> · {currentReview.bill.company.name}<br />{currentReview.bill.title}</p>
-      <InvoiceLiability amount={currentReview.totals.originalAmount} delivered={currentReview.totals.deliveredAmount} credit={currentReview.totals.acceptedCreditAmount} setoff={currentReview.totals.noncashSetoffAmount} funded={currentReview.totals.fundedClearingAmount} remaining={currentReview.totals.remainingLiability} />
-      <p className="text-sm">This credit reduces the remaining liability by <strong>{usd(currentReview.totals.creditAmount)} USDC</strong>. After acceptance: <strong>{usd(currentReview.totals.residualLiability)} USDC</strong>.</p>
-      {currentReview.draftsToRetire.length ? <div className="rounded-lg border p-3 text-sm"><p className="font-medium">Unsigned drafts to retire</p><ul className="mt-2 list-disc space-y-2 pl-5">{currentReview.draftsToRetire.map(draft => <li key={draft.id} className="break-words">{draft.reference}: {usd(draft.amount)} USDC, maximum payment cost {usd(draft.maxFee)}. This draft will require a fresh installment and approval for any remaining liability.</li>)}</ul></div> : <p className="text-xs text-muted-foreground">No unsigned payment drafts need retirement.</p>}
-      {currentReview.locks.length ? <div role="status" className="rounded-lg border p-3 text-sm"><p className="font-medium">Acceptance is held</p><ul className="mt-2 list-disc space-y-2 pl-5">{currentReview.locks.map((lock, index) => <li key={`${lock.code}:${index}`}>{lock.message}</li>)}</ul></div> : <form key={currentReview.reviewHash} className="grid gap-3" onSubmit={event => {
-        event.preventDefault(); if (!currentReview || !note) return;
-        const values = new FormData(event.currentTarget);
-        void run("accept", async () => {
-          const payload = { expectedVersion: note.version, reviewHash: currentReview!.reviewHash, acknowledgeDraftRetirement: values.has("acknowledge") };
-          const result = await api<{ remainingLiability: string }>(`${base}/invoice-credits/${note.id}/accept`, { ...payload, idempotencyKey: requestKey({ action: "accept", id: note.id, ...payload }) });
-          refresh(); setNotice(`Supplier credit accepted. Remaining invoice liability: ${usd(result.remainingLiability)} USDC. No money was sent or refunded.`);
-        });
-      }}><label className="flex items-start gap-2 text-sm"><input name="acknowledge" type="checkbox" required disabled={!!busy || review.refreshing || notes.refreshing} /><span>I reviewed this exact credit and the listed draft retirements. Any remaining invoice needs fresh payment preparation and approval.</span></label><div><Action disabled={!!busy || review.refreshing || notes.refreshing} busy={busy === "accept"}>Accept exact supplier credit</Action></div></form>}
-      <form className="grid gap-3 rounded-lg border p-4" onSubmit={event => {
-        event.preventDefault(); if (!note) return; const values = new FormData(event.currentTarget);
-        void run("reject", async () => {
-          const payload = { expectedVersion: note.version, reason: String(values.get("reason")) };
-          await api(`${base}/invoice-credits/${note.id}/reject`, { ...payload, idempotencyKey: requestKey({ action: "reject", id: note.id, ...payload }) });
-          refresh(); setNotice("Supplier proposal rejected. The invoice liability was not reduced.");
-        });
-      }}><Field label="Reason to reject the supplier proposal"><textarea name="reason" className={control} required minLength={10} maxLength={2000} disabled={!!busy || notes.refreshing || !!notes.error || !!review.error} /></Field><div><Action disabled={!!busy || notes.refreshing || !!notes.error || !!review.error} busy={busy === "reject"}>Reject proposed credit</Action></div></form>
-    </div> : null}
-    {note?.status === "proposed" && canApprove && review.loading ? <Empty>Checking the exact credit and payment authority...</Empty> : null}
-    {notice ? <p role="status" className="text-sm text-primary">{notice}</p> : null}
-    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+  return <section className="grid min-w-0 gap-5" aria-label="Supplier credit notes" aria-busy={!!busy}>
+    {notes.error ? <p role="alert" className="text-sm text-destructive">{notes.error}</p> : notes.loading ? <Empty>Loading credits...</Empty> : !note ? <>
+      {notes.data?.notes.length ? <div className="divide-y">{notes.data.notes.map(item => <button key={item.id} type="button" disabled={!!busy} onClick={() => { setSelected(item.id); setNotice(""); setRejecting(false); }} className="flex w-full items-center justify-between gap-3 py-5 text-left"><span className="min-w-0"><span className="block text-sm font-medium">{item.reference}</span><span className="mt-2 block"><Status value={item.status} /></span></span><span className="shrink-0 text-sm font-medium tabular-nums">{usd(item.amount)}</span></button>)}</div> : notes.data && <p className="py-8 text-center text-sm text-muted-foreground">No supplier credits.</p>}
+      {notes.data && (notes.data.hasMore || page > 1) ? <CreditPager {...notes.data} disabled={locked} label="Company invoice credit pages" onPage={setPage} /> : null}
+    </> : <>
+      <button type="button" className="justify-self-start text-sm text-primary" disabled={!!busy} onClick={() => setSelected("")}>All credits</button>
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-medium">{note.reference}</h3><p className="mt-2 text-sm text-muted-foreground">{note.issuer.name ?? "Historical supplier name unavailable"}</p></div><Status value={note.status} /></div>
+      <p className="flex items-baseline gap-2 text-3xl font-medium tabular-nums">{usd(note.amount)}<span className="text-xs font-normal text-muted-foreground">USDC</span></p>
+      <p className="whitespace-pre-wrap break-words text-sm">{note.reason}</p>
+      {review.error && <p role="alert" className="text-sm text-destructive">{review.error}</p>}
+      {currentReview && note.status === "proposed" && <>
+        <dl className="grid gap-3 border-y py-4 text-sm"><div className="flex justify-between gap-3"><dt className="text-muted-foreground">Remaining invoice</dt><dd>{usd(currentReview.totals.remainingLiability)}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted-foreground">After credit</dt><dd className="font-medium">{usd(currentReview.totals.residualLiability)}</dd></div></dl>
+        <p className="text-xs text-muted-foreground">No money is sent or refunded.</p>
+        {currentReview.draftsToRetire.length > 0 && <div className="grid gap-3 text-sm"><p className="font-medium">Drafts to retire</p>{currentReview.draftsToRetire.map(draft => <div key={draft.id} className="flex flex-wrap justify-between gap-2"><span>{draft.reference}</span><span className="tabular-nums">{usd(draft.amount)} · Costs up to {usd(draft.maxFee)}</span></div>)}</div>}
+        {currentReview.locks.length > 0 ? <ul role="status" className="grid gap-2 rounded-xl bg-amber-50 p-4 text-sm text-amber-950">{currentReview.locks.map((lock, index) => <li key={`${lock.code}:${index}`}>{lock.message}</li>)}</ul> : !rejecting && <form key={currentReview.reviewHash} className="grid gap-5" onSubmit={event => {
+          event.preventDefault(); const values = new FormData(event.currentTarget);
+          void run("accept", async () => {
+            const payload = { expectedVersion: note.version, reviewHash: currentReview.reviewHash, acknowledgeDraftRetirement: values.has("acknowledge") };
+            const result = await api<{ remainingLiability: string }>(`${base}/invoice-credits/${note.id}/accept`, { ...payload, idempotencyKey: requestKey({ action: "accept", id: note.id, ...payload }) });
+            refresh(); setNotice(`Credit accepted. ${usd(result.remainingLiability)} remains.`);
+          });
+        }}><label className="flex items-start gap-2 text-sm"><input name="acknowledge" type="checkbox" required disabled={locked} className="mt-1" /><span>I reviewed this credit and its draft retirements. Any remainder needs a fresh installment and approval.</span></label><div className="flex justify-end"><Action disabled={locked} busy={busy === "accept"}>Accept credit</Action></div></form>}
+        {rejecting ? <form className="grid gap-4 border-t pt-5" onSubmit={event => {
+          event.preventDefault(); const values = new FormData(event.currentTarget);
+          void run("reject", async () => {
+            const payload = { expectedVersion: note.version, reason: String(values.get("reason")) };
+            await api(`${base}/invoice-credits/${note.id}/reject`, { ...payload, idempotencyKey: requestKey({ action: "reject", id: note.id, ...payload }) });
+            refresh(); setNotice("Credit rejected. Invoice balance unchanged."); setRejecting(false);
+          });
+        }}><Field label="Reason for rejection"><textarea name="reason" className={control} required minLength={10} maxLength={2000} disabled={locked} /></Field><div className="flex justify-between gap-3"><button type="button" className="text-sm text-muted-foreground" disabled={!!busy} onClick={() => setRejecting(false)}>Cancel</button><Action disabled={locked} busy={busy === "reject"}>Reject credit</Action></div></form> : <button type="button" disabled={locked} className="justify-self-start text-sm text-muted-foreground" onClick={() => setRejecting(true)}>Reject proposal</button>}
+      </>}
+      {note.status === "proposed" && canApprove && review.loading && <Empty>Checking credit...</Empty>}
+      <details className="border-t pt-4 text-xs text-muted-foreground"><summary className="cursor-pointer">History</summary><div className="mt-4 grid gap-3"><p>Supplier profile version {note.issuer.profileVersion} · Created {dateLabel(note.createdAt)}{note.acceptedAt ? ` · Accepted ${dateLabel(note.acceptedAt)}` : ""}</p>{note.versions.map(version => <div key={version.version}><p>Version {version.version}: {usd(version.amount)} USDC</p><p className="mt-1 whitespace-pre-wrap">{version.reason}</p></div>)}{note.events.map(event => <div key={event.id} className="border-t pt-3"><p>{event.kind.replaceAll("_", " ")} · {event.actorRole} · version {event.version}</p><p className="mt-1 whitespace-pre-wrap">{event.reason}</p></div>)}</div></details>
+    </>}
+    {notice && <p role="status" className="text-sm text-primary">{notice}</p>}
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   </section>;
 }

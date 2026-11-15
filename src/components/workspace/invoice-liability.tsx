@@ -1,5 +1,6 @@
 "use client";
 
+import { TokenLogo } from "@/components/assets/asset-identity";
 import { usd } from "@/lib/format";
 
 export function InvoiceLiability({ amount, delivered, setoff, funded, credit = "0", remaining }: {
@@ -10,21 +11,9 @@ export function InvoiceLiability({ amount, delivered, setoff, funded, credit = "
   credit?: string;
   remaining: string;
 }) {
-  const values = [
-    ["Original invoice", amount],
-    ["Delivered funds", delivered],
-    ["Accepted supplier credits", credit],
-    ["Noncash debt discharge", setoff],
-    ["Escrow-backed settlement", funded],
-    ["Remaining liability", remaining],
-  ];
-  return <div className="space-y-3">
-    <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {values.map(([label, value]) => <div key={label} className="min-w-0">
-        <dt className="text-xs text-muted-foreground">{label}</dt>
-        <dd className="mt-1 break-words text-xl font-semibold tabular-nums">{usd(value)}</dd>
-      </div>)}
-    </dl>
-    <p className="text-xs text-muted-foreground">Supplier credits and debt discharge reduce the invoice balance. Escrow credit rights and withdrawals remain separate from tokens delivered through this invoice&apos;s payment routes.</p>
+  const values = [["Invoice total", amount], ["Delivered funds", delivered], ["Supplier credits", credit], ["Noncash discharge", setoff], ["Escrow-backed settlement", funded]].filter(([, value], index) => index === 0 ? amount !== remaining : BigInt(value) > 0n);
+  return <div className="grid gap-5">
+    <div><p className="text-xs text-muted-foreground">Remaining</p><p className="mt-2 flex items-center gap-2 text-3xl font-medium tracking-tight tabular-nums"><TokenLogo symbol="USDC" size={24} />{usd(remaining)}</p></div>
+    {values.length > 0 && <dl className="grid gap-2 text-sm">{values.map(([label, value]) => <div key={label} className="flex items-start justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd className="shrink-0 tabular-nums">{usd(value)}</dd></div>)}</dl>}
   </div>;
 }

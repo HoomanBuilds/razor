@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Building2 } from "lucide-react";
 import { AssetIdentity } from "@/components/assets/asset-identity";
 import { PageMetrics } from "./page-metrics";
@@ -16,11 +16,23 @@ type Review = ReturnType<typeof reviewCommitment>;
 export type PurchaseMatch = ReturnType<typeof billCommitmentReview>;
 
 export function PurchaseMatchFields({ reference = "", date = "" }: { reference?: string; date?: string }) {
-  return <>
-    <Field label="Purchase commitment reference (optional)" hint="Name the exact approved PO. An invalid or exhausted PO holds this bill."><input name="commitmentReference" className={control} maxLength={120} defaultValue={reference} /></Field>
-    <Field label="Invoice service date (UTC)" hint="Required for a named PO. Monthly allowances reset by calendar month without rollover."><input name="commitmentDate" type="date" className={control} defaultValue={date} /></Field>
-    <label className="flex items-start gap-2 text-sm"><input name="commitmentScopeConfirmed" type="checkbox" className="mt-1" />I checked the invoice scope and quantities against the named purchase commitment.</label>
-  </>;
+  const [namedReference, setNamedReference] = useState(reference);
+  const referenceInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const form = referenceInput.current?.form;
+    const reset = () => setNamedReference(reference);
+    form?.addEventListener("reset", reset);
+    return () => form?.removeEventListener("reset", reset);
+  }, [reference]);
+  return <details onInvalidCapture={event => { event.currentTarget.open = true; }} open={!!reference || undefined} className="border-b pb-4 sm:col-span-full">
+    <summary className="cursor-pointer text-sm text-muted-foreground">Purchase order</summary>
+    <div className="mt-5 grid gap-4 sm:grid-cols-2">
+      <Field label="Exact PO reference"><input ref={referenceInput} name="commitmentReference" className={control} maxLength={120} value={namedReference} onChange={event => setNamedReference(event.target.value)} /></Field>
+      <Field label="Service date (UTC)"><input name="commitmentDate" type="date" className={control} defaultValue={date} required={!!namedReference.trim()} /></Field>
+      <label className="flex items-start gap-2 text-sm sm:col-span-2"><input name="commitmentScopeConfirmed" type="checkbox" className="mt-1" required={!!namedReference.trim()} />Scope and quantities match this purchase order.</label>
+      {namedReference.trim() && <p className="text-xs text-muted-foreground sm:col-span-2">An invalid or exhausted PO holds this invoice.</p>}
+    </div>
+  </details>;
 }
 
 export function purchaseMatchInput(values: FormData) {

@@ -1,5 +1,7 @@
 "use client";
 
+import { WORKSPACE_NAVIGATION_EVENT } from "@/lib/workspace-access";
+import { sortInvoices } from "@/lib/invoice-register";
 import { proportion } from "@/lib/payment-activity";
 
 import { useEffect, useState } from "react";
@@ -26,7 +28,7 @@ import type { PayrollCsvItem } from "@/lib/csv";
 import { BillTerms } from "./bill-terms";
 import { PaymentManagementPanel } from "./payment-management";
 import { PayrollImport, type ImportSelection } from "./payroll-import";
-import { PurchaseMatchFields, PurchaseMatchReview, purchaseMatchInput, VendorCommitments } from "./vendor-commitments";
+import { PurchaseMatchFields, purchaseMatchInput } from "./vendor-commitments";
 import { PayrollExecution } from "./payroll-execution";
 
 function dollars(value: FormDataEntryValue | null, allowZero = false): string {
@@ -43,244 +45,82 @@ function recordedPayee(payment: Payment | null, recipient?: Recipient) {
 }
 
 export function Bills() {
-  const [selectedBill, setSelectedBill] = useState("");
+  const [selectedBill, setSelectedBill] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invoice") ?? "");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [draftEdited, setDraftEdited] = useState(false);
   const [approvalBillId, setApprovalBillId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("reviewBill"));
-  const { base, recipients, organization, revision, refresh, navigate } =
-    useWorkspace();
+  const { base, recipients, recipientsLoading, recipientsError, organization, revision, refresh, navigate } = useWorkspace();
   const canRead = organization.permissions?.includes("payments:read") === true;
   const canPrepare = organization.permissions?.includes("payments:prepare") === true;
-  const canApprove = organization.permissions?.includes("payments:approve") === true;
-  const {
-    data,
-    error: loadError,
-    loading,
-  } = useResource<{ bills: Bill[] }>(canRead ? `${base}/bills` : null, revision);
+  const { data, error: loadError, loading, refreshing } = useResource<{ bills: Bill[] }>(canRead ? `${base}/bills` : null, revision);
   const { busy, error, run } = useAction();
-  useEffect(() => { if (selectedBill) document.getElementById("bill-review")?.scrollIntoView({block:"start"}); }, [selectedBill]);
-  useEffect(() => { if (approvalBillId !== null && !loading) focusWorkspaceForm("bill-batch-review"); }, [approvalBillId, loading]);
+  const selected = data?.bills.find(bill => bill.id === selectedBill);
+  const focused = !!selectedBill || approvalBillId !== null;
+  useEffect(() => {
+    let frame = 0;
+    const readLocation = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("section") !== "bills" || reviewBusy) return;
+        setApprovalBillId(params.get("reviewBill"));
+        setSelectedBill(params.get("invoice") ?? "");
+      });
+    };
+    window.addEventListener(WORKSPACE_NAVIGATION_EVENT, readLocation);
+    window.addEventListener("popstate", readLocation);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener(WORKSPACE_NAVIGATION_EVENT, readLocation); window.removeEventListener("popstate", readLocation); };
+  }, [reviewBusy]);
+  useEffect(() => { if (focused) document.getElementById("bill-focus")?.scrollIntoView({ block: "start" }); }, [focused, selectedBill, approvalBillId]);
   if (!canRead) return null;
-  return (
-    <div className="grid min-w-0 gap-7">
-      <PageMetrics items={[
-        {label:"Outstanding invoices",value:data ? usd(data.bills.reduce((sum,bill) => sum + BigInt(bill.remainingLiability),0n)) : loadError ? "Unavailable" : null,asset:"USDC"},
-        {label:"Recorded invoices",value:data?.bills.length ?? (loadError ? "Unavailable" : null)},
-        {label:"Settled invoices",value:data ? data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length : loadError ? "Unavailable" : null,progress:data ? {value:proportion(data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length,data.bills.length),label:"Settled / recorded",detail:`${data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length} / ${data.bills.length}`} : undefined},
-      ]}/>
-      <Panel
-        title="Invoice register"
-        tone="white"
-        description="Track supplier invoices from draft to settlement."
-        action={<div className="flex flex-wrap items-center gap-3">{canPrepare && <Action type="button" onClick={() => focusWorkspaceForm("bill-compose")}><Plus size={15}/>New invoice</Action>}
-          <button
-            className="text-sm text-primary"
-            onClick={() => setApprovalBillId("")}
-          >
-            Review invoice batch
-          </button></div>
-        }
-      >
-        {loadError && <p role="alert">{loadError}</p>}
-        {loading ? (
-          <Empty>Loading bills...</Empty>
-        ) : !data?.bills.length ? (
-          <Empty>Your first invoice will appear here.</Empty>
-        ) : (
-          <DataTable
-            columns={["Invoice", "Payee", "Amount", "Due", "Status", "Action"]}
-          >
-            {data.bills.map((bill) => (
-              <tr key={bill.id}>
-                <td>
-                  <div className="font-medium">{bill.reference}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {bill.title}
-                  </div>
-                  {(bill.project_reference || bill.cost_center_reference) && <p className="mt-1 text-xs text-muted-foreground">{[bill.project_reference && `Project: ${bill.project_reference}`, bill.cost_center_reference && `Cost center: ${bill.cost_center_reference}`].filter(Boolean).join(" · ")}</p>}
-                  <PurchaseMatchReview value={bill.vendorCommitment ?? null} />
-                </td>
-                <td>
-                  {recordedPayee(bill.payment, recipients.find(
-                    (recipient) => recipient.id === bill.recipient_id,
-                  ))}
-                </td>
-                <td className="tabular-nums">{usd(bill.amount)}{BigInt(bill.acceptedCreditAmount ?? "0") > 0n && <p className="mt-1 text-xs text-muted-foreground">Accepted supplier credits {usd(bill.acceptedCreditAmount!)}</p>}{BigInt(bill.setoffAmount) > 0n && <p className="mt-1 text-xs text-muted-foreground">Noncash setoff {usd(bill.setoffAmount)}</p>}{BigInt(bill.fundedClearingAmount ?? "0") > 0n && <p className="mt-1 text-xs text-muted-foreground">Escrow-backed settlement {usd(bill.fundedClearingAmount!)}<br/>Company credit rights are separate from delivered tokens.</p>}{(BigInt(bill.acceptedCreditAmount ?? "0") > 0n || BigInt(bill.setoffAmount) > 0n || BigInt(bill.fundedClearingAmount ?? "0") > 0n) && <p className="mt-1 text-xs text-muted-foreground">Delivered {usd(bill.deliveredAmount)} · remaining {usd(bill.remainingLiability)}</p>}</td>
-                <td>{dateLabel(bill.due_date, organization.timezone)}</td>
-                <td>
-                  <Status
-                    value={
-                      ["paid", "partially_paid", "settled", "cleared", "credited", "partially_settled"].includes(bill.status)
-                        ? bill.status
-                        : (bill.payment?.status ?? bill.status)
-                    }
-                  />
-                </td>
-                <td>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      className="text-xs text-primary"
-                      onClick={() => setSelectedBill(bill.id)}
-                    >
-                      {canPrepare ? "Manage terms" : "View terms"}
-                    </button>
-                    {canApprove && bill.payment?.status === "draft" &&
-                      bill.status !== "disputed" && (
-                        <Action
-                          disabled={!!busy}
-                          onClick={() => setApprovalBillId(bill.id)}
-                        >
-                          Review approval
-                        </Action>
-                      )}
-                    {bill.payment && (
-                      <button
-                        className="text-primary"
-                        onClick={() => navigate("payments")}
-                      >
-                        View payment
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </DataTable>
-        )}
-      </Panel>
-      {approvalBillId !== null && <div id="bill-batch-review" className="scroll-mt-8"><PaymentManagementPanel mode="bills" initialBillId={approvalBillId}/></div>}
-      {selectedBill && <div id="bill-review" className="scroll-mt-8"><BillTerms id={selectedBill} close={() => setSelectedBill("")}/></div>}
-      {canPrepare && <TaskDrawer id="bill-create-flow" title="Add an invoice" description="Record the supplier invoice and supporting payment terms."><Panel
-        title="Add an invoice"
-        description="Record the supplier, amount and due date."
-        help="Approval creates one linked payment with a fixed net entitlement and fee ceiling. Recording an invoice does not fund or pay it."
-      >
-        <form
-          id="bill-compose" aria-busy={!!busy}
-          className="grid gap-4 sm:grid-cols-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const form = event.currentTarget,
-              values = new FormData(form);
-            void run("create", async () => {
-              await api(`${base}/bills`, {
-                recipientId: values.get("recipient"),
-                title: values.get("title"),
-                reference: values.get("reference"),
-                amount: dollars(values.get("amount")),
-                maxFee: dollars(values.get("fee"), true),
-                dueDate: values.get("due")
-                  ? companyTimeToIso(
-                      String(values.get("due")),
-                      organization.timezone,
-                    )
-                  : undefined,
-                evidence: values.get("evidence") || undefined,
-                projectReference: values.get("project") || undefined,
-                costCenterReference: values.get("costCenter") || undefined,
-                ...purchaseMatchInput(values),
-              });
-              form.reset();closeTaskDrawer("bill-create-flow",true);
-              refresh();
-            });
-          }}
-        >
-          <Field label="Supplier or contractor">
-            <select name="recipient" required className={control}>
-              <option value="">Choose a payee</option>
-              {recipients.map((recipient) => (
-                <option key={recipient.id} value={recipient.id}>
-                  {recipient.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Invoice reference">
-            <input
-              name="reference"
-              className={control}
-              required
-              maxLength={120}
-              placeholder="INV-1042"
-            />
-          </Field>
-          <Field label="Description">
-            <input
-              name="title"
-              className={control}
-              required
-              maxLength={240}
-              placeholder="Design services"
-            />
-          </Field>
-          <Field label="Net amount (USDC)">
-            <input
-              name="amount"
-              className={control}
-              required
-              inputMode="decimal"
-              placeholder="1200.00"
-            />
-          </Field>
-          <Field label="Maximum payment cost (USDC)">
-            <input
-              name="fee"
-              className={control}
-              required
-              inputMode="decimal"
-              defaultValue="1.00"
-            />
-          </Field>
-          <Field label="Due date" hint={organization.timezone}>
-            <input name="due" type="datetime-local" className={control} />
-          </Field>
-          <Field label="Project reference (optional)">
-            <input name="project" className={control} maxLength={120} />
-          </Field>
-          <Field label="Cost center (optional)">
-            <input name="costCenter" className={control} maxLength={120} />
-          </Field>
-          <PurchaseMatchFields />
-          <div className="sm:col-span-2">
-            <Field label="Acceptance evidence or notes">
-              <textarea
-                name="evidence"
-                className={control}
-                maxLength={5000}
-                rows={2}
-                placeholder="Link or reference to the approved work"
-              />
-            </Field>
-          </div>
-          <div className="flex items-center gap-4 sm:col-span-2">
-            <Action busy={busy === "create"} disabled={!recipients.length}>
-              Save draft
-            </Action>
-            {organization.permissions?.includes("recipients:manage") && <button
-              type="button"
-              className="text-sm text-primary"
-              onClick={() => navigate("recipients")}
-            >
-              Add a payee
-            </button>}
-            {organization.permissions?.includes("documents:manage") && <button
-              type="button"
-              className="text-sm text-primary"
-              onClick={() => navigate("assistant")}
-            >
-              Analyze an invoice privately
-            </button>}
-          </div>
-        </form>
-        {error && (
-          <p role="alert" className="mt-4 text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </Panel></TaskDrawer>}
-      <Panel title="Purchase matching" description="Link invoices to approved supplier commitments." collapsible><VendorCommitments key={base}/></Panel>
-
-
-    </div>
-  );
+  return <div id="bills-content" className="grid min-w-0 gap-6">
+    {focused ? <div id="bill-focus" className="grid gap-5 scroll-mt-6">
+      {approvalBillId !== null ? <><button type="button" className="flex min-h-10 items-center gap-1 justify-self-start text-sm text-primary" disabled={reviewBusy} onClick={() => setApprovalBillId(null)}><ChevronLeft size={16} />{selectedBill ? "Invoice" : "Invoices"}</button><div id="bill-batch-review"><PaymentManagementPanel mode="bills" initialBillId={approvalBillId} onBusyChange={setReviewBusy} /></div></> : <BillTerms key={selectedBill} id={selectedBill} bill={selected} close={() => setSelectedBill("")} review={() => setApprovalBillId(selectedBill)} />}
+    </div> : <>
+      <div className="hidden sm:block"><PageMetrics items={[
+        { label: "Outstanding invoices", value: loadError ? "Unavailable" : data ? usd(data.bills.reduce((sum, bill) => sum + BigInt(bill.remainingLiability), 0n)) : null, asset: "USDC" },
+        { label: "Recorded invoices", value: loadError ? "Unavailable" : data?.bills.length },
+        { label: "Settled invoices", value: loadError ? "Unavailable" : data?.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length, progress: data && !loadError ? { value: proportion(data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length, data.bills.length), label: "Settled / recorded", detail: `${data.bills.filter(bill => BigInt(bill.remainingLiability) === 0n).length} / ${data.bills.length}` } : undefined },
+      ]} /></div>
+      <div className="flex flex-wrap items-end justify-between gap-5">
+        <div className="sm:hidden"><p className="text-xs text-muted-foreground">Outstanding</p><p className="mt-2 flex items-center gap-2 text-3xl font-medium tracking-tight tabular-nums"><TokenLogo symbol="USDC" size={24} />{loadError ? "Unavailable" : data ? usd(data.bills.reduce((sum, bill) => sum + BigInt(bill.remainingLiability), 0n)) : <span className="h-8 w-28 animate-pulse rounded bg-muted" />}</p></div>
+        <div className="flex flex-wrap items-center gap-3">{canPrepare && <Action type="button" onClick={() => openTaskDrawer("bill-create-flow")}><Plus size={15} />New invoice</Action>}<button type="button" className="min-h-10 text-sm text-primary" onClick={() => setApprovalBillId("")}>Review batch</button></div>
+      </div>
+      {loadError ? <div role="alert" className="flex items-center justify-between gap-3 rounded-xl bg-red-50 p-4 text-sm text-destructive"><p>{loadError}</p><button type="button" onClick={refresh} className="underline">Retry</button></div> : null}
+      <section id="invoice-register" className="min-w-0 rounded-3xl border bg-white px-5 sm:px-6" aria-label="Invoices">
+        {loading ? <div role="status" className="grid gap-6 py-6">{[0, 1, 2].map(index => <div key={index} className="h-14 animate-pulse rounded-lg bg-muted" />)}<span className="sr-only">Loading invoices</span></div> : !data ? null : !data.bills.length ? <div className="py-12 text-center text-sm text-muted-foreground">No invoices yet.</div> : <div className="divide-y">{sortInvoices(data.bills).map(bill => {
+          const remaining = BigInt(bill.remainingLiability), adjusted = remaining !== BigInt(bill.amount);
+          const status = ["paid", "partially_paid", "settled", "cleared", "credited", "partially_settled", "disputed"].includes(bill.status) ? bill.status : bill.payment?.status ?? bill.status;
+          return <article key={bill.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 py-5 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(8rem,0.8fr)_auto]">
+            <div className="min-w-0"><button type="button" className="text-left text-sm font-medium hover:text-primary" onClick={() => setSelectedBill(bill.id)}>{recordedPayee(bill.payment, recipients.find(recipient => recipient.id === bill.recipient_id))}</button><p className="mt-1.5 text-xs text-muted-foreground">{bill.reference}</p>{bill.due_date && remaining > 0n && <p className="mt-1.5 text-xs text-muted-foreground sm:hidden">Due {dateLabel(bill.due_date, organization.timezone)}</p>}</div>
+            <div className="hidden sm:block"><Status value={status} />{bill.due_date && remaining > 0n && <p className="mt-1.5 text-xs text-muted-foreground">Due {dateLabel(bill.due_date, organization.timezone)}</p>}</div>
+            <div className="text-right"><p className="font-medium tabular-nums">{usd(remaining > 0n ? bill.remainingLiability : bill.amount)}</p>{adjusted && remaining > 0n && <p className="mt-1.5 text-xs text-muted-foreground">remaining</p>}</div>
+            <div className="col-span-2 flex items-center justify-between gap-3 sm:col-span-1 sm:justify-end"><span className="sm:hidden"><Status value={status} /></span><button type="button" className="min-h-9 text-sm text-primary" aria-label={`Open ${bill.reference}`} onClick={() => setSelectedBill(bill.id)}>{status === "disputed" || status === "held" ? "Review hold" : remaining > 0n ? "Review" : "View"}</button></div>
+          </article>;
+        })}</div>}
+      </section>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">{data && !loadError && <span>{data.bills.length} invoices</span>}<button type="button" className="ml-auto min-h-10 text-primary" onClick={() => { navigate("procurement"); focusWorkspaceForm("vendor-commitments"); }}>Purchase commitments</button></div>
+    </>}
+    {canPrepare && <TaskDrawer id="bill-create-flow" title="New invoice"><form id="bill-compose" onChangeCapture={() => setDraftEdited(true)} aria-busy={!!busy} className="grid gap-5" onSubmit={event => {
+      event.preventDefault(); const form = event.currentTarget, values = new FormData(form);
+      void run("create", async () => {
+        await api(`${base}/bills`, { recipientId: values.get("recipient"), title: values.get("title"), reference: values.get("reference"), amount: dollars(values.get("amount")), maxFee: dollars(values.get("fee"), true), dueDate: values.get("due") ? companyTimeToIso(String(values.get("due")), organization.timezone) : undefined, evidence: values.get("evidence") || undefined, projectReference: values.get("project") || undefined, costCenterReference: values.get("costCenter") || undefined, ...purchaseMatchInput(values) });
+        form.reset(); setDraftEdited(false); closeTaskDrawer("bill-create-flow", true); refresh();
+      });
+    }}>
+      <fieldset disabled={!!busy} className="grid min-w-0 gap-5 sm:grid-cols-2">
+        <div className="grid gap-2"><Field label="Supplier"><select name="recipient" required className={control} disabled={!!busy || recipientsLoading || !!recipientsError}><option value="">{recipientsLoading ? "Loading suppliers..." : "Choose a supplier"}</option>{recipients.map(recipient => <option key={recipient.id} value={recipient.id}>{recipient.name}</option>)}</select></Field>{organization.permissions?.includes("recipients:manage") && <button type="button" disabled={!!busy} className="justify-self-start text-xs text-primary" onClick={() => { if (draftEdited && !window.confirm("Discard this invoice draft and add a supplier?")) return; navigate("recipients"); focusWorkspaceForm("payee-compose"); }}>Add supplier</button>}</div>
+        <Field label="Reference"><input name="reference" className={control} required maxLength={120} placeholder="INV-1042" /></Field>
+        <div className="sm:col-span-2"><Field label="Description"><input name="title" className={control} required maxLength={240} placeholder="Design services" /></Field></div>
+        <div className="sm:col-span-2"><Field label="Net amount (USDC)"><input name="amount" className={`${control} text-xl tabular-nums`} required inputMode="decimal" placeholder="0.00" /></Field></div>
+        <details onInvalidCapture={event => { event.currentTarget.open = true; }} className="group border-y py-4 sm:col-span-2"><summary className="cursor-pointer text-sm text-muted-foreground">Due date, costs & notes</summary><div className="mt-5 grid gap-4 sm:grid-cols-2"><Field label="Due date" hint={organization.timezone}><input name="due" type="datetime-local" className={control} /></Field><Field label="Cost limit (USDC)"><input name="fee" className={control} required inputMode="decimal" defaultValue="1.00" /></Field><Field label="Project"><input name="project" className={control} maxLength={120} /></Field><Field label="Cost center"><input name="costCenter" className={control} maxLength={120} /></Field><div className="sm:col-span-2"><Field label="Notes or acceptance evidence"><textarea name="evidence" className={control} maxLength={5000} rows={2} /></Field></div></div></details>
+        <PurchaseMatchFields />
+      </fieldset>
+      {recipientsError && <p role="alert" className="text-sm text-destructive">{recipientsError}</p>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="flex justify-end border-t pt-5"><Action busy={busy === "create"} disabled={!!busy || !recipients.length || recipientsLoading || !!recipientsError || refreshing}>Save draft</Action></div>
+    </form></TaskDrawer>}
+  </div>;
 }
 
 export function Payroll() {
