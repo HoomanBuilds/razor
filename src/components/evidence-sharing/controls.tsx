@@ -25,7 +25,9 @@ export function EvidenceShareControl({
     [copied, setCopied] = useState(false),
     [manage, setManage] = useState(false),
     [revision, setRevision] = useState(0),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [acknowledged,setAcknowledged] = useState("");
+  const terms = JSON.stringify([organizationId,sourceKind,sourceId,disclosure]);
   const keys = useRef(new Map<string, string>()),
     { busy, error, run } = useAction(),
     base = `/organizations/${encodeURIComponent(organizationId)}/evidence-shares`;
@@ -39,20 +41,16 @@ export function EvidenceShareControl({
     <div className="grid min-w-0 grid-cols-1 gap-4 rounded-lg border p-4 text-sm">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Link2 size={16} aria-hidden="true" />
-        <h4 className="font-medium">Create an expiring evidence link</h4>
+        <h4 className="font-medium">Share verification</h4>
       </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        This separately authorizes public distribution of a frozen
-        server-exported packet. Anyone with the link can read and copy its
-        disclosed metadata, reports and any encrypted wire bytes. It includes no
-        invoice/payroll plaintext, raw documents, replay secrets, credentials or
-        decryption keys. It is not a payment receipt or hardware-verification
-        result.
-      </p>
+      <div role="group" aria-label="Evidence link tasks" className="flex gap-1 rounded-full bg-muted p-1">{[false,true].map(value=><button type="button" key={String(value)} disabled={!!busy} aria-pressed={manage===value} onClick={()=>setManage(value)} className={`rounded-full px-4 py-2 text-xs ${manage===value?"bg-white font-medium shadow-sm":"text-muted-foreground"}`}>{value?"Existing links":"Create link"}</button>)}</div>
       <form
+        hidden={manage || !!result}
+        onChange={event=>{if(!(event.target instanceof HTMLInputElement && event.target.type==="checkbox"))setAcknowledged("");}}
         className="grid min-w-0 grid-cols-1 gap-3"
         onSubmit={(event) => {
           event.preventDefault();
+          if(acknowledged!==terms)return;
           const form = event.currentTarget,
             ttlMinutes = Number(new FormData(form).get("ttl")),
             payload = {
@@ -82,17 +80,10 @@ export function EvidenceShareControl({
           });
         }}
       >
-        <p className="break-all text-xs">
-          Frozen source: {sourceKind.replaceAll("_", " ")} / {sourceId}.
-          Disclosure:{" "}
-          {disclosure === "metadata"
-            ? "metadata only"
-            : "encrypted wire and public attestation reports"}
-          .
-        </p>
+        <p className="text-xs text-muted-foreground">{disclosure==="metadata"?"Public metadata only":"Public encrypted responses and attestation reports"}</p>
         <Field
-          label="Link lifetime in minutes"
-          hint="5 minutes to 72 hours, shortened to the retained source's expiry. At most ten active links per company; packet limit eight MiB."
+          label="Expires in (minutes)"
+          hint="5 minutes to 72 hours, capped by source expiry."
         >
           <input
             name="ttl"
@@ -107,10 +98,8 @@ export function EvidenceShareControl({
           />
         </Field>
         <label className="flex items-start gap-2 text-xs leading-5">
-          <input type="checkbox" required disabled={!!busy} className="mt-1" />I
-          am authorized to disclose this exact packet publicly. I understand
-          revocation and expiry only stop future link access and cannot revoke
-          downloaded copies.
+          <input type="checkbox" required checked={acknowledged===terms} onChange={event=>setAcknowledged(event.target.checked?terms:"")} disabled={!!busy} className="mt-1" />I
+          authorize public access to this packet. Anyone with the link can copy it; expiry and revocation cannot remove downloaded copies.
         </label>
         <div>
           <Action busy={busy === "create"} disabled={!!busy}>
@@ -118,16 +107,10 @@ export function EvidenceShareControl({
           </Action>
         </div>
       </form>
-      <p className="text-xs leading-5 text-muted-foreground">
-        A fresh sign-in within fifteen minutes is required. Sharing is an export
-        right with no usage charge or subscription gate. A metadata-only packet
-        cannot authenticate redacted wire bytes. If the packet is too large or
-        source retention is almost over, use the existing local download.
-      </p>
       {result ? (
-        <div className="grid min-w-0 grid-cols-1 gap-3 rounded-lg bg-muted p-3">
+        <div hidden={manage} className="grid min-w-0 grid-cols-1 gap-3 rounded-lg bg-muted p-3">
           <p className="break-all text-xs">
-            Share {result.share.id}. Frozen disclosure:{" "}
+            Disclosure:{" "}
             {result.share.disclosure.replaceAll("_", " ")}. Expires{" "}
             {new Date(result.share.expiresAt).toLocaleString()}.
           </p>
@@ -155,7 +138,7 @@ export function EvidenceShareControl({
                         await navigator.clipboard.writeText(url);
                         setCopied(true);
                         setNotice(
-                          "Link copied. Anyone receiving it can download the disclosed packet.",
+                          "Link copied.",
                         );
                       } catch {
                         setNotice(
@@ -184,7 +167,7 @@ export function EvidenceShareControl({
                       request.done();
                       setUrl("");
                       setNotice(
-                        "Future link access revoked. Existing downloaded copies remain outside Razor's control.",
+                        "Link revoked. Downloaded copies remain accessible.",
                       );
                       setRevision((value) => value + 1);
                     });
@@ -204,13 +187,8 @@ export function EvidenceShareControl({
           )}
         </div>
       ) : null}
-      <Action
-        type="button"
-        disabled={!!busy}
-        aria-expanded={manage}
-        onClick={() => setManage((value) => !value)}
-      >
-        {manage ? "Hide link management" : "Manage existing evidence links"}
+      {!manage && result && <button type="button" disabled={!!busy} className="justify-self-start text-sm text-primary" onClick={()=>{setResult(null);setUrl("");setAcknowledged("");}}>Create another link</button>}
+      {manage ? "Hide link management" : "Manage existing evidence links"}
       </Action>
       {manage ? (
         <EvidenceShareList
