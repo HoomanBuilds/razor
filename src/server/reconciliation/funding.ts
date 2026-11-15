@@ -23,7 +23,7 @@ interface ReceiptRow {
 }
 
 function fundingFor(access: AccessContext, fundingId: string): FundingLeg {
-  const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=? AND organization_id=?", fundingId, access.organizationId);
+  const funding = row<FundingLeg>("SELECT f.*,CASE WHEN f.payment_id IS NOT NULL THEN 'obligation' WHEN EXISTS(SELECT 1 FROM funding_request_quotes q WHERE q.funding_id=f.id) THEN 'funding_request' ELSE 'company' END AS source_context FROM funding_legs f WHERE f.id=? AND f.organization_id=?", fundingId, access.organizationId);
   if (!funding) throw new ApiError(404, "Funding request not found", "FUNDING_NOT_FOUND");
   return funding;
 }

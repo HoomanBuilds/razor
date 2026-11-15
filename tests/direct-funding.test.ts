@@ -94,6 +94,9 @@ test("direct instructions contain no provider signature and reject coerced ident
 
 test("company funding and the wallet claim work without any routing call and preserve a pre-sign fence", async () => {
   const before = providerRequests, { access, funding } = await topup();
+  assert.equal(getFundingReceipt(access, funding.id).funding.source_context, "company");
+  assert.throws(() => getFundingReceipt({ ...access, organizationId: randomUUID() }, funding.id), (error: ApiError) => error.status === 404);
+  assert.throws(() => getFundingReceipt({ ...access, permissions: ["company:read"] }, funding.id), (error: ApiError) => error.status === 403);
   assert.equal(providerRequests, before);
   assert.equal(funding.deposit_address, "shared.near");
   await claimCompanyFunding(access, funding.id);
@@ -187,6 +190,7 @@ test("public funding preserves direct terms, claims and company confirmation wit
   const key = randomUUID(), before = providerRequests;
   const prepared = await preparePublicQuote(created.link.token, { originAsset: DIRECT_USDC_ASSET, refundAddress: owner, idempotencyKey: key });
   assert.equal(JSON.parse(prepared.funding.quote).kind, "direct_near_usdc");
+  assert.equal(getFundingReceipt(access, prepared.funding.id).funding.source_context, "funding_request");
   await claimPublicFunding(created.link.token, { fundingId: prepared.funding.id, idempotencyKey: key });
   const funding = row<FundingLeg>("SELECT * FROM funding_legs WHERE id=?", prepared.funding.id)!;
   const tx = transfer(funding, config);
@@ -221,6 +225,7 @@ test("approved obligation funding quotes only the shortfall through native USDC 
   approvePayment(access, payment.id);
   const task = paymentFundingTask(access, payment.id), before = providerRequests;
   const prepared = await quotePaymentFunding(access, payment.id, { idempotencyKey: randomUUID(), reviewToken: task.reviewToken, originAsset: DIRECT_USDC_ASSET, refundAddress: owner });
+  assert.equal(getFundingReceipt(access, prepared.funding!.id).funding.source_context, "obligation");
   assert.equal(prepared.funding!.amount_in, "1100000");
   assert.equal(isDirectFunding(JSON.parse(prepared.funding!.quote)), true);
   await claimTaskDeposit(access, payment.id, prepared.funding!.id);
