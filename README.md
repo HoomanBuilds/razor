@@ -18,7 +18,7 @@ Razor gives companies one place to manage crypto-funded operations: paying emplo
 
 The company controls its payment policy. The recipient controls their receiving preferences. Razor connects both sides to a shared financial record, including fees, approvals, delivery, refunds and unresolved transfers.
 
-<p align="center"><img src="public/marketing/dashboard-preview.png" alt="Razor company dashboard showing treasury balances, payment activity and recent payments" width="1200" /></p>
+<p align="center"><img src="public/marketing/dashboard-preview.png" alt="Razor company dashboard showing treasury balances, payment activity and recent payments" width="1200" height="675" /></p>
 <p align="center"><sub>Product interface with fictional example company data.</sub></p>
 
 ## What makes Razor different
