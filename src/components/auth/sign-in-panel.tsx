@@ -10,6 +10,7 @@ import { NetworkLogo, TokenLogo } from "@/components/assets/asset-identity";
 import { RazorLogo, RazorMark } from "@/components/brand/razor-logo";
 import { walletErrorMessage, type WalletFamily } from "./wallets";
 import { localRedirect } from "@/lib/redirect-path";
+import { withTaskDrawerWallet } from "@/components/workspace/task-drawer";
 import "./sign-in.css";
 
 const SocialSignIn = dynamic(() => import("./social-sign-in"), { ssr: false, loading: () => <div role="status" className="h-13 animate-pulse rounded-full bg-muted" aria-label="Loading secure sign-in"/> });
@@ -20,7 +21,7 @@ export function WalletButtons({ link = false, onComplete }: { link?: boolean; on
   async function connect(family: WalletFamily) {
     if (pending) return;
     setPending(family); setError(null);
-    try { await signInWallet(family, link); await onComplete?.(); } catch (error) { setError(walletErrorMessage(error)); } finally { setPending(null); }
+    try { await withTaskDrawerWallet(() => signInWallet(family, link)); await onComplete?.(); } catch (error) { setError(walletErrorMessage(error)); } finally { setPending(null); }
   }
   return <div className="space-y-2.5">{WALLETS.map(({ family, label, network }) => <button key={family} type="button" disabled={pending !== null} aria-busy={pending === family} onClick={() => void connect(family)} className="group flex min-h-12 w-full items-center justify-between gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left text-sm font-medium transition-colors hover:border-primary/25 hover:bg-secondary/40 disabled:opacity-50"><span className="flex min-w-0 items-center gap-3"><NetworkLogo network={network} size={22}/><span>{pending === family ? "Confirm in your wallet..." : `${link ? "Link" : "Continue with"} ${label}`}</span></span><ArrowUpRight size={16} className="shrink-0 text-muted-foreground group-hover:text-primary"/></button>)}{error && <p role="alert" className="rounded-xl bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}</div>;
 }
