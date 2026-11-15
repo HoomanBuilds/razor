@@ -31,7 +31,7 @@ export function WorkspaceTabs({ tabs, activeIndex, onActiveChange }: { tabs: { l
     buttons.current[index]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   return <div className="grid min-w-0 gap-6">
-    <div role="tablist" aria-label="Workspace views" className="flex max-w-full gap-1 overflow-x-auto rounded-full bg-muted p-1.5 sm:w-fit">
+    <div role="tablist" aria-label="Workspace views" className="dashboard-nav-scroll flex max-w-full gap-1 overflow-x-auto rounded-full bg-muted p-1.5 sm:w-fit">
       {tabs.map((tab, index) => <button key={tab.label} ref={node => { buttons.current[index] = node; }} type="button" role="tab" id={`${id}-tab-${index}`} aria-selected={active === index} aria-controls={`${id}-panel-${index}`} tabIndex={active === index ? 0 : -1} aria-label={`${tab.label}${statuses[index] === "busy" ? ": action in progress" : statuses[index] === "error" ? ": needs attention" : ""}`} className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors ${active === index ? "bg-foreground text-white" : "text-muted-foreground hover:text-foreground"}`} onClick={() => select(index)} onKeyDown={event => {
         let next = index;
         if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
