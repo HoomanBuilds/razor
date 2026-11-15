@@ -2,6 +2,7 @@
 
 import { EvidenceShareControl } from "@/components/evidence-sharing/controls";
 import { useState } from "react";
+import { control } from "@/components/workspace/shared";
 
 export function PortableEvidenceExport({ endpoint }: { endpoint: string }) {
   const [disclosure, setDisclosure] = useState("encrypted_wire");
@@ -10,26 +11,22 @@ export function PortableEvidenceExport({ endpoint }: { endpoint: string }) {
       endpoint,
     );
   return (
-    <div className="mt-4 space-y-3 rounded-lg border p-4 text-sm">
-      <p className="font-medium">Portable independent verification</p>
-      <label className="flex flex-wrap items-center gap-3">
-        Export disclosure
+    <div className="mt-4 grid gap-4 text-sm">
+      <label className="grid gap-2 text-[13px] font-medium">
+        Export format
         <select
-          className="rounded-md border bg-background p-2 text-xs"
+          className={control}
           value={disclosure}
           onChange={(event) => setDisclosure(event.target.value)}
         >
           <option value="encrypted_wire">
-            Encrypted signed wire bytes and reports
+            Encrypted responses and verification reports
           </option>
-          <option value="metadata">Metadata only, wire bytes redacted</option>
+          <option value="metadata">Metadata only</option>
         </select>
       </label>
       <p className="text-xs leading-5 text-muted-foreground">
-        Excludes invoice/payroll plaintext and decryption keys. Metadata-only
-        exports cannot verify wire signatures. Old records may lack signed
-        bytes. Local downloads cannot be revoked or expired remotely. A public
-        link requires the separate explicit sharing action below.
+        {disclosure === "metadata" ? "Metadata cannot verify response signatures." : "Excludes document text and decryption keys. Older records may lack signed responses."} Downloads cannot be revoked.
       </p>
       <div className="flex flex-wrap gap-4">
         <a
@@ -37,7 +34,7 @@ export function PortableEvidenceExport({ endpoint }: { endpoint: string }) {
           href={`/api${endpoint}/packet?disclosure=${disclosure}`}
           download
         >
-          Download portable packet
+          Download packet
         </a>
         <a
           className="text-primary"
@@ -45,7 +42,7 @@ export function PortableEvidenceExport({ endpoint }: { endpoint: string }) {
           target="_blank"
           rel="noreferrer"
         >
-          Open local verifier
+          Open verifier
         </a>
       </div>
       {source ? (
