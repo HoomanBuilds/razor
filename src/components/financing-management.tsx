@@ -1,244 +1,157 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { TaskDrawer, openTaskDrawer, closeTaskDrawer } from "./workspace/task-drawer";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
+import { TaskDrawer, openTaskDrawer, closeTaskDrawer, withTaskDrawerWallet } from "./workspace/task-drawer";
 import { api } from "@/lib/api";
 import { parseUnits, formatUnits } from "@/lib/money";
 import { usd } from "@/lib/format";
 import { signNearActionBatch, type NearWalletAction } from "@/lib/near-actions";
 import { AssetIdentity } from "@/components/assets/asset-identity";
-import type {
-  FinancingAction,
-  FinancingRequest,
-  listCompanyFinancing,
-  marketFinancing,
-  ownFinancing,
-} from "@/server/financing/service";
+import type { FinancingAction, FinancingRequest, listCompanyFinancing, marketFinancing, ownFinancing } from "@/server/financing/service";
 import { useIdentity } from "./auth/identity-provider";
 import { useAction, useResource } from "./workspace/hooks";
-import {
-  Action,
-  Address,
-  control,
-  Empty,
-  Field,
-  Panel,
-  Status,
-} from "./workspace/shared";
+import { Action, Address, control, Empty, Field, Panel, Status } from "./workspace/shared";
 
 type CompanyList = ReturnType<typeof listCompanyFinancing>;
-type List =
-  | ReturnType<typeof marketFinancing>
-  | ReturnType<typeof ownFinancing>;
-export function FinancingManagement({
-  base,
-  canManage = false,
-  revision = 0,
-  onRefresh,
-}: {
-  base?: string;
-  canManage?: boolean;
-  revision?: number;
-  onRefresh?: () => void;
-}) {
-  const company = !!base,
-    endpoint = base ? `${base}/financing` : "/financing",
-    { session, signInWallet } = useIdentity(),
-    [tick, setTick] = useState(0),
-    [page, setPage] = useState(1),
-    [tab, setTab] = useState<"market" | "loans">("loans"),
-    [selected, setSelected] = useState(""),
-    [preview, setPreview] = useState<FinancingAction | null>(null),
-    [confirmed, setConfirmed] = useState(false),
-    [notice, setNotice] = useState(""),
-    [offerRisk, setOfferRisk] = useState(""),
-    [depositKind, setDepositKind] = useState("repayment"),
-    [recoveryCreditId, setRecoveryCreditId] = useState("");
-  const requests = useResource<CompanyList | List>(
-      session
-        ? company
-          ? `${endpoint}?page=${page}`
-          : `${endpoint}/${tab}?page=${page}`
-        : null,
-      revision + tick,
-    ),
-    detail = useResource<{ request: FinancingRequest }>(
-      session && selected ? `${endpoint}/${selected}` : null,
-      revision + tick,
-    ),
-    current = detail.data?.request,
-    { busy, error, run } = useAction(),
-    keys = useRef(new Map<string, string>());
-  const isBorrower =
-      !!current?.agreement &&
-      session?.wallets.some(
-        (wallet) =>
-          wallet.family === "near" &&
-          wallet.network === current.scope.network &&
-          wallet.address === current.agreement!.borrower,
-      ),
-    isLender =
-      !!current?.agreement &&
-      session?.wallets.some(
-        (wallet) =>
-          wallet.family === "near" &&
-          wallet.network === current.scope.network &&
-          wallet.address === current.agreement!.lender,
-      );
-  const scopes =
-      requests.data && "scopes" in requests.data ? requests.data.scopes : [],
-    accounts =
-      session?.wallets.filter(
-        (wallet) =>
-          wallet.family === "near" &&
-          (!current || wallet.network === current.scope.network),
-      ) ?? [];
-  function refresh() {
-    setTick((value) => value + 1);
-    onRefresh?.();
+type List = ReturnType<typeof marketFinancing> | ReturnType<typeof ownFinancing>;
+type Task = "offer" | "accept" | "deposit" | "recovery" | "evidence" | "wallet";
+type Offer = FinancingRequest["offers"][number];
+type Review = { plan: FinancingAction; request: FinancingRequest; action: string; input: Record<string, unknown> };
+const secondary = "border border-border bg-white text-foreground hover:bg-muted";
+const titles: Record<Task, string> = { offer: "Make an offer", accept: "Accept an offer", deposit: "Fund or repay", recovery: "Recover an advance", evidence: "Verify financing receipt", wallet: "Review transaction" };
+const actionNames: Record<string, string> = { register: "Register agreement", advance: "Advance to treasury", principal: "Fund principal", collateral: "Fund collateral", repayment: "Repay loan", cancel: "Cancel agreement", withdraw: "Withdraw credit", default: "Apply collateral to debt", dispute: "Raise dispute", resume: "Resume agreement", recover_advance: "Recover advance", void_deposit: "Void unresolved deposit" };
+
+function Terms({ request, offer }: { request: FinancingRequest; offer?: Offer }) {
+  const terms = request.agreement ?? offer;
+  const values = [
+    ["Principal", usd(request.terms.principal)],
+    ...(terms ? [["Fixed interest", usd(terms.interest)], ["Lender fee", usd(terms.fee)], ["Total repayment", usd((BigInt(request.terms.principal) + BigInt(terms.interest) + BigInt(terms.fee)).toString())]] : [["Interest + fee ceiling", usd(request.terms.maxCost)]]),
+    ["Collateral bond", usd(request.terms.collateral)],
+    ["Term from advance", `${request.terms.tenorDays} days`],
+    ["Grace period", `${request.terms.graceDays} days`],
+    ["Funding deadline", new Date(request.terms.fundBy).toLocaleString()],
+    ...(offer ? [["Offer expires", new Date(offer.expiresAt).toLocaleString()]] : []),
+  ];
+  return <dl className="grid grid-cols-2 gap-x-5 gap-y-4 rounded-2xl bg-muted/60 p-4 text-sm">{values.map(([label, value]) => <div key={label} className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 break-words font-medium tabular-nums">{value}</dd></div>)}</dl>;
+}
+
+function LoanRisk({ assigned }: { assigned: boolean }) {
+  return <ul className="space-y-2 text-xs leading-5 text-muted-foreground"><li>Terms and repayment descriptions are public on NEAR. Funding and repayment are not guaranteed.</li><li>Repayment pays principal, interest, then fees. Default can use only this loan's bond; any shortfall remains due.</li><li>Unused bond returns to the borrower. Disputes require both parties to resume unchanged terms.</li>{assigned && <li>Receivable assignment covers Razor only. External liens and collection are unverified.</li>}</ul>;
+}
+
+export function FinancingManagement({ base, canManage = false, revision = 0, onRefresh }: { base?: string; canManage?: boolean; revision?: number; onRefresh?: () => void }) {
+  const company = !!base, endpoint = base ? `${base}/financing` : "/financing";
+  const { session, signInWallet } = useIdentity();
+  const [tick, setTick] = useState(0), [page, setPage] = useState(1), [tab, setTab] = useState<"market" | "loans">("loans");
+  const [selected, setSelected] = useState(""), [task, setTask] = useState<Task | null>(null), [preview, setPreview] = useState<Review | null>(null);
+  const [confirmed, setConfirmed] = useState(false), [notice, setNotice] = useState(""), [offerId, setOfferId] = useState(""), [offerRisk, setOfferRisk] = useState("");
+  const [depositKind, setDepositKind] = useState("repayment"), [recoveryCreditId, setRecoveryCreditId] = useState("");
+  const requests = useResource<CompanyList | List>(session ? company ? `${endpoint}?page=${page}` : `${endpoint}/${tab}?page=${page}` : null, revision + tick);
+  const detail = useResource<{ request: FinancingRequest }>(session && selected ? `${endpoint}/${selected}` : null, revision + tick);
+  const current = detail.data?.request, { busy, error, run, setError } = useAction(), keys = useRef(new Map<string, string>());
+  const identity = useRef({ selected, endpoint }); identity.current = { selected, endpoint };
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const blocked = !!busy || detail.refreshing || !!detail.error;
+  const isBorrower = !!current?.agreement && session?.wallets.some(wallet => wallet.family === "near" && wallet.network === current.scope.network && wallet.address === current.agreement!.borrower);
+  const isLender = !!current?.agreement && session?.wallets.some(wallet => wallet.family === "near" && wallet.network === current.scope.network && wallet.address === current.agreement!.lender);
+  const scopes = requests.data && "scopes" in requests.data ? requests.data.scopes : [];
+  const accounts = session?.wallets.filter(wallet => wallet.family === "near" && (!current || wallet.network === current.scope.network)) ?? [];
+  const selectedOffer = current?.offers.find(offer => offer.id === offerId);
+  const consentKey = current && selectedOffer ? JSON.stringify([current.id, current.terms, selectedOffer.offerHash]) : "";
+  useEffect(() => {
+    const drawer = document.getElementById("financing-action-flow");
+    const closed = () => { if (drawer?.dataset.walletSuspended !== "true") { setTask(null); setPreview(null); setConfirmed(false); setOfferRisk(""); } };
+    drawer?.addEventListener("close", closed);
+    if (task) openTaskDrawer("financing-action-flow"); else closeTaskDrawer("financing-action-flow", true);
+    return () => drawer?.removeEventListener("close", closed);
+  }, [task]);
+  function refresh() { setTick(value => value + 1); onRefresh?.(); }
+  function key(value: unknown) { const digest = JSON.stringify(value), existing = keys.current.get(digest) ?? crypto.randomUUID(); keys.current.set(digest, existing); return existing; }
+  function amount(value: FormDataEntryValue | null) { return parseUnits(String(value ?? "0")); }
+  function finishTask() { closeTaskDrawer("financing-action-flow", true); setTask(null); setPreview(null); setConfirmed(false); setOfferRisk(""); }
+  function openTask(value: Task) { setError(""); setConfirmed(false); setOfferRisk(""); setTask(value); requestAnimationFrame(() => openTaskDrawer("financing-action-flow")); }
+  function choose(id: string) { finishTask(); setSelected(id); setRecoveryCreditId(""); setNotice(""); setError(""); }
+  async function prepare(action: string, extra: Record<string, unknown> = {}) {
+    if (!current || detail.refreshing || detail.error) return;
+    const request = current, input = { action, ...extra }, path = endpoint;
+    const plan = await api<FinancingAction>(`${path}/${request.id}/action`, input);
+    if (!mounted.current || identity.current.selected !== request.id || identity.current.endpoint !== path) return;
+    setConfirmed(false); setPreview({ plan, request, action, input }); setTask("wallet");
   }
-  function key(value: unknown) {
-    const digest = JSON.stringify(value),
-      existing = keys.current.get(digest) ?? crypto.randomUUID();
-    keys.current.set(digest, existing);
-    return existing;
-  }
-  function amount(value: FormDataEntryValue | null) {
-    return parseUnits(String(value ?? "0"));
-  }
-  function review(action: string, extra: Record<string, unknown> = {}) {
-    if (!current) return;
-    setPreview(null);
-    setConfirmed(false);
-    void run(`review-${action}`, async () => {
-      setPreview(
-        await api<FinancingAction>(`${endpoint}/${current.id}/action`, {
-          action,
-          ...extra,
-        }),
-      );
-    });
-  }
+  function review(action: string, extra: Record<string, unknown> = {}) { void run(`review-${action}`, () => prepare(action, extra)); }
   async function sign() {
-    if (!preview || !confirmed) return;
-    const plan = preview;
+    if (!preview || !confirmed || blocked) return;
+    const reviewed = preview, plan = reviewed.plan;
     await run("sign-financing", async () => {
-      try {
-        const result = await signNearActionBatch(
-          plan.walletActions as NearWalletAction[],
-          plan.network,
-          plan.eligibleSigners,
-          async (signerAccount) => {
-            if (plan.actionId)
-              await api(`${endpoint}/${plan.requestId}/begin`, {
-                actionId: plan.actionId,
-                reviewHash: plan.reviewHash,
-                signerAccount,
-              });
-          },
-        );
-        await api(`${endpoint}/${plan.requestId}/reconcile`, {});
-        setNotice(
-          result.complete
-            ? "Wallet results returned and contract state refreshed. Company cash requires a separate tagged treasury receipt; this action did not mark revenue."
-            : "The wallet result is incomplete. The original operation remains subject to contract reconciliation.",
-        );
-      } finally {
-        setPreview(null);
-        setConfirmed(false);
-        refresh();
+      const fresh = await api<FinancingAction>(`${endpoint}/${plan.requestId}/action`, reviewed.input);
+      if (!mounted.current || identity.current.selected !== plan.requestId || identity.current.endpoint !== endpoint) return;
+      if (JSON.stringify([fresh.reviewHash, fresh.agreementHash, fresh.walletActions, fresh.eligibleSigners, fresh.actionId]) !== JSON.stringify([plan.reviewHash, plan.agreementHash, plan.walletActions, plan.eligibleSigners, plan.actionId])) {
+        finishTask(); refresh(); throw new Error("Transaction terms changed. Open a fresh review before signing.");
       }
+      try {
+        const result = await withTaskDrawerWallet(() => signNearActionBatch(plan.walletActions as NearWalletAction[], plan.network, plan.eligibleSigners, async signerAccount => {
+          if (plan.actionId) await api(`${endpoint}/${plan.requestId}/begin`, { actionId: plan.actionId, reviewHash: plan.reviewHash, signerAccount });
+        }));
+        await api(`${endpoint}/${plan.requestId}/reconcile`, {});
+        setNotice(result.complete ? "Contract refreshed. Verify the treasury receipt separately after an advance." : "Wallet result incomplete. Reconcile before trying again.");
+      } finally { finishTask(); refresh(); }
     });
   }
-  if (!session)
-    return (
-      <Panel title="Native NEAR working capital">
-        <Empty>
-          Sign in and link your actual NEAR account to inspect your authorized
-          lending scope and existing agreements.
-        </Empty>
-        <a href="/sign-in" className="text-sm text-primary underline">
-          Sign in
-        </a>
-      </Panel>
-    );
-  return (
-    <Panel
-      title={
-        company
-          ? "Company working capital"
-          : "Your lending and borrowing agreements"
-      }
-      tone="white" description="Peer-to-peer USDC working capital on NEAR." action={company && canManage ? <Action type="button" onClick={()=>openTaskDrawer("financing-request-flow")}>Request working capital</Action> : undefined} help="Real operating scope, exact owner approval and funded escrow are required."
-    >
-      <div className="grid min-w-0 grid-cols-1 gap-5">
-        <p className="rounded-xl border border-amber-200/70 bg-amber-50/50 px-4 py-3 text-xs leading-6 text-amber-900">
-          No lender, liquidity, repayment or creditworthiness guarantee.
-          Principal, fixed borrowing cost and USDC bond remain separate from
-          company deposits and revenue. Contract terms and repayment
-          descriptions are public on NEAR. Repayment uses the fixed
-          borrower&apos;s own wallet, with no authority over unrelated payroll
-          or client money.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Action
-            type="button"
-            disabled={!!busy}
-            busy={busy === "link-near"}
-            onClick={() =>
-              void run("link-near", async () => {
-                await signInWallet("near", true);
-                refresh();
-              })
-            }
-          >
-            Link a verified NEAR account
-          </Action>
-          <Action
-            type="button"
-            disabled={!!busy || requests.refreshing}
-            onClick={refresh}
-          >
-            Refresh recorded state
-          </Action>
-          {!company &&
-            ["loans", "market"].map((value) => (
-              <Action
-                key={value}
-                type="button"
-                disabled={!!busy || tab === value}
-                onClick={() => {
-                  setTab(value as "market" | "loans");
-                  setPage(1);
-                  setSelected("");
-                  setPreview(null);
-                }}
-              >
-                {value === "market"
-                  ? "Invited opportunities"
-                  : "My agreements and offers"}
-              </Action>
-            ))}
-        </div>
-        {requests.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {requests.error}
-          </p>
-        )}
-        {requests.data && "availability" in requests.data ? (
-          <p className="text-xs text-muted-foreground">
-            {requests.data.availability}
-          </p>
-        ) : null}
-        {company && canManage && (
-          <TaskDrawer id="financing-request-flow" title="Request working capital" description="Choose an operating scope and review principal, borrowing costs and collateral separately."><div aria-busy={!!busy}>
-            {!scopes.length ? (
-              <Empty>
-                No operator-published operating scope covers this company.
-                Requests and lenders are unavailable until real scope is
-                configured.
-              </Empty>
-            ) : (
+  function unavailable(action: string) {
+    if (!current) return true;
+    return blocked || (action === "withdraw" ? !!current.chain?.pending || !((isBorrower && BigInt(current.chain?.borrower_refund ?? "0") > 0n) || (isLender && BigInt(current.chain?.lender_credit ?? "0") > 0n))
+      : action === "recover_advance" ? current.chain?.pending?.kind !== "advance"
+      : action === "resume" ? !current.chain?.disputed
+      : action === "default" ? current.chain?.stage !== "active" || !!current.chain?.disputed || !!current.chain.pending || !current.chain.due_at_ms || Date.now() < Number(current.chain.due_at_ms) + current.terms.graceDays * 86400000
+      : action === "dispute" ? !current.chain || !!current.chain.disputed || !!current.chain.pending || !["funding", "active", "defaulted"].includes(current.chain.stage)
+      : (!!current.chain && current.chain.stage !== "funding") || !!current.chain?.pending || !!current.chain?.disputed);
+  }
+  if (!session) return <Panel title="Working capital"><Empty>Sign in to view financing.</Empty><a href="/sign-in" className="mt-4 inline-block text-sm text-primary">Sign in</a></Panel>;
+  return <Panel title={selected ? current?.companyName ?? "Working capital" : company ? "Working capital" : "Financing"} tone="white" action={!selected && company && canManage ? <Action disabled={!!busy || requests.refreshing || !!requests.error} onClick={() => { setError(""); openTaskDrawer("financing-request-flow"); }}><Plus size={16}/> New request</Action> : undefined}>
+    <div className="grid min-w-0 gap-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {selected ? <button type="button" disabled={!!busy} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground" onClick={() => choose("")}><ArrowLeft size={16}/> All {company ? "requests" : "financing"}</button> : !company ? <div className="flex gap-1 rounded-full bg-muted p-1">{(["loans", "market"] as const).map(value => <button key={value} type="button" disabled={!!busy} className={`rounded-full px-4 py-2 text-sm ${tab === value ? "bg-white shadow-sm" : "text-muted-foreground"}`} onClick={() => { setTab(value); setPage(1); choose(""); }}>{value === "market" ? "Opportunities" : "My agreements"}</button>)}</div> : <AssetIdentity symbol="USDC" network="near"/>}
+        <div className="flex flex-wrap gap-3"><button type="button" className="text-sm text-muted-foreground hover:text-foreground" disabled={!!busy} onClick={() => void run("link-near", async () => { await signInWallet("near", true); refresh(); })}>Link NEAR account</button><button type="button" className="text-sm text-primary" disabled={!!busy || requests.refreshing || detail.refreshing} onClick={refresh}>Refresh</button></div>
+      </div>
+      {!selected && <>
+        {requests.error && <p role="alert" className="text-sm text-destructive">{requests.error}</p>}
+        {requests.loading ? <Empty>Loading financing...</Empty> : requests.data?.requests.length ? <div className="overflow-hidden rounded-2xl border bg-white divide-y">{requests.data.requests.map(item => <button key={item.id} type="button" disabled={!!busy} className="flex w-full items-center gap-4 p-5 text-left hover:bg-muted/50" onClick={() => choose(item.id)}><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{item.companyName}</span><span className="mt-1 block text-xs text-muted-foreground">{item.scope.label} · {item.terms.tenorDays} days · {new Date(item.createdAt).toLocaleDateString()}</span></span><span className="text-right"><span className="mb-1 block font-medium tabular-nums">{usd(item.terms.principal)}</span><Status value={item.chain?.stage ?? item.state}/></span><ChevronRight size={16} className="shrink-0 text-muted-foreground"/></button>)}</div> : !requests.error && <Empty>No {tab === "market" && !company ? "invited opportunities" : "financing requests"} yet.</Empty>}
+        {requests.data && "availability" in requests.data && requests.data.availability && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Financing availability</summary><p className="mt-2">{requests.data.availability}</p></details>}
+        {(page > 1 || requests.data?.hasMore) && <div className="flex items-center justify-between text-sm"><button disabled={page === 1 || requests.refreshing || !!busy} onClick={() => setPage(value => value - 1)}>Previous</button><span className="text-xs text-muted-foreground">Page {page}</span><button disabled={!requests.data?.hasMore || requests.refreshing || !!busy} onClick={() => setPage(value => value + 1)}>Next</button></div>}
+      </>}
+      {selected && detail.error && <p role="alert" className="text-sm text-destructive">{detail.error}</p>}
+      {selected && detail.loading ? <Empty>Loading agreement...</Empty> : selected && current && <article className="grid min-w-0 gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs text-muted-foreground">Principal</p><p className="mt-1 text-3xl font-medium tracking-tight tabular-nums">{usd(current.terms.principal)}</p><div className="mt-3"><AssetIdentity symbol="USDC" network="near"/></div></div><div className="text-right"><Status value={current.chain?.stage ?? current.state}/><p className="mt-2 text-xs text-muted-foreground">{current.scope.label} · NEAR {current.scope.network}</p></div></div>
+        {current.chain?.pending && <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900"><strong>{current.chain.pending.kind.replaceAll("_", " ")} pending · {usd(current.chain.pending.amount)}</strong><p className="mt-1 text-xs">Reconcile this transfer before another payment. Timeouts do not release it.</p></div>}
+        {current.unresolvedDeposit && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-900"><span>Unresolved {current.unresolvedDeposit.kind} · {usd(current.unresolvedDeposit.amount)}</span><Action className={secondary} disabled={blocked || !current.chain || !(isBorrower || isLender)} onClick={() => { setDepositKind(current.unresolvedDeposit!.kind); openTask("deposit"); }}>Review deposit</Action></div>}
+        {current.agreement ? <>
+          <div className="grid gap-4 rounded-2xl bg-muted/60 p-4 sm:grid-cols-2"><div className="min-w-0"><p className="mb-2 text-xs text-muted-foreground">Borrower{isBorrower ? " · You" : ""}</p><Address value={current.agreement.borrower} network={current.scope.network}/></div><div className="min-w-0"><p className="mb-2 text-xs text-muted-foreground">Lender{isLender ? " · You" : ""}</p><Address value={current.agreement.lender} network={current.scope.network}/></div></div>
+          {current.chain ? <dl className="grid grid-cols-2 gap-5 sm:grid-cols-3">{[
+            ["Principal funded", current.chain.principal_funded], ["Bond funded", current.chain.collateral_funded], ["Advanced", current.chain.advanced], ["Cash repaid", current.chain.cash_repaid], ["Bond applied", current.chain.collateral_applied], ["Lender credit", current.chain.lender_credit], ["Borrower refund", current.chain.borrower_refund], ["Principal remaining", (BigInt(current.agreement.principal) - BigInt(current.chain.principal_paid)).toString()],
+          ].filter(([label, value]) => BigInt(value) > 0n || label === "Principal remaining").map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 font-medium tabular-nums">{usd(value)}</dd></div>)}<div><dt className="text-xs text-muted-foreground">Maturity</dt><dd className="mt-1 text-sm">{current.chain.due_at_ms ? new Date(Number(current.chain.due_at_ms)).toLocaleString() : "After advance"}</dd></div>{current.chain.disputed && <div><dt className="text-xs text-muted-foreground">Dispute</dt><dd className="mt-1 text-sm text-amber-800">Awaiting both parties</dd></div>}</dl> : <p className="rounded-xl bg-muted p-4 text-sm">Agreement not yet verified on NEAR.</p>}
+          <div className="flex flex-wrap items-center gap-3">
+            {company && canManage && !current.chain && <Action disabled={blocked} onClick={() => review("register")}>Register agreement</Action>}
+            {isBorrower && current.chain?.stage === "funding" && !current.chain.pending && !current.chain.disputed && current.chain.principal_funded === current.agreement.principal && current.chain.collateral_funded === current.agreement.collateral && <Action disabled={blocked} onClick={() => review("advance")}>Advance to treasury</Action>}
+            {(isBorrower || isLender) && current.chain && !current.chain.pending && <Action disabled={blocked} onClick={() => { setDepositKind(current.unresolvedDeposit?.kind ?? (isLender && !isBorrower ? "principal" : current.chain?.stage === "funding" ? "collateral" : "repayment")); openTask("deposit"); }}>{isLender && !isBorrower ? "Fund principal" : "Fund or repay"}</Action>}
+            <Action className={secondary} disabled={!!busy} onClick={() => void run("reconcile-financing", async () => { await api(`${endpoint}/${current.id}/reconcile`, {}); refresh(); })}>Reconcile</Action>
+            {company && current.chain && BigInt(current.chain.advanced) > 0n && <Action className={secondary} disabled={blocked} onClick={() => openTask("evidence")}>Verify treasury receipt</Action>}
+            {(isBorrower || isLender) && <select aria-label="Manage agreement" className={`${control} sm:max-w-64`} value="" disabled={blocked} onChange={event => { const value = event.target.value; if (value === "recover_advance") { setRecoveryCreditId(""); openTask("recovery"); } else review(value); }}><option value="" disabled>Manage agreement</option>{["withdraw", "cancel", "default", "dispute", "resume", "recover_advance"].map(action => <option key={action} value={action} disabled={unavailable(action)}>{actionNames[action]}</option>)}{current.unresolvedDeposit && <option value="void_deposit">Void unresolved deposit</option>}</select>}
+          </div>
+          <details className="border-t pt-4 text-sm"><summary className="cursor-pointer font-medium">Agreement terms</summary><div className="mt-4 grid gap-4"><Terms request={current}/><p className="text-xs text-muted-foreground">Repayment source: {current.terms.repaymentSource}</p><LoanRisk assigned={!!current.assignment}/></div></details>
+        </> : <>
+          <Terms request={current}/>
+          <div><p className="text-xs text-muted-foreground">Purpose</p><p className="mt-1 break-words text-sm">{current.terms.purpose}</p></div>
+          <section className="grid gap-3"><div className="flex items-center justify-between gap-3"><h3 className="text-base font-medium">Offers</h3>{!company && current.state === "open" && <Action disabled={blocked} onClick={() => openTask("offer")}><Plus size={16}/> Make offer</Action>}</div>{current.offers.length ? current.offers.map(offer => <div key={offer.id} className="flex flex-wrap items-center gap-4 rounded-2xl border p-4"><div className="min-w-0 flex-1"><Address value={offer.lenderAccount} network={current.scope.network}/><p className="mt-2 text-xs text-muted-foreground">Expires {new Date(offer.expiresAt).toLocaleString()}</p></div><div className="text-right"><p className="text-sm font-medium tabular-nums">{usd((BigInt(offer.interest) + BigInt(offer.fee)).toString())} cost</p><p className="mt-1 text-xs text-muted-foreground">{usd((BigInt(current.terms.principal) + BigInt(offer.interest) + BigInt(offer.fee)).toString())} repayment</p></div><Status value={offer.state}/><Action className={secondary} disabled={blocked} onClick={() => { setOfferId(offer.id); openTask("accept"); }}>View offer</Action></div>) : <Empty>No offers yet.</Empty>}</section>
+          {company && canManage && current.state === "open" && <div className="border-t pt-4"><Action className={secondary} disabled={blocked} onClick={() => void run("withdraw-request", async () => { await api(`${endpoint}/${current.id}`, undefined, "DELETE"); setNotice("Request withdrawn."); refresh(); })}>Withdraw request</Action></div>}
+        </>}
+        <details className="border-t pt-4 text-xs text-muted-foreground"><summary className="cursor-pointer">Scope and history</summary><div className="mt-4 grid gap-4"><p>{current.scope.label} · {current.scope.eligibility}</p><p>Purpose: {current.terms.purpose}</p><p>Repayment source: {current.terms.repaymentSource}</p>{current.agreementHash && <Address value={current.agreementHash} label="agreement hash"/>}{current.history.map(event => <p key={event.id}>{event.kind.replaceAll("_", " ")} · {new Date(event.created_at).toLocaleString()}</p>)}<p>Last verified {current.reconciledAt ? new Date(current.reconciledAt).toLocaleString() : "not yet"}</p></div></details>
+      </article>}
+      {notice && <p role="status" className="text-sm">{notice}</p>}
+      {error && !task && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    </div>
+    {company && canManage && <TaskDrawer id="financing-request-flow" title="Request working capital"><div aria-busy={!!busy}>{!scopes.length ? <Empty>No financing scope is available for this company.</Empty> : <>
               <form
                 className="mt-4 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
                 onSubmit={(event) => {
@@ -269,17 +182,17 @@ export function FinancingManagement({
                       endpoint,
                       { ...payload, requestKey: key(["request", payload]) },
                     );
-                    setSelected(result.request.id);closeTaskDrawer("financing-request-flow",true);
+                    setSelected(result.request.id); closeTaskDrawer("financing-request-flow", true);
                     form.reset();
                     setNotice(
-                      "Request recorded for invited scoped lenders. No loan, funding or company cash has been created.",
+                      "Request published to invited lenders.",
                     );
                     refresh();
                   });
                 }}
               >
-                <fieldset className="contents" disabled={!!busy}>
-                  <Field label="Published operating scope">
+                <fieldset className="contents" disabled={!!busy || requests.refreshing || !!requests.error}>
+                  <Field label="Operating scope">
                     <select className={control} name="scope" required>
                       {scopes.map((scope) => (
                         <option key={scope.id} value={scope.id}>
@@ -297,7 +210,7 @@ export function FinancingManagement({
                       placeholder="1000"
                     />
                   </Field>
-                  <Field label="Maximum total fixed interest and lender fee (USDC)">
+                  <Field label="Maximum interest + fees (USDC)">
                     <input
                       name="cost"
                       className={control}
@@ -307,7 +220,7 @@ export function FinancingManagement({
                     />
                   </Field>
                   <Field
-                    label="Your separate USDC collateral bond"
+                    label="Collateral bond (USDC)"
                     hint="Zero means unsecured. Default can liquidate only this fixed loan bond."
                   >
                     <input
@@ -318,7 +231,7 @@ export function FinancingManagement({
                       defaultValue="0"
                     />
                   </Field>
-                  <Field label="Tenor from confirmed advance (days)">
+                  <Field label="Term from advance (days)">
                     <input
                       name="tenor"
                       className={control}
@@ -329,7 +242,7 @@ export function FinancingManagement({
                       required
                     />
                   </Field>
-                  <Field label="Grace before fixed-bond default (days)">
+                  <Field label="Grace period (days)">
                     <input
                       name="grace"
                       className={control}
@@ -340,7 +253,7 @@ export function FinancingManagement({
                       required
                     />
                   </Field>
-                  <Field label="Funding deadline (your browser timezone)">
+                  <Field label="Fund by (local time)">
                     <input
                       name="fundBy"
                       className={control}
@@ -349,12 +262,12 @@ export function FinancingManagement({
                     />
                   </Field>
                   <Field
-                    label="Optional accepted receivable bill ID"
-                    hint="Only a business invoice owed to your original supplier identity. Exclusivity is limited to Razor; lien priority and collection are unverified."
+                    label="Receivable bill ID (optional)"
+                    hint="Must be owed to your supplier identity. Assignment covers Razor only; lien priority and collection are unverified."
                   >
                     <input name="bill" className={control} maxLength={36} />
                   </Field>
-                  <Field label="Purpose disclosed to invited lenders">
+                  <Field label="Purpose">
                     <textarea
                       name="purpose"
                       className={control}
@@ -363,7 +276,7 @@ export function FinancingManagement({
                       required
                     />
                   </Field>
-                  <Field label="Exact repayment source description (public on NEAR)">
+                  <Field label="Repayment source">
                     <textarea
                       name="source"
                       className={control}
@@ -381,204 +294,19 @@ export function FinancingManagement({
                   <div className="sm:col-span-2">
                     <Action
                       busy={busy === "request-financing"}
-                      disabled={!!busy}
+                      disabled={!!busy || requests.refreshing || !!requests.error}
                     >
-                      Publish scoped borrowing request
+                      Publish request
                     </Action>
                   </div>
                 </fieldset>
               </form>
-            )}
-          {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</div></TaskDrawer>
-        )}
-        {requests.loading ? (
-          <Empty>Loading authorized financing...</Empty>
-        ) : !requests.data?.requests.length ? (
-          <Empty>No requests or agreements are available in this view.</Empty>
-        ) : (
-          <div className="grid min-w-0 grid-cols-1 gap-3">
-            {requests.data.requests.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                disabled={!!busy}
-                className={`min-w-0 rounded-2xl border border-border bg-white p-5 text-left ${selected === item.id ? "border-primary" : ""}`}
-                onClick={() => {
-                  setSelected(item.id);
-                  setPreview(null);
-                  setConfirmed(false);
-                  setOfferRisk("");
-                }}
-              >
-                <span className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-                  <strong className="break-words text-sm">
-                    {item.companyName} · {usd(item.terms.principal)} principal
-                  </strong>
-                  <Status value={item.chain?.stage ?? item.state} />
-                </span>
-                <span className="mt-2 block break-words text-xs text-muted-foreground">
-                  {item.terms.tenorDays} days · fixed cost ceiling{" "}
-                  {usd(item.terms.maxCost)} · {item.scope.network}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Action
-            type="button"
-            disabled={page === 1 || requests.loading || !!busy}
-            onClick={() => setPage((value) => value - 1)}
-          >
-            Previous financing
-          </Action>
-          <span className="text-xs">Page {page}</span>
-          <Action
-            type="button"
-            disabled={!requests.data?.hasMore || requests.loading || !!busy}
-            onClick={() => setPage((value) => value + 1)}
-          >
-            Next financing
-          </Action>
-        </div>
-        {detail.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {detail.error}
-          </p>
-        )}
-        {detail.loading ? (
-          <Empty>Loading fixed agreement history...</Empty>
-        ) : (
-          current && (
-            <article className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-border bg-white p-5">
-              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-                <h3 className="break-words font-medium">
-                  {current.companyName} working capital
-                </h3>
-                <Status value={current.chain?.stage ?? current.state} />
-              </div>
-              <AssetIdentity symbol="USDC" network="near" />
-              <dl className="grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-muted-foreground">Principal</dt>
-                  <dd>
-                    {formatUnits(current.terms.principal, 6)} USDC (
-                    {usd(current.terms.principal)})
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Fixed cost ceiling</dt>
-                  <dd>{usd(current.terms.maxCost)}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">
-                    Separate fixed collateral bond
-                  </dt>
-                  <dd>{usd(current.terms.collateral)}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Funding deadline</dt>
-                  <dd>{new Date(current.terms.fundBy).toLocaleString()}</dd>
-                </div>
-              </dl>
-              <p className="break-words text-sm">{current.terms.purpose}</p>
-              <p className="break-words text-xs">
-                Repayment source: {current.terms.repaymentSource}
-              </p>
-              <p className="break-words text-xs text-muted-foreground">
-                Operating scope: {current.scope.label}.{" "}
-                {current.scope.eligibility}
-              </p>
-              {current.assignment && (
-                <p className="text-xs text-amber-900">
-                  One accepted receivable is exclusively assigned within Razor.
-                  Off-platform ownership, lien priority and debtor collection
-                  have not been verified.
-                </p>
-              )}
-              {current.offers.map((offer) => (
-                <section
-                  key={offer.id}
-                  className="grid min-w-0 grid-cols-1 gap-3 rounded-lg bg-muted p-3 text-sm"
-                >
-                  <Address
-                    value={offer.lenderAccount}
-                    network={current.scope.network}
-                  />
-                  <p>
-                    Fixed interest {usd(offer.interest)} + fixed lender fee{" "}
-                    {usd(offer.fee)}. Total repayment{" "}
-                    {usd(
-                      (
-                        BigInt(current.terms.principal) +
-                        BigInt(offer.interest) +
-                        BigInt(offer.fee)
-                      ).toString(),
-                    )}
-                    . Expires {new Date(offer.expiresAt).toLocaleString()}.
-                  </p>
-                  <Status value={offer.state} />
-                  {company &&
-                    canManage &&
-                    current.state === "open" &&
-                    offer.state === "proposed" && (
-                      <>
-                        <label className="flex items-start gap-2 text-xs">
-                          <input
-                            type="checkbox"
-                            checked={offerRisk === offer.id}
-                            onChange={(event) =>
-                              setOfferRisk(event.target.checked ? offer.id : "")
-                            }
-                          />
-                          I accept the exact principal, fixed interest, fixed
-                          fee, bond, tenor, grace, principal-first waterfall and
-                          limited default rules. This locks this offer and
-                          cannot be undone by timeout.
-                        </label>
-                        <Action
-                          disabled={!!busy || offerRisk !== offer.id}
-                          onClick={() =>
-                            void run(`accept-${offer.id}`, async () => {
-                              await api(`${endpoint}/${current.id}/accept`, {
-                                offerId: offer.id,
-                                offerHash: offer.offerHash,
-                                acknowledgeRisk: true,
-                              });
-                              setOfferRisk("");
-                              setNotice(
-                                "Exact offer accepted. Register the agreement on NEAR, then fund its separate escrow. No advance has occurred.",
-                              );
-                              refresh();
-                            })
-                          }
-                        >
-                          Accept this exact offer
-                        </Action>
-                      </>
-                    )}
-                  {!company &&
-                    current.state === "open" &&
-                    offer.state === "proposed" && (
-                      <Action
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() =>
-                          void run(`withdraw-${offer.id}`, async () => {
-                            await api(
-                              `${endpoint}/${current.id}/offers/${offer.id}/withdraw`,
-                              {},
-                            );
-                            refresh();
-                          })
-                        }
-                      >
-                        Withdraw my unaccepted offer
-                      </Action>
-                    )}
-                </section>
-              ))}
-              {!company && current.state === "open" && !current.agreement && (
+    </>}{requests.error && <p role="alert" className="mt-4 text-sm text-destructive">{requests.error}</p>}{error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}</div></TaskDrawer>}
+    <TaskDrawer id="financing-action-flow" title={task === "wallet" && preview ? actionNames[preview.action] ?? "Review transaction" : task ? titles[task] : "Financing"}>
+      <div aria-busy={!!busy} className="grid min-w-0 gap-5" key={`${current?.id}:${task}:${selectedOffer?.offerHash ?? ""}`}>
+        {task && current && <>
+          {task !== "wallet" && <div className="flex flex-wrap items-center justify-between gap-3"><p className="font-medium">{current.companyName}</p><AssetIdentity symbol="USDC" network="near"/></div>}
+          {task === "offer" && <><Terms request={current}/><p className="text-xs text-muted-foreground">No funding or repayment guarantee. Fixed interest and fees are not annual rates.</p>
                 <form
                   className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"
                   onSubmit={(event) => {
@@ -598,14 +326,14 @@ export function FinancingManagement({
                         requestKey: key(["offer", current.id, payload]),
                       });
                       setNotice(
-                        "Your exact offer is recorded. It does not fund escrow or guarantee selection.",
+                        "Offer submitted. Escrow is not yet funded.",
                       );
-                      refresh();
+                      finishTask(); refresh();
                     });
                   }}
                 >
-                  <fieldset className="contents" disabled={!!busy}>
-                    <Field label="Your linked NEAR lender account">
+                  <fieldset className="contents" disabled={blocked}>
+                    <Field label="Lender account">
                       <select name="account" className={control} required>
                         {accounts.map((account) => (
                           <option key={account.id} value={account.address}>
@@ -632,7 +360,7 @@ export function FinancingManagement({
                         inputMode="decimal"
                       />
                     </Field>
-                    <Field label="Offer expiry (your browser timezone)">
+                    <Field label="Expires (local time)">
                       <input
                         name="expires"
                         className={control}
@@ -641,255 +369,18 @@ export function FinancingManagement({
                       />
                     </Field>
                     <div className="sm:col-span-2">
-                      <Action disabled={!!busy || !accounts.length}>
-                        Submit exact comparable offer
+                      <Action disabled={blocked || !accounts.length}>
+                        Submit offer
                       </Action>
                     </div>
                   </fieldset>
                 </form>
-              )}
-              {current.agreement && (
-                <>
-                  <div className="grid min-w-0 grid-cols-1 gap-3 rounded-lg bg-muted p-3 text-xs">
-                    <p>Fixed borrower</p>
-                    <Address
-                      value={current.agreement.borrower}
-                      network={current.scope.network}
-                    />
-                    <p>Fixed lender</p>
-                    <Address
-                      value={current.agreement.lender}
-                      network={current.scope.network}
-                    />
-                    <p>
-                      Principal-first waterfall, then fixed interest{" "}
-                      {usd(current.agreement.interest)}, then lender fee{" "}
-                      {usd(current.agreement.fee)}. At due time plus{" "}
-                      {current.terms.graceDays} grace days, only this
-                      loan&apos;s USDC bond can be applied to debt. Remaining
-                      bond returns to its fixed borrower; unsecured shortfall
-                      remains due. A dispute requires both original parties to
-                      resume without repricing.
-                    </p>
-                    <p className="break-all font-mono">
-                      Agreement {current.agreementHash}
-                    </p>
-                  </div>
-                  {current.chain?.pending?.kind === "advance" && (
-                    <Field
-                      label="Exact treasury deposit credit ID for recovery (optional)"
-                      hint="Use the immutable credit ID from the original treasury receipt if another deposit reused its reference. The loan sender, company and principal must still match."
-                    >
-                      <input
-                        className={control}
-                        value={recoveryCreditId}
-                        onChange={(event) =>
-                          setRecoveryCreditId(event.target.value.trim())
-                        }
-                        inputMode="numeric"
-                        pattern="[1-9][0-9]*"
-                        maxLength={20}
-                      />
-                    </Field>
-                  )}
-                  {current.chain ? (
-                    <div className="grid min-w-0 grid-cols-1 gap-3 text-xs sm:grid-cols-2">
-                      {[
-                        [
-                          "Lender principal funded",
-                          current.chain.principal_funded,
-                        ],
-                        [
-                          "Borrower bond funded",
-                          current.chain.collateral_funded,
-                        ],
-                        ["Conclusive advance", current.chain.advanced],
-                        ["Actual cash repayments", current.chain.cash_repaid],
-                        [
-                          "Bond applied on default",
-                          current.chain.collateral_applied,
-                        ],
-                        [
-                          "Lender withdrawable credit",
-                          current.chain.lender_credit,
-                        ],
-                        ["Borrower bond refund", current.chain.borrower_refund],
-                        [
-                          "Remaining principal",
-                          (
-                            BigInt(current.agreement.principal) -
-                            BigInt(current.chain.principal_paid)
-                          ).toString(),
-                        ],
-                      ].map(([label, value]) => (
-                        <p key={label}>
-                          {label}
-                          <br />
-                          {usd(value)}
-                        </p>
-                      ))}
-                      <p>
-                        Maturity
-                        <br />
-                        {current.chain.due_at_ms
-                          ? new Date(
-                              Number(current.chain.due_at_ms),
-                            ).toLocaleString()
-                          : "No confirmed advance"}
-                      </p>
-                      <p>
-                        Dispute
-                        <br />
-                        {current.chain.disputed
-                          ? "Held pending bilateral resume"
-                          : "No active dispute"}
-                      </p>
-                      {current.chain.pending && (
-                        <p className="break-words text-amber-900 sm:col-span-2">
-                          Pending {current.chain.pending.kind}:{" "}
-                          {usd(current.chain.pending.amount)}. Unknown outcomes
-                          retain this original authority; no timeout releases
-                          it.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <Empty>
-                      This agreement has not been conclusively observed on the
-                      configured contract. Refresh or register its exact frozen
-                      identity. A wallet result alone is not funding.
-                    </Empty>
-                  )}
-                  <div className="flex flex-wrap gap-3">
-                    <Action
-                      disabled={!!busy}
-                      onClick={() =>
-                        void run("reconcile-financing", async () => {
-                          await api(`${endpoint}/${current.id}/reconcile`, {});
-                          refresh();
-                        })
-                      }
-                    >
-                      Reconcile actual contract
-                    </Action>
-                    {company && canManage && !current.chain && (
-                      <Action
-                        disabled={!!busy}
-                        onClick={() => review("register")}
-                      >
-                        Review registration and storage deposit
-                      </Action>
-                    )}
-                    {isBorrower &&
-                      current.chain &&
-                      current.chain.stage === "funding" &&
-                      !current.chain.pending &&
-                      !current.chain.disputed &&
-                      current.chain.principal_funded ===
-                        current.agreement.principal &&
-                      current.chain.collateral_funded ===
-                        current.agreement.collateral && (
-                        <Action
-                          disabled={!!busy}
-                          onClick={() => review("advance")}
-                        >
-                          Review exact funded advance
-                        </Action>
-                      )}
-                    {(
-                      [
-                        "cancel",
-                        "withdraw",
-                        "default",
-                        "dispute",
-                        "resume",
-                        "recover_advance",
-                      ] as const
-                    )
-                      .filter((action) => isBorrower || isLender)
-                      .map((action) => (
-                        <Action
-                          key={action}
-                          disabled={
-                            !!busy ||
-                            (action === "withdraw"
-                              ? !!current.chain?.pending ||
-                                !(
-                                  (isBorrower &&
-                                    BigInt(
-                                      current.chain?.borrower_refund ?? "0",
-                                    ) > 0n) ||
-                                  (isLender &&
-                                    BigInt(
-                                      current.chain?.lender_credit ?? "0",
-                                    ) > 0n)
-                                )
-                              : action === "recover_advance"
-                                ? current.chain?.pending?.kind !== "advance"
-                                : action === "resume"
-                                  ? !current.chain?.disputed
-                                  : action === "default"
-                                    ? current.chain?.stage !== "active" ||
-                                      !!current.chain?.disputed ||
-                                      !!current.chain.pending ||
-                                      !current.chain.due_at_ms ||
-                                      Date.now() <
-                                        Number(current.chain.due_at_ms) +
-                                          current.terms.graceDays * 86400000
-                                    : action === "dispute"
-                                      ? !current.chain ||
-                                        !!current.chain.disputed ||
-                                        !!current.chain.pending ||
-                                        ![
-                                          "funding",
-                                          "active",
-                                          "defaulted",
-                                        ].includes(current.chain.stage)
-                                      : (!!current.chain &&
-                                          current.chain.stage !== "funding") ||
-                                        !!current.chain?.pending ||
-                                        !!current.chain?.disputed)
-                          }
-                          onClick={() =>
-                            review(
-                              action,
-                              action === "recover_advance" && recoveryCreditId
-                                ? { creditId: recoveryCreditId }
-                                : {},
-                            )
-                          }
-                        >
-                          {
-                            {
-                              cancel: "Review cancellation",
-                              withdraw: "Review my fixed withdrawal",
-                              default: "Review due-date bond default",
-                              dispute: "Raise a loan dispute",
-                              resume: "Consent to resume unchanged",
-                              recover_advance:
-                                "Recover matching advance evidence",
-                            }[action]
-                          }
-                        </Action>
-                      ))}
-                    {current.unresolvedDeposit && (
-                      <Action
-                        disabled={!!busy}
-                        onClick={() => review("void_deposit")}
-                      >
-                        Permanently void my unresolved deposit
-                      </Action>
-                    )}
-                  </div>
-                  {current.unresolvedDeposit && (
-                    <p className="text-xs text-amber-900">
-                      Your original {current.unresolvedDeposit.kind} deposit
-                      remains unresolved. Reconcile its immutable deposit
-                      marker, retry the same exact amount and identity, or
-                      permanently void that identity on NEAR before another
-                      deposit.
-                    </p>
-                  )}
+          </>}
+          {task === "accept" && selectedOffer && <><div><p className="mb-2 text-xs text-muted-foreground">Lender</p><Address value={selectedOffer.lenderAccount} network={current.scope.network} full/></div><Terms request={current} offer={selectedOffer}/><div><p className="text-xs text-muted-foreground">Repayment source</p><p className="mt-1 break-words text-sm">{current.terms.repaymentSource}</p></div><LoanRisk assigned={!!current.assignment}/>
+            {company && canManage && current.state === "open" && selectedOffer.state === "proposed" && <><label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1" checked={offerRisk === consentKey} onChange={event => setOfferRisk(event.target.checked ? consentKey : "")}/>I accept these fixed terms and risks. Acceptance locks this offer.</label><Action disabled={blocked || offerRisk !== consentKey} busy={busy === `accept-${selectedOffer.id}`} onClick={() => void run(`accept-${selectedOffer.id}`, async () => { await api(`${endpoint}/${current.id}/accept`, { offerId: selectedOffer.id, offerHash: selectedOffer.offerHash, acknowledgeRisk: true }); finishTask(); setNotice("Offer accepted. Register the agreement before funding escrow."); refresh(); })}>Accept offer</Action></>}
+            {!company && current.state === "open" && selectedOffer.state === "proposed" && <Action className={secondary} disabled={blocked} onClick={() => void run(`withdraw-${selectedOffer.id}`, async () => { await api(`${endpoint}/${current.id}/offers/${selectedOffer.id}/withdraw`, {}); finishTask(); refresh(); })}>Withdraw offer</Action>}
+          </>}
+          {task === "deposit" && current.agreement && <><p className="text-xs text-muted-foreground">Paid from the fixed {depositKind === "principal" ? "lender" : "borrower"} wallet into loan escrow.</p>{current.unresolvedDeposit && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">This retries the original unresolved deposit. Its amount and purpose cannot change.</p>}
                   <form
                     className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2"
                     onSubmit={(event) => {
@@ -906,52 +397,45 @@ export function FinancingManagement({
                             current.chain?.collateral_funded,
                             current.chain?.cash_repaid,
                           ]);
-                        setConfirmed(false);
-                        setPreview(
-                          await api<FinancingAction>(
-                            `${endpoint}/${current.id}/action`,
-                            { action: depositKind, amount: exact, depositId },
-                          ),
-                        );
+                        await prepare(depositKind, { amount: exact, depositId });
                       });
                     }}
                   >
-                    <fieldset className="contents" disabled={!!busy}>
-                      <Field label="Separate native-USDC deposit">
+                    <fieldset className="contents" disabled={blocked}>
+                      <Field label="Purpose">
                         <select
                           className={control}
                           value={depositKind}
+                          disabled={!!current.unresolvedDeposit}
                           onChange={(event) =>
                             setDepositKind(event.target.value)
                           }
                         >
-                          <option value="principal">Lender principal</option>
-                          <option value="collateral">
-                            Borrower collateral bond
-                          </option>
-                          <option value="repayment">Borrower repayment</option>
+                          {isLender && <option value="principal">Lender principal</option>}
+                          {isBorrower && <option value="collateral">Collateral bond</option>}
+                          {isBorrower && <option value="repayment">Repayment</option>}
                         </select>
                       </Field>
-                      <Field label="Exact amount (USDC)">
+                      <Field label="Amount (USDC)">
                         <input
                           name="amount"
                           className={control}
                           required
+                          defaultValue={current.unresolvedDeposit ? formatUnits(current.unresolvedDeposit.amount, 6) : undefined}
+                          readOnly={!!current.unresolvedDeposit}
                           inputMode="decimal"
                         />
                       </Field>
                       <div className="sm:col-span-2">
-                        <Action disabled={!!busy || !current.chain}>
-                          Review fixed escrow deposit
+                        <Action disabled={blocked || !current.chain}>
+                          Review deposit
                         </Action>
                       </div>
                     </fieldset>
                   </form>
-                </>
-              )}
-              {company &&
-                current.chain &&
-                BigInt(current.chain.advanced) > 0n && (
+          </>}
+          {task === "recovery" && <form className="grid gap-4" onSubmit={event => { event.preventDefault(); review("recover_advance", recoveryCreditId ? { creditId: recoveryCreditId } : {}); }}><p className="text-sm">Advance under review · {usd(current.chain?.pending?.amount ?? "0")}</p><Field label="Treasury credit ID (optional)" hint="Use the original receipt's credit ID if its reference was reused."><input className={control} value={recoveryCreditId} disabled={blocked} onChange={event => setRecoveryCreditId(event.target.value.trim())} inputMode="numeric" pattern="[1-9][0-9]*" maxLength={20}/></Field><Action disabled={blocked || unavailable("recover_advance")}>Review recovery</Action></form>}
+          {task === "evidence" && <>
                   <form
                     className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border p-3 sm:grid-cols-2"
                     onSubmit={(event) => {
@@ -968,13 +452,13 @@ export function FinancingManagement({
                           },
                         );
                         setNotice(
-                          "The exact final tagged loan credit was recorded idempotently as financing liability, and company treasury balance was synchronized from its reviewed onchain ledger. No amount was added by this form and no revenue was recorded.",
+                          "Financing receipt verified and treasury synchronized.",
                         );
-                        refresh();
+                        finishTask(); refresh();
                       });
                     }}
                   >
-                    <fieldset className="contents" disabled={!!busy}>
+                    <fieldset className="contents" disabled={blocked}>
                       <Field label="Advance transaction hash">
                         <input
                           name="transaction"
@@ -984,7 +468,7 @@ export function FinancingManagement({
                           maxLength={64}
                         />
                       </Field>
-                      <Field label="Actual transaction signer">
+                      <Field label="Transaction signer">
                         <input
                           name="signer"
                           className={control}
@@ -994,138 +478,51 @@ export function FinancingManagement({
                           maxLength={64}
                         />
                       </Field>
-                      <p className="text-xs text-muted-foreground sm:col-span-2">
-                        Only an exact final native-USDC transfer from the
-                        reviewed credit contract into this company&apos;s tagged
-                        treasury deposit can support an ordinary cash credit.
-                        Aggregate balances and wallet-reported success are
-                        insufficient.
-                      </p>
+                      <p className="text-xs text-muted-foreground sm:col-span-2">Requires the final tagged USDC transfer into your company treasury.</p>
                       <div className="sm:col-span-2">
                         <Action
                           busy={busy === "verify-loan-credit"}
-                          disabled={!!busy}
+                          disabled={blocked}
                         >
-                          Verify tagged financing credit
+                          Verify receipt
                         </Action>
                       </div>
                     </fieldset>
                   </form>
-                )}
-              {company && canManage && current.state === "open" && (
-                <Action
-                  disabled={!!busy}
-                  onClick={() =>
-                    void run("withdraw-request", async () => {
-                      await api(
-                        `${endpoint}/${current.id}`,
-                        undefined,
-                        "DELETE",
-                      );
-                      refresh();
-                    })
-                  }
-                >
-                  Withdraw this unaccepted request
-                </Action>
-              )}
-              <details className="min-w-0 text-xs">
-                <summary className="cursor-pointer text-primary">
-                  Recorded lifecycle history
-                </summary>
-                <div className="mt-3 grid min-w-0 grid-cols-1 gap-2">
-                  {current.history.map((event) => (
-                    <p key={event.id} className="break-words">
-                      {event.kind} ·{" "}
-                      {new Date(event.created_at).toLocaleString()}
-                    </p>
-                  ))}
-                </div>
-              </details>
-              <p className="text-xs text-muted-foreground">
-                Last verified snapshot:{" "}
-                {current.reconciledAt
-                  ? new Date(current.reconciledAt).toLocaleString()
-                  : "none"}
-                . This snapshot does not replace the separately verified company
-                deposit ledger.
-              </p>
-            </article>
-          )
-        )}
-        {preview && (
-          <section className="grid min-w-0 grid-cols-1 gap-4 rounded-2xl border border-primary/30 bg-secondary/40 p-5">
-            <h3 className="font-medium">Confirm this exact NEAR action</h3>
-            {preview.warnings.map((value) => (
-              <p
-                key={value}
-                className="text-xs leading-5 text-muted-foreground"
-              >
-                {value}
-              </p>
-            ))}
-            {preview.walletActions.map((transaction, index) => (
-              <div
-                key={index}
-                className="grid min-w-0 grid-cols-1 gap-2 rounded-lg bg-muted p-3 text-xs"
-              >
-                <Address
-                  value={transaction.receiverId}
-                  network={preview.network}
-                />
-                {transaction.actions.map((action, item) => (
-                  <p key={item} className="break-words">
-                    {action.params.methodName}. Attached NEAR:{" "}
-                    {formatUnits(action.params.deposit, 24)}. The gas budget is
-                    a cap, not measured gas burned.
-                  </p>
-                ))}
-              </div>
-            ))}
-            <p className="break-all font-mono text-xs">
-              Review {preview.reviewHash}
-            </p>
-            <label className="flex items-start gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
-              />
-              I reviewed the fixed agreement, amount, receiving account and
-              attached deposit. I understand that unknown outcomes retain the
-              original operation.
-            </label>
-            <div className="flex flex-wrap gap-3">
-              <Action
-                disabled={!!busy || !confirmed}
-                busy={busy === "sign-financing"}
-                onClick={() => void sign()}
-              >
-                Confirm with the fixed NEAR account
-              </Action>
-              <Action
-                disabled={!!busy}
-                onClick={() => {
-                  setPreview(null);
-                  setConfirmed(false);
-                }}
-              >
-                Close review
-              </Action>
-            </div>
-          </section>
-        )}
-        {notice && (
-          <p role="status" className="text-sm">
-            {notice}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+          </>}
+        </>}
+        {task === "wallet" && preview && <WalletReview value={preview}/>}
+        {task === "wallet" && preview && <><label className="flex items-start gap-3 text-sm"><input className="mt-1" type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/>I confirm these amounts, destinations and terms.</label><Action disabled={blocked || !confirmed} busy={busy === "sign-financing"} onClick={() => void sign()}>Confirm in NEAR wallet</Action></>}
+        {detail.error && <p role="alert" className="text-sm text-destructive">{detail.error}</p>}
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
-    </Panel>
-  );
+    </TaskDrawer>
+  </Panel>;
+}
+
+function WalletReview({ value }: { value: Review }) {
+  const { plan, request, action, input } = value;
+  const attached = plan.walletActions.flatMap(transaction => transaction.actions).reduce((total, item) => total + BigInt(item.params.deposit), 0n);
+  const gas = plan.walletActions.flatMap(transaction => transaction.actions).reduce((total, item) => total + BigInt(item.params.gas), 0n);
+  const isBorrower = plan.eligibleSigners.includes(request.agreement?.borrower ?? "");
+  const amount = typeof input.amount === "string" ? input.amount : action === "advance" ? request.terms.principal : action === "withdraw" ? (isBorrower ? request.chain?.borrower_refund : request.chain?.lender_credit) : action === "recover_advance" ? request.chain?.pending?.amount : action === "void_deposit" ? request.unresolvedDeposit?.amount : undefined;
+  const destination = ["principal", "collateral", "repayment"].includes(action) ? request.scope.contractId : action === "advance" ? request.scope.treasuryId : action === "withdraw" ? plan.eligibleSigners[0] : null;
+  return <>
+    <div className="flex flex-wrap items-center justify-between gap-3"><p className="font-medium">{request.companyName}</p><AssetIdentity symbol="USDC" network="near"/></div>
+    {amount && <div><p className="text-xs text-muted-foreground">{action === "void_deposit" ? "Unresolved deposit" : action === "recover_advance" ? "Advance under review" : "Amount"}</p><p className="mt-1 text-3xl font-medium tabular-nums">{usd(amount)}</p></div>}
+    {destination && <div><p className="mb-2 text-xs text-muted-foreground">{action === "advance" ? "Company treasury" : action === "withdraw" ? "Receiving account" : "Loan escrow"}</p><Address value={destination} network={plan.network} full/></div>}
+    <div><p className="mb-2 text-xs text-muted-foreground">Signing account · NEAR {plan.network}</p>{plan.eligibleSigners.map(account => <Address key={account} value={account} network={plan.network} full/>)}</div>
+    {action === "register" && <Terms request={request}/>}
+    {action === "default" && <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Only the fixed {usd(request.terms.collateral)} bond can cover this debt after maturity and the {request.terms.graceDays}-day grace period. Unsecured shortfall remains due.</div>}
+    {action === "cancel" && <p className="text-sm">Cancel this funding-stage agreement. Funded principal and unused bond become credits for their original owners.</p>}
+    {action === "dispute" && <p className="text-sm">Hold this agreement until both original parties consent to resume.</p>}
+    {action === "resume" && <p className="text-sm">Consent to resume the original terms without repricing. Both parties must consent.</p>}
+    {action === "void_deposit" && <p className="text-sm text-amber-900">Permanently void this unresolved deposit identity before using a new one. This does not confirm a refund.</p>}
+    {action === "repayment" && <p className="text-xs text-muted-foreground">Repayment uses only the borrower's wallet: principal first, then interest and fees.</p>}
+    {action === "recover_advance" && <p className="text-xs text-muted-foreground">Match the original advance to treasury evidence. This does not authorize another advance.</p>}
+    <div className="grid grid-cols-2 gap-4 rounded-2xl bg-muted/60 p-4 text-sm"><div><p className="text-xs text-muted-foreground">Attached NEAR</p><p className="mt-1 tabular-nums">{formatUnits(attached.toString(), 24)}</p></div><div><p className="text-xs text-muted-foreground">Gas limit</p><p className="mt-1 tabular-nums">{formatUnits(gas.toString(), 12)} Tgas</p></div></div>
+    <p className="text-xs text-muted-foreground">Network fees are separate. Transfers and terms are public on NEAR. Unknown outcomes stay held.</p>
+    {action === "register" && <LoanRisk assigned={!!request.assignment}/>}
+    <details className="border-t pt-4 text-xs"><summary className="cursor-pointer text-muted-foreground">Transaction details</summary><div className="mt-4 grid min-w-0 gap-4"><Address value={plan.reviewHash} label="review hash"/>{plan.walletActions.map((transaction, index) => <div key={index} className="min-w-0"><Address value={transaction.receiverId} network={plan.network} label="contract"/><pre className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-xl bg-muted p-3">{JSON.stringify(transaction.actions, null, 2)}</pre></div>)}{plan.warnings.map(warning => <p key={warning} className="text-muted-foreground">{warning}</p>)}</div></details>
+  </>;
 }
