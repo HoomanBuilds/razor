@@ -57,7 +57,7 @@ export function Bills() {
   } = useResource<{ bills: Bill[] }>(canRead ? `${base}/bills` : null, revision);
   const { busy, error, run } = useAction();
   useEffect(() => { if (selectedBill) document.getElementById("bill-review")?.scrollIntoView({block:"start"}); }, [selectedBill]);
-  useEffect(() => { if (approvalBillId !== null) document.getElementById("bill-batch-review")?.scrollIntoView({block:"start"}); }, [approvalBillId]);
+  useEffect(() => { if (approvalBillId !== null && !loading) focusWorkspaceForm("bill-batch-review"); }, [approvalBillId, loading]);
   if (!canRead) return null;
   return (
     <div className="grid min-w-0 gap-7">
@@ -299,7 +299,7 @@ export function Payroll() {
   const [importSelection, setImportSelection] = useState<ImportSelection | null>(null);
   const [reviewRunId, setReviewRunId] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("reviewRun") ?? "");
   const [executionRunId, setExecutionRunId] = useState("");
-  useEffect(() => { if (reviewRunId) document.getElementById("payroll-review")?.scrollIntoView({block:"start"}); }, [reviewRunId]);
+  useEffect(() => { if (reviewRunId && !loading) focusWorkspaceForm("payroll-review"); }, [reviewRunId, loading]);
   useEffect(() => { if (executionRunId) document.getElementById("payroll-execution")?.scrollIntoView({block:"start"}); }, [executionRunId]);
   if (!canRead) return null;
   return (
