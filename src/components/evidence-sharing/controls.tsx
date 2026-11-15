@@ -188,8 +188,6 @@ export function EvidenceShareControl({
         </div>
       ) : null}
       {!manage && result && <button type="button" disabled={!!busy} className="justify-self-start text-sm text-primary" onClick={()=>{setResult(null);setUrl("");setAcknowledged("");}}>Create another link</button>}
-      {manage ? "Hide link management" : "Manage existing evidence links"}
-      </Action>
       {manage ? (
         <EvidenceShareList
           organizationId={organizationId}
