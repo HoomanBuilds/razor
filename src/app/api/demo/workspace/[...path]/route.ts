@@ -4,6 +4,8 @@ const limit=1_048_576;
 async function proxy(request:Request,context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
   if(!path.length||path.some(segment=>!segment||segment==="."||segment===".."||/[\\/%]/.test(segment))||!["state","action","api"].includes(path[0])||path[0]==="api"&&path[1]==="demo")return Response.json({error:"Invalid demo endpoint",code:"DEMO_PATH_INVALID"},{status:400});
+  const profile=request.headers.get("x-razor-demo-profile");
+  if(profile!==null&&!["owner","maya","leo"].includes(profile))return Response.json({error:"Choose a demo profile",code:"DEMO_PROFILE_INVALID"},{status:400});
   const configuredOrigin=new URL(process.env.APP_URL||request.url).origin;
   if(!["GET","HEAD"].includes(request.method)&&(request.headers.get("origin")!==configuredOrigin||request.headers.get("sec-fetch-site")==="cross-site"))return Response.json({error:"Request origin is not allowed",code:"ORIGIN_REJECTED"},{status:403});
   if(Number(request.headers.get("content-length")||0)>limit)return Response.json({error:"Request too large",code:"DEMO_BODY_LIMIT"},{status:413});
@@ -13,7 +15,7 @@ async function proxy(request:Request,context:{params:Promise<{path:string[]}>}) 
   const cookie=/(?:^|;\s*)razor_demo_session=([a-zA-Z0-9_-]{43})(?:;|$)/.exec(request.headers.get("cookie")??"")?.[1];
   const target=new URL(`http://127.0.0.1:8831/${path.map(encodeURIComponent).join("/")}`);target.search=new URL(request.url).search;
   try{
-    const upstream=await fetch(target,{method:request.method,redirect:"manual",cache:"no-store",headers:{accept:request.headers.get("accept")||"application/json","content-type":"application/json",origin:configuredOrigin,...(cookie?{cookie:`razor_demo_session=${cookie}`}:{})},...(!["GET","HEAD"].includes(request.method)?{body}:{}),signal:AbortSignal.timeout(30_000)});
+    const upstream=await fetch(target,{method:request.method,redirect:"manual",cache:"no-store",headers:{accept:request.headers.get("accept")||"application/json","content-type":"application/json",origin:configuredOrigin,...(profile?{"x-razor-demo-profile":profile}:{}),...(cookie?{cookie:`razor_demo_session=${cookie}`}:{})},...(!["GET","HEAD"].includes(request.method)?{body}:{}),signal:AbortSignal.timeout(30_000)});
     if(upstream.status>=300&&upstream.status<400)return Response.json({error:"Demo redirect blocked",code:"DEMO_REDIRECT_BLOCKED"},{status:502});
     const headers=new Headers({"cache-control":"private, no-store","x-razor-demo":"simulated-no-broadcast","x-content-type-options":"nosniff","referrer-policy":"no-referrer"});
     for(const name of ["content-type","content-disposition","content-security-policy"])if(upstream.headers.has(name))headers.set(name,upstream.headers.get(name)!);

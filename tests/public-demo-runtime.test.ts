@@ -9,8 +9,8 @@ const {tokens,publicOrigin}=configurePublicDemoEnvironment();
 const {PublicDemoRuntime}=await import("../scripts/public-demo/runtime");
 const {getDb,withDatabase,createMemoryDatabase,transaction}=await import("../src/server/db");
 const runtime=new PublicDemoRuntime(tokens,publicOrigin);
-async function request(path:string,cookie="",body?:unknown,method=body===undefined?"GET":"POST"){
-  return runtime.handle(new Request(`${publicOrigin}${path}`,{method,headers:{origin:publicOrigin,cookie,"content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+async function request(path:string,cookie="",body?:unknown,method=body===undefined?"GET":"POST",profile?:string){
+  return runtime.handle(new Request(`${publicOrigin}${path}`,{method,headers:{origin:publicOrigin,cookie,"content-type":"application/json",...(profile?{"x-razor-demo-profile":profile}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}));
 }
 async function start(){const response=await request("/state");assert.equal(response.status,200);return {cookie:response.headers.get("set-cookie")!.split(";")[0],state:await response.json()};}
 
@@ -92,6 +92,37 @@ test("active demo distributions and personal claims inspect without RPC and pres
   const claim=await request(`/api/recipient-distributions/${own.claims[0].id}`,visitor.cookie);assert.equal(claim.status,200);assert.equal((await claim.json()).amount,"400000000");
   await request("/action",visitor.cookie,{action:"profile",profile:"leo"});
   assert.equal((await request(`/api/recipient-distributions/${own.claims[0].id}`,visitor.cookie)).status,404);
+});
+
+test("company and recipient tabs keep request-local personas and company boundaries",async()=>{
+  const visitor=await start(),company=visitor.state.companies[0].id,otherCompany=visitor.state.companies[1].id;
+  const switched=await request("/action",visitor.cookie,{action:"profile",profile:"maya"},"POST","owner");
+  assert.equal((await switched.json()).profile,"maya");
+  const [owner,receiver,companyTreasury,forbiddenTreasury,otherTreasury,ownPayments,wrongCompany]=await Promise.all([
+    request("/api/auth/session",visitor.cookie,undefined,"GET","owner"),
+    request("/api/auth/session",visitor.cookie,undefined,"GET","maya"),
+    request(`/api/organizations/${company}/treasury`,visitor.cookie,undefined,"GET","owner"),
+    request(`/api/organizations/${company}/treasury`,visitor.cookie,undefined,"GET","maya"),
+    request(`/api/organizations/${otherCompany}/treasury`,visitor.cookie,undefined,"GET","maya"),
+    request("/api/recipient-workspace/payments",visitor.cookie,undefined,"GET","maya"),
+    request(`/api/organizations/${otherCompany}/payments/${visitor.state.paymentIds.maya}`,visitor.cookie,undefined,"GET","owner"),
+  ]);
+  assert.equal((await owner.json()).user.name,"Alex Morgan");
+  assert.equal((await receiver.json()).user.name,"Maya Chen");
+  assert.equal(companyTreasury.status,200);assert.equal(forbiddenTreasury.status,403);assert.equal(otherTreasury.status,403);assert.equal(wrongCompany.status,404);
+  const payments=await ownPayments.json();assert(payments.payments.some((item:{id:string})=>item.id===visitor.state.paymentIds.maya));assert(!payments.payments.some((item:{id:string})=>item.id===visitor.state.paymentIds.leo));
+  const [funded,receiverState]=await Promise.all([
+    request("/action",visitor.cookie,{action:"fund"},"POST","owner"),
+    request("/state",visitor.cookie,undefined,"GET","maya"),
+  ]);
+  assert.equal(funded.status,200);assert.equal((await funded.json()).profile,"owner");
+  const personal=await receiverState.json();assert.equal(personal.profile,"maya");assert.equal(personal.treasury,null);
+  assert.equal((await(await request("/state",visitor.cookie)).json()).profile,"maya");
+  assert.equal((await request("/action",visitor.cookie,{action:"fund"},"POST","maya")).status,403);
+  const next=await request("/action",visitor.cookie,{action:"profile",profile:"leo"},"POST","owner");assert.equal((await next.json()).profile,"leo");
+  assert.equal((await(await request("/state",visitor.cookie)).json()).profile,"leo");
+  assert.equal((await(await request("/state",visitor.cookie,undefined,"GET","owner")).json()).profile,"owner");
+  assert.equal((await request("/state",visitor.cookie,undefined,"GET","__proto__")).status,400);
 });
 
 test("capacity bounds visitor databases without evicting an active session",async()=>{

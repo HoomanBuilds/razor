@@ -20,10 +20,21 @@ export function appHref(href: string): string {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
+export function demoRequestHeaders(headers?: HeadersInit, profile = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("profile")) {
+  const result = new Headers(headers);
+  result.delete("x-razor-demo-profile");
+  if (isPublicDemo() && profile && ["owner", "maya", "leo"].includes(profile)) result.set("x-razor-demo-profile", profile);
+  return result;
+}
+
 export function appFetch(input: RequestInfo | URL, init?: RequestInit) {
-  if(!isPublicDemo())return fetch(input,init);
-  if (input instanceof Request) return fetch(new Request(new URL(appHref(input.url),input.url), input), init);
-  return fetch(appHref(String(input)), init);
+  if (!isPublicDemo()) return fetch(input, init);
+  const mapped = appHref(input instanceof Request ? input.url : String(input));
+  const target = new URL(mapped, window.location.origin);
+  const scoped = target.origin === window.location.origin && target.pathname.startsWith("/api/demo/workspace/");
+  const options = scoped ? { ...init, headers: demoRequestHeaders(init?.headers ?? (input instanceof Request ? input.headers : undefined)) } : init;
+  if (input instanceof Request) return fetch(new Request(target, input), options);
+  return fetch(mapped, options);
 }
 
 export function requireLiveWallet() {

@@ -45,35 +45,35 @@ export class PublicDemoRuntime {
     const token=randomBytes(32).toString("base64url"),session:Session={token,db,scenario,profile:"owner",createdAt:now,lastSeen:now,active:0,writing:false,writes:0,windowAt:now,requests:0,windowWrites:0,funded:false};
     this.sessions.set(token,session);this.creations.push(now);return session;
   }
-  private state(session:Session){
+  private state(session:Session,profile:Profile=session.profile){
     const ids=Object.values(session.scenario.paymentIds),settled=ids.every(id=>row<{status:string}>("SELECT status FROM payments WHERE id=?",id)?.status==="paid");
-    return {fictional:true,noBroadcast:true,profile:session.profile,companies:Object.values(companies),profiles:Object.entries(identities).map(([id,value])=>({id,name:value.name,userId:value.id})),...session.scenario,funded:session.funded,settled,treasury:session.profile==="owner"?getTreasury(getAccess(identities.owner.id,companies.northstar.id)):null,expiresAt:new Date(Math.min(session.lastSeen+ttl,session.createdAt+lifetime)).toISOString()};
+    return {fictional:true,noBroadcast:true,profile,companies:Object.values(companies),profiles:Object.entries(identities).map(([id,value])=>({id,name:value.name,userId:value.id})),...session.scenario,funded:session.funded,settled,treasury:profile==="owner"?getTreasury(getAccess(identities.owner.id,companies.northstar.id)):null,expiresAt:new Date(Math.min(session.lastSeen+ttl,session.createdAt+lifetime)).toISOString()};
   }
-  private access(session:Session,organizationId=companies.northstar.id){return getAccess(identities[session.profile].id,organizationId);}
-  private entityAccess(session:Session,table:"funding_legs"|"payroll_runs"|"payments",id:string){
+  private access(session:Session,organizationId=companies.northstar.id,profile:Profile=session.profile){return getAccess(identities[profile].id,organizationId);}
+  private entityAccess(session:Session,table:"funding_legs"|"payroll_runs"|"payments",id:string,profile:Profile=session.profile){
     const value=row<{organization_id:string}>(`SELECT organization_id FROM ${table} WHERE id=?`,id);
     if(!value)throw new ApiError(404,"This demo record is unavailable","DEMO_RECORD_NOT_FOUND");
-    return this.access(session,value.organization_id);
+    return this.access(session,value.organization_id,profile);
   }
-  private async action(session:Session,value:unknown){
+  private async action(session:Session,value:unknown,profile:Profile=session.profile){
     if(!value||typeof value!=="object")throw new ApiError(400,"Choose a demo action","DEMO_ACTION_INVALID");
     const input=value as Record<string,unknown>;
     if(Object.keys(input).some(key=>!["action","profile","fundingId","runId","paymentId","organizationId"].includes(key)))throw new ApiError(400,"Unknown demo action field","DEMO_ACTION_INVALID");
     for(const key of ["fundingId","runId","paymentId","organizationId"])if(input[key]!==undefined&&(typeof input[key]!=="string"||!/^[a-zA-Z0-9_-]{1,100}$/.test(input[key] as string)))throw new ApiError(400,"Invalid demo record","DEMO_ACTION_INVALID");
     if(input.action==="profile"){
       if(typeof input.profile!=="string"||!Object.hasOwn(identities,input.profile))throw new ApiError(400,"Choose a demo profile","DEMO_PROFILE_INVALID");
-      session.profile=input.profile as Profile;return this.state(session);
+      session.profile=input.profile as Profile;return this.state(session,session.profile);
     }
     if(input.action==="fund"){
-      if(input.fundingId){const access=this.entityAccess(session,"funding_legs",input.fundingId as string);creditDemoFunding(access,input.fundingId as string);}
+      if(input.fundingId){const access=this.entityAccess(session,"funding_legs",input.fundingId as string,profile);creditDemoFunding(access,input.fundingId as string);}
       else {
-        const access=this.access(session,input.organizationId as string|undefined),token=this.tokens.find(value=>value.blockchain==="base"&&value.symbol==="USDC")!;
+        const access=this.access(session,input.organizationId as string|undefined,profile),token=this.tokens.find(value=>value.blockchain==="base"&&value.symbol==="USDC")!;
         const leg=previewDemoFunding(access,this.tokens,{originAsset:token.assetId,amount:"5000000000",reference:"DEMO WORKING CAPITAL"}) as {id:string};creditDemoFunding(access,leg.id);
       }
-      session.funded=true;return this.state(session);
+      session.funded=true;return this.state(session,profile);
     }
     if(input.action==="approve-payroll"||input.action==="settle-payroll"){
-      const id=(input.runId as string|undefined)??session.scenario.runId,access=this.entityAccess(session,"payroll_runs",id);
+      const id=(input.runId as string|undefined)??session.scenario.runId,access=this.entityAccess(session,"payroll_runs",id,profile);
       if(input.action==="approve-payroll"){
         const current=row<{status:string}>("SELECT status FROM payroll_runs WHERE id=?",id)!;
         requirePermission(access,"payments:approve");if(current.status!=="approved"){const review=await payrollPreview(access,id);approveReviewedPayrollRun(access,id,review.reviewToken);}
@@ -81,20 +81,20 @@ export class PublicDemoRuntime {
         const current=row<{status:string}>("SELECT status FROM payroll_runs WHERE id=?",id)!;if(current.status!=="approved")throw new ApiError(409,"Approve the exact pay run first","DEMO_PAYROLL_NOT_APPROVED");
         const items=rows<{payment_id:string}>("SELECT payment_id FROM payroll_items WHERE run_id=? AND payment_id IS NOT NULL",id);settleDemoPayments(access,items.map(item=>item.payment_id),this.tokens);
       }
-      return this.state(session);
+      return this.state(session,profile);
     }
-    if(input.action==="settle-payment"&&typeof input.paymentId==="string"){settleDemoPayments(this.entityAccess(session,"payments",input.paymentId),[input.paymentId],this.tokens);return this.state(session);}
+    if(input.action==="settle-payment"&&typeof input.paymentId==="string"){settleDemoPayments(this.entityAccess(session,"payments",input.paymentId,profile),[input.paymentId],this.tokens);return this.state(session,profile);}
     throw new ApiError(400,"Unknown demo action","DEMO_ACTION_INVALID");
   }
-  private async api(session:Session,request:Request,url:URL,body:string){
+  private async api(session:Session,request:Request,url:URL,body:string,profile:Profile=session.profile){
     const path=url.pathname,method=request.method;
     if(path.startsWith("/api/demo")||/^\/api\/(?:integrations|invoice-ingress|evidence-shares|funding-requests|accounting-oauth|netsuite-oauth)(?:\/|$)/.test(path))return blocked();
     if(path.startsWith("/api/auth/")&&!(["GET","HEAD"].includes(method)&&["/api/auth/config","/api/auth/session"].includes(path)))return blocked();
     if(path==="/api/auth/config")return Response.json({socialEnabled:false,privyAppId:null,walletFamilies:[],nearNetwork:"mainnet",origin:this.origin,ownerWalletSetup:{providers:[],nativeEmbeddedNear:false},simulated:true});
-    const organizationId=/^\/api\/organizations\/([^/]+)(?:\/|$)/.exec(path)?.[1],access=organizationId?this.access(session,organizationId):null;
+    const organizationId=/^\/api\/organizations\/([^/]+)(?:\/|$)/.exec(path)?.[1],access=organizationId?this.access(session,organizationId,profile):null;
     if(path==="/api/assets"||path.endsWith("/funding-assets"))return Response.json({tokens:this.tokens,routingCatalogAvailable:true,simulated:true});
     if(access&&method==="GET"&&/^\/api\/organizations\/[^/]+\/distributions\/[^/]+$/.test(path))return Response.json({distribution:inspectDemoDistribution(access,path.split("/").at(-1)!,session.scenario.distributionStates)});
-    if(method==="GET"&&/^\/api\/recipient-distributions\/[^/]+$/.test(path))return Response.json(inspectDemoClaim(identities[session.profile].id,path.split("/").at(-1)!,session.scenario.distributionStates));
+    if(method==="GET"&&/^\/api\/recipient-distributions\/[^/]+$/.test(path))return Response.json(inspectDemoClaim(identities[profile].id,path.split("/").at(-1)!,session.scenario.distributionStates));
     if(access&&method==="GET"&&path===`/api/organizations/${organizationId}/treasury-policy`)return Response.json({configured:true,config:getTreasury(access).config,current:{...demoPolicy(organizationId!),token_contract:getTreasury(access).config?.token_contract},treasury:getTreasury(access),localPaused:demoPolicy(organizationId!).paused,simulated:true});
     if(access&&method==="POST"&&path===`/api/organizations/${organizationId}/funding`)return Response.json(previewDemoFunding(access,this.tokens,JSON.parse(body)),{status:201});
     if(access&&method==="POST"&&/^\/api\/organizations\/[^/]+\/funding\/[^/]+\/reconcile$/.test(path)){
@@ -112,7 +112,7 @@ export class PublicDemoRuntime {
       return Response.json({available:!!attempt,payment,attempt,network:"mainnet",treasuryAccount:null,chainState:"uncertain",ownerAccounts:[],reporterAccounts:[],refundAccounts:[],sourceRecoveryAccounts:[],executorAccounts:[],providerStatus:"UNKNOWN",canRecoverSource:false,canReport:false,canReportDelivery:false,canReportRefund:false,canConfirmRefund:false,canClose:false,hasObservedDelivery:false,requiresPlatformRecovery:true,refundReporter:null,message:"This simulated unknown outcome stays held. No retry or backup payment is permitted.",simulated:true});
     }
     if(!["GET","HEAD"].includes(method)&&!allowedWrite(method,path))return blocked();
-    const response=await app.request(`${this.origin}${path}${url.search}`,{method,headers:{"content-type":"application/json",origin:this.origin,cookie:`razor_session=${sessions[session.profile]}`},...(!["GET","HEAD"].includes(method)?{body}:{})});
+    const response=await app.request(`${this.origin}${path}${url.search}`,{method,headers:{"content-type":"application/json",origin:this.origin,cookie:`razor_session=${sessions[profile]}`},...(!["GET","HEAD"].includes(method)?{body}:{})});
     if(response.status>=300&&response.status<400)return blocked();
     const headers=new Headers(response.headers);headers.delete("set-cookie");headers.delete("location");headers.delete("content-length");
     if(path.includes("/recipients")&&headers.get("content-type")?.includes("application/json")){
@@ -135,7 +135,8 @@ export class PublicDemoRuntime {
   async handle(request:Request):Promise<Response>{
     let session:Session|undefined,created=false,writing=false,entered=false;
     try{
-      const url=new URL(request.url),method=request.method;
+      const url=new URL(request.url),method=request.method,requestedProfile=request.headers.get("x-razor-demo-profile");
+      if(requestedProfile!==null&&!Object.hasOwn(identities,requestedProfile))throw new ApiError(400,"Choose a demo profile","DEMO_PROFILE_INVALID");
       if(!["GET","HEAD","POST","PUT","PATCH","DELETE"].includes(method))throw new ApiError(405,"Method unavailable","DEMO_METHOD_INVALID");
       if(url.pathname.includes("%")||url.pathname.includes("\\")||url.pathname.includes("//")||url.pathname.split("/").includes(".."))throw new ApiError(400,"Invalid demo path","DEMO_PATH_INVALID");
       if(!["GET","HEAD"].includes(method)&&request.headers.get("origin")!==this.origin)throw new ApiError(403,"Request origin is not allowed","ORIGIN_REJECTED");
@@ -163,11 +164,11 @@ export class PublicDemoRuntime {
       }
       session.active++;entered=true;session.lastSeen=now;
       if(reset&&!created){const next=createMemoryDatabase();let scenario:Scenario;try{scenario=withDatabase(next,()=>seedPublicDemo(this.tokens));}catch(error){next.close();throw error;}session.db.close();session.db=next;session.scenario=scenario;session.profile="owner";session.writes=0;session.funded=false;}
-      const current=session;
+      const current=session,profile=(requestedProfile as Profile|null)??session.profile;
       const response=await withDatabase(session.db,async()=>{
-        if(url.pathname==="/state"&&method==="GET"||reset)return Response.json(this.state(current));
-        if(url.pathname==="/action"&&method==="POST")return Response.json(await this.action(current,control));
-        if(url.pathname.startsWith("/api/"))return this.api(current,request,url,body);
+        if(url.pathname==="/state"&&method==="GET"||reset)return Response.json(this.state(current,profile));
+        if(url.pathname==="/action"&&method==="POST")return Response.json(await this.action(current,control,profile));
+        if(url.pathname.startsWith("/api/"))return this.api(current,request,url,body,profile);
         throw new ApiError(404,"Demo endpoint unavailable","DEMO_NOT_FOUND");
       });
       const headers=new Headers(response.headers);headers.set("cache-control","private, no-store");headers.set("x-razor-demo","simulated-no-broadcast");headers.set("referrer-policy","no-referrer");headers.delete("content-length");

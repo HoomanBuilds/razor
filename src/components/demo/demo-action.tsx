@@ -2,7 +2,7 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { LoaderCircle, Play } from "lucide-react";
-import { DEMO_STATE_EVENT, isPublicDemo } from "@/lib/demo-scope";
+import { DEMO_STATE_EVENT, demoRequestHeaders, isPublicDemo } from "@/lib/demo-scope";
 
 export interface DemoState {
   fictional: true;
@@ -20,7 +20,7 @@ export type DemoActionName = "fund" | "approve-payroll" | "settle-payroll" | "se
 
 export async function demoAction(action: DemoActionName, options: Record<string, string> = {}, publish = true) {
   if (!isPublicDemo()) throw new Error("Open the demo to use sample payments.");
-  const response = await fetch("/api/demo/workspace/action", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...options }) });
+  const response = await fetch("/api/demo/workspace/action", { method: "POST", credentials: "same-origin", cache: "no-store", headers: demoRequestHeaders({ "Content-Type": "application/json" }, action === "reset" ? "owner" : undefined), body: JSON.stringify({ action, ...options }) });
   const result = await response.json();
   if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : result.error?.message || "The demo action could not be completed.");
   if (result.fictional !== true || result.noBroadcast !== true) throw new Error("Unexpected demo response.");

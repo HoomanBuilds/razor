@@ -10,7 +10,7 @@ const server=createServer(async(req,res)=>{
     if(!raw.startsWith("/")||raw.startsWith("//")||raw.split("?")[0].includes("%")||raw.includes("\\")||raw.split("?")[0].split("/").some(segment=>segment==="."||segment==="..")){res.writeHead(400);res.end();return;}
     const chunks:Buffer[]=[];let size=0;
     for await(const chunk of req){size+=chunk.length;if(size>1_048_576){res.writeHead(413);res.end();req.destroy();return;}chunks.push(chunk);}
-    const method=req.method??"GET",response=await runtime.handle(new Request(`${publicOrigin}${raw}`,{method,headers:{origin:req.headers.origin??"",cookie:req.headers.cookie??"","content-type":"application/json"},...(!["GET","HEAD"].includes(method)?{body:Buffer.concat(chunks).toString()}:{})}));
+    const method=req.method??"GET",response=await runtime.handle(new Request(`${publicOrigin}${raw}`,{method,headers:{origin:req.headers.origin??"",cookie:req.headers.cookie??"","content-type":"application/json",...(typeof req.headers["x-razor-demo-profile"]==="string"?{"x-razor-demo-profile":req.headers["x-razor-demo-profile"]}:{})},...(!["GET","HEAD"].includes(method)?{body:Buffer.concat(chunks).toString()}:{})}));
     res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
   }catch{if(!res.headersSent)res.writeHead(500,{"content-type":"application/json"});res.end(JSON.stringify({error:"The demo request could not finish",code:"DEMO_REQUEST_FAILED"}));}
 });
