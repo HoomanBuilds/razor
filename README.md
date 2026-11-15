@@ -52,7 +52,7 @@ These workflows have different activation needs. Clearing, lending, paid subscri
 ## How a payment works
 
 1. **Create the workspace.** Set up the company, invite the finance team and link its NEAR treasury owner. Application login and financial signing authority remain separate.
-2. **Confirm the recipient.** The employee, contractor or supplier confirms a supported asset, network and address, plus an explicitly consented native USDC backup.
+2. **Invite the recipient.** Add an employee, contractor or supplier by name and email. They sign in with the invited email, choose a supported asset, network and receiving address, and optionally authorize a native USDC backup. No company workspace or NEAR wallet is required just to receive an external-chain payout. Company users with payee-management access can reopen and copy the invitation until confirmation; expired links can be renewed. The employee's personal workspace remains available after confirmation.
 3. **Prepare the obligation.** Create an invoice payment or payroll run in USDC, with the required approvals and execution-cost ceiling.
 4. **Fund it.** Use supported source assets through NEAR Intents or native NEAR USDC. Multiple funding legs are tracked independently; only verified, company-attributed treasury deposits become spendable cash.
 5. **Review and authorize.** Inspect the exact route and receiving terms. Owner-authorized execution must satisfy the company's contract-enforced policy and budget.
