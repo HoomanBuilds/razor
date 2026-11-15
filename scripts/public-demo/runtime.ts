@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { app } from "../../src/server/app";
 import { ApiError, requirePermission } from "../../src/server/context";
 import { createMemoryDatabase, getDb, row, rows, withDatabase } from "../../src/server/db";
+import { demoPolicy, inspectDemoClaim, inspectDemoDistribution } from "./distributions";
+import { decrypt, hashToken } from "../../src/server/identity/crypto";
 import { getAccess } from "../../src/server/identity/session";
 import { getPayment, getTreasury } from "../../src/server/payments/service";
 import { payrollPreview, approveReviewedPayrollRun } from "../../src/server/payment-management/service";
@@ -23,9 +25,9 @@ const allowedWrite=(method:string,path:string)=>{
   if(method==="PUT" && /^\/api\/personal-expenses\/[^/]+\/correction$/.test(path))return true;
   const match=/^\/api\/organizations\/[^/]+\/(.+)$/.exec(path);if(!match)return false;
   const tail=match[1];
-  if(method==="POST")return /^(select|payments|payroll|bills|recipients|recipients\/import|recipients\/[^/]+\/invite|payments\/[^/]+\/(approve|revalidate|cancel)|payroll\/[^/]+\/approve|bills\/[^/]+\/(approve|dispute|terms|accept|resolve|installments)|payment-management\/(payroll\/[^/]+\/approve|bills\/(preview|approve)|payments\/[^/]+\/(cancel|replace))|operations\/(recurring|notices\/[^/]+\/read)|projects\/classifications|expenses\/[^/]+\/review|client-reserves|client-reserves\/[^/]+\/(allocate|release)|clearing\/(rounds\/preview|funded\/preview|invoices\/[^/]+\/(accept|share)))$/.test(tail);
+  if(method==="POST")return /^(select|payments|payroll|bills|distributions|recipients|recipients\/import|recipients\/[^/]+\/invite|payments\/[^/]+\/(approve|revalidate|cancel)|payroll\/[^/]+\/approve|bills\/[^/]+\/(approve|dispute|terms|accept|resolve|installments)|payment-management\/(payroll\/[^/]+\/approve|bills\/(preview|approve)|payments\/[^/]+\/(cancel|replace))|operations\/(recurring|notices\/[^/]+\/read)|projects\/classifications|expenses\/[^/]+\/review|client-reserves|client-reserves\/[^/]+\/(allocate|release)|clearing\/(rounds\/preview|funded\/preview|invoices\/[^/]+\/(accept|share)))$/.test(tail);
   if(method==="PATCH")return /^(recipients\/[^/]+|networks\/[^/]+|operations\/recurring\/[^/]+|payment-management\/payroll\/[^/]+\/items\/[^/]+)$/.test(tail);
-  if(method==="DELETE")return /^recipients\/[^/]+$/.test(tail);
+  if(method==="DELETE")return /^(recipients|distributions)\/[^/]+$/.test(tail);
   return method==="PUT" && tail==="expenses/policy";
 };
 export class PublicDemoRuntime {
@@ -91,6 +93,9 @@ export class PublicDemoRuntime {
     if(path==="/api/auth/config")return Response.json({socialEnabled:false,privyAppId:null,walletFamilies:[],nearNetwork:"mainnet",origin:this.origin,ownerWalletSetup:{providers:[],nativeEmbeddedNear:false},simulated:true});
     const organizationId=/^\/api\/organizations\/([^/]+)(?:\/|$)/.exec(path)?.[1],access=organizationId?this.access(session,organizationId):null;
     if(path==="/api/assets"||path.endsWith("/funding-assets"))return Response.json({tokens:this.tokens,routingCatalogAvailable:true,simulated:true});
+    if(access&&method==="GET"&&/^\/api\/organizations\/[^/]+\/distributions\/[^/]+$/.test(path))return Response.json({distribution:inspectDemoDistribution(access,path.split("/").at(-1)!,session.scenario.distributionStates)});
+    if(method==="GET"&&/^\/api\/recipient-distributions\/[^/]+$/.test(path))return Response.json(inspectDemoClaim(identities[session.profile].id,path.split("/").at(-1)!,session.scenario.distributionStates));
+    if(access&&method==="GET"&&path===`/api/organizations/${organizationId}/treasury-policy`)return Response.json({configured:true,config:getTreasury(access).config,current:{...demoPolicy(organizationId!),token_contract:getTreasury(access).config?.token_contract},treasury:getTreasury(access),localPaused:demoPolicy(organizationId!).paused,simulated:true});
     if(access&&method==="POST"&&path===`/api/organizations/${organizationId}/funding`)return Response.json(previewDemoFunding(access,this.tokens,JSON.parse(body)),{status:201});
     if(access&&method==="POST"&&/^\/api\/organizations\/[^/]+\/funding\/[^/]+\/reconcile$/.test(path)){
       const id=path.split("/").at(-2)!;creditDemoFunding(access,id);session.funded=true;return Response.json(row("SELECT * FROM funding_legs WHERE id=? AND organization_id=?",id,organizationId!));
@@ -110,6 +115,21 @@ export class PublicDemoRuntime {
     const response=await app.request(`${this.origin}${path}${url.search}`,{method,headers:{"content-type":"application/json",origin:this.origin,cookie:`razor_session=${sessions[session.profile]}`},...(!["GET","HEAD"].includes(method)?{body}:{})});
     if(response.status>=300&&response.status<400)return blocked();
     const headers=new Headers(response.headers);headers.delete("set-cookie");headers.delete("location");headers.delete("content-length");
+    if(path.includes("/recipients")&&headers.get("content-type")?.includes("application/json")){
+      const mapInvites=(value:unknown):unknown=>{
+        if(Array.isArray(value))return value.map(mapInvites);
+        if(!value||typeof value!=="object")return value;
+        return Object.fromEntries(Object.entries(value).map(([key,item])=>{
+          if(key!=="invitationUrl"||typeof item!=="string")return [key,mapInvites(item)];
+          const token=new URL(item).searchParams.get("token");if(!token)return [key,item];
+          const recipient=row<{email:string|null;user_id:string|null}>("SELECT email,user_id FROM recipients WHERE invitation_token_hash=?",hashToken(token));
+          const profile=Object.entries(identities).find(([,identity])=>identity.id===recipient?.user_id||recipient?.email&&identity.email.toLowerCase()===decrypt(recipient.email).toLowerCase())?.[0];
+          const link=new URL("/demo",this.origin);link.searchParams.set("kind","receive");link.searchParams.set("token",token);if(profile)link.searchParams.set("profile",profile);
+          return [key,link.toString()];
+        }));
+      };
+      return new Response(JSON.stringify(mapInvites(await response.json())),{status:response.status,headers});
+    }
     return new Response(response.body,{status:response.status,headers});
   }
   async handle(request:Request):Promise<Response>{

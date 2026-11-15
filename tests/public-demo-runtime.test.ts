@@ -71,12 +71,27 @@ test("email-only demo invitations use persona proof and persistent receiving wor
   const visitor=await start(),base=`/api/organizations/${visitor.state.companies[0].id}`;
   const response=await request(`${base}/recipients`,visitor.cookie,{name:"Maya demo invite",kind:"employee",email:"maya@northstar.example"});assert.equal(response.status,201);
   const created=await response.json(),token=new URL(created.invitationUrl).searchParams.get("token")!;
+  assert.equal(new URL(created.invitationUrl).pathname,"/demo");assert.equal(new URL(created.invitationUrl).searchParams.get("profile"),"maya");
   await request("/action",visitor.cookie,{action:"profile",profile:"leo"});assert.equal((await request(`/api/recipient-portal/${token}`,visitor.cookie)).status,403);
   await request("/action",visitor.cookie,{action:"profile",profile:"maya"});assert.equal((await request(`/api/recipient-portal/${token}`,visitor.cookie)).status,200);
   const confirmed=await request(`/api/recipient-portal/${token}/confirm`,visitor.cookie,{expectedVersion:1,primaryAsset:"USDC",primaryNetwork:"base",primaryAddress:"0x1111111111111111111111111111111111111111"});assert.equal(confirmed.status,200);
   assert.equal((await request(`/api/recipient-portal/${token}`,visitor.cookie)).status,404);
   const profiles=await(await request("/api/recipient-workspace/profiles",visitor.cookie)).json();assert(profiles.profiles.some((item:{recipient:{id:string}})=>item.recipient.id===created.recipient.id));
   assert.equal(created.email.configured,false);
+});
+
+test("active demo distributions and personal claims inspect without RPC and preserve ownership",async()=>{
+  const visitor=await start(),base=`/api/organizations/${visitor.state.companies[0].id}`;
+  const list=await(await request(`${base}/distributions`,visitor.cookie)).json();
+  const active=list.distributions.find((item:{chain_status:string})=>item.chain_status==="active");assert(active);
+  const detail=await request(`${base}/distributions/${active.id}`,visitor.cookie);assert.equal(detail.status,200);
+  const pool=(await detail.json()).distribution;assert.equal(pool.chain.total,"400000000");assert.equal(pool.source_tx_hash,null);assert.equal(pool.simulated,true);
+  assert.equal((await request(`${base}/treasury-policy`,visitor.cookie)).status,200);
+  await request("/action",visitor.cookie,{action:"profile",profile:"maya"});
+  const own=await(await request("/api/recipient-distributions",visitor.cookie)).json();assert(own.claims.length);
+  const claim=await request(`/api/recipient-distributions/${own.claims[0].id}`,visitor.cookie);assert.equal(claim.status,200);assert.equal((await claim.json()).amount,"400000000");
+  await request("/action",visitor.cookie,{action:"profile",profile:"leo"});
+  assert.equal((await request(`/api/recipient-distributions/${own.claims[0].id}`,visitor.cookie)).status,404);
 });
 
 test("capacity bounds visitor databases without evicting an active session",async()=>{
