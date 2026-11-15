@@ -91,6 +91,7 @@ export function seedPublicDemo(tokens: Token[]): PublicDemoSeed {
     if (spec.decision) {
       const review = companyExpense(access(spec.company.id), expenseId);
       reviewExpense(access(spec.company.id), expenseId, { reviewToken: review.reviewToken, decision: spec.decision, note: spec.decision === "return" ? "Please identify the project and attach the itemized workspace receipt." : "Client travel accepted at the explicitly agreed USDC reimbursement amount.", maxFeeUSDC: "1", confirmed: true });
+      db.prepare("UPDATE payments SET metadata=json_set(metadata,'$.displayReference',?) WHERE id=(SELECT b.payment_id FROM expense_requests e JOIN bills b ON b.id=e.bill_id AND b.organization_id=e.organization_id WHERE e.id=?)").run(reference,expenseId);
     }
   }
 
