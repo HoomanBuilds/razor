@@ -7,15 +7,15 @@ import { useIdentity } from "../auth/identity-provider";
 
 export type RecipientView = "overview" | "payments" | "profiles" | "invoices" | "expenses" | "purchasing" | "distributions" | "financing" | "notifications";
 const pages = [
-  { id: "overview", title: "Dashboard", icon: Home, description: "Your receiving profiles and payments, across the companies you work with." },
-  { id: "payments", title: "My payments", icon: Wallet, description: "Follow your entitlements, delivery records and payment receipts." },
-  { id: "profiles", title: "Payout profiles", icon: Users, description: "Separate receiving preferences for every payer company." },
-  { id: "invoices", title: "Invoices", icon: ReceiptText, description: "Your invoice requests, finance reviews and supplier credits." },
-  { id: "expenses", title: "Expenses", icon: CircleDollarSign, description: "Submit receipts and follow your reimbursements." },
-  { id: "purchasing", title: "Supplier workspace", icon: ShoppingBag, description: "Review company invitations, quotes and private agreements." },
-  { id: "distributions", title: "Distributions", icon: Gift, description: "Review fixed company allocations and claim your entitlements." },
-  { id: "financing", title: "Lending agreements", icon: Building2, description: "Your invited lending opportunities and agreements." },
-  { id: "notifications", title: "Notifications", icon: Bell, description: "Updates for your personal account." },
+  { id: "overview", title: "Dashboard", icon: Home },
+  { id: "payments", title: "My payments", icon: Wallet },
+  { id: "profiles", title: "Payout profiles", icon: Users },
+  { id: "invoices", title: "Invoices", icon: ReceiptText },
+  { id: "expenses", title: "Expenses", icon: CircleDollarSign },
+  { id: "purchasing", title: "Supplier workspace", icon: ShoppingBag },
+  { id: "distributions", title: "Distributions", icon: Gift },
+  { id: "financing", title: "Lending agreements", icon: Building2 },
+  { id: "notifications", title: "Notifications", icon: Bell },
 ] as const;
 
 export function RecipientDashboard({ active, onNavigate, views, onRefresh, notice }: { active: RecipientView; onNavigate: (view: RecipientView) => void; views: Record<RecipientView, ReactNode>; onRefresh: () => void; notice?: ReactNode }) {
@@ -64,11 +64,11 @@ export function RecipientDashboard({ active, onNavigate, views, onRefresh, notic
     {expanded && <button aria-label="Close personal navigation overlay" className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] lg:hidden" onClick={() => setExpanded(false)}/>}
     <div className={`min-w-0 ${expanded ? "lg:ml-64" : "lg:ml-[84px]"}`}>
       <header className="dashboard-canvas flex min-h-18 items-center justify-between gap-3 px-5 sm:px-8 lg:px-10"><div className="flex min-w-0 items-center gap-3"><button aria-label={expanded ? "Collapse personal navigation" : "Expand personal navigation"} aria-expanded={expanded} aria-controls="personal-navigation" className="rounded-full p-2 text-muted-foreground hover:bg-muted" onClick={() => setExpanded(value => !value)}><Menu size={19}/></button><span className="truncate text-sm font-medium">Personal workspace</span><span className="hidden rounded-full bg-muted px-3 py-1 text-[10px] text-muted-foreground sm:block">Receiving account</span></div><div className="flex items-center gap-2"><a href="/help" className="hidden items-center gap-1 rounded-full px-3 py-2 text-xs text-muted-foreground hover:bg-muted sm:flex">Help<ArrowUpRight size={12}/></a><button type="button" aria-label="Refresh my records" title="Refresh my records" onClick={onRefresh} className="grid size-10 place-items-center rounded-full bg-muted text-muted-foreground hover:bg-secondary"><RefreshCw size={16}/></button><a href={accountHref} aria-label="Open personal account" className="grid size-9 place-items-center rounded-full bg-secondary text-sm font-medium text-primary">{name[0].toUpperCase()}</a></div></header>
-      <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-6"><div className="dashboard-page-heading mb-7"><h1 className="text-[30px] font-medium tracking-[-.04em] sm:text-4xl">{page.title}</h1>{active !== "overview" && <p className="mt-2 text-sm leading-6 text-muted-foreground">{page.description}</p>}</div>
+      <main className="dashboard-canvas mx-auto max-w-[1480px] px-5 pb-8 pt-5 sm:px-6 sm:pt-6 lg:px-6"><div className="dashboard-page-heading mb-7"><h1 className="text-[30px] font-medium tracking-[-.04em] sm:text-4xl">{page.title}</h1></div>
         {notice}
-        {statuses.some((value,index) => value === "busy" && pages[index].id !== active) && <p role="status" className="mb-5 rounded-xl border border-primary/15 bg-secondary/50 px-4 py-3 text-xs text-primary">An action is still running in {pages.filter((_,index) => statuses[index] === "busy" && pages[index].id !== active).map(page => page.title).join(", ")}. Return to that page to follow its progress.</p>}
+        {statuses.some((value,index) => value === "busy" && pages[index].id !== active) && <p role="status" className="mb-5 rounded-xl border border-primary/15 bg-secondary/50 px-4 py-3 text-xs text-primary">Action in progress: {pages.filter((_,index) => statuses[index] === "busy" && pages[index].id !== active).map(page => page.title).join(", ")}.</p>}
         {pages.map((page,index) => <div ref={node => { panels.current[index] = node; }} key={page.id} hidden={page.id !== active} className="workspace-content min-w-0" aria-label={page.title}>{views[page.id]}</div>)}
-      </main><footer className="mx-auto max-w-[1536px] px-5 pb-6 text-[11px] leading-5 text-muted-foreground sm:px-8 lg:px-10">Your personal records only. Receiving profiles do not grant access to company treasuries.</footer>
+      </main><footer className="mx-auto max-w-[1536px] px-5 pb-6 text-[11px] leading-5 text-muted-foreground sm:px-8 lg:px-10">Your personal workspace</footer>
     </div>
   </div>;
 }
