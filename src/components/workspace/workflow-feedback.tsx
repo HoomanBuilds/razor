@@ -39,14 +39,8 @@ function FeedbackContent({ base }: { base: string }) {
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer text-sm font-medium">
-        Report workflow friction
+        Report a problem
       </summary>
-      <p className="mt-3 text-xs leading-5 text-muted-foreground">
-        Tell us which step was difficult using categories only. Do not submit
-        salaries, account details or documents. This does not open a support
-        request or change a payment. Your own reports can be resolved or deleted
-        and expire after 90 days.
-      </p>
       <form
         className="mt-4 grid gap-3 sm:grid-cols-3"
         onChange={() => setSaved(false)}
@@ -120,7 +114,7 @@ function FeedbackContent({ base }: { base: string }) {
         </Field>
         <div className="sm:col-span-3">
           <Action busy={busy === "submit"} disabled={!!busy}>
-            Save workflow report
+            Save report
           </Action>
         </div>
       </form>

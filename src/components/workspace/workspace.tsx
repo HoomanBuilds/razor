@@ -124,7 +124,7 @@ const descriptions: Record<Section, string> = {
   accounting: "",
   billing: "Your plan, usage and subscription payments.",
   settings: "Manage company preferences, access and recovery.",
-  support: "Find answers and get help with your workspace.",
+  support: "",
 };
 
 export function WorkspaceApp() {
