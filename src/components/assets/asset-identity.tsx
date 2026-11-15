@@ -89,7 +89,7 @@ export function NetworkLogo({network,size=20,className=""}:{network:string;size?
 
 export function TokenLogo({symbol,network,size=28,className=""}:{symbol:string;network?:string;size?:number;className?:string}) {
   const icon=TOKENS[symbol.trim().toUpperCase()],Icon=icon || Coins;
-  return <span className={`relative inline-flex shrink-0 items-center justify-center rounded-full bg-card ${className}`} style={{width:size,height:size}} aria-hidden="true"><Icon size={size} {...(icon?{variant:"branded" as const}:{})} focusable="false"/>{network?<span className="absolute -bottom-1 -right-1 rounded-full border-2 border-card bg-card"><NetworkLogo network={network} size={Math.max(12,Math.round(size*0.48))}/></span>:null}</span>;
+  return <span className={`relative inline-flex shrink-0 items-center justify-center rounded-full bg-card ${className}`} style={{width:size,height:size}} aria-hidden="true"><Icon size={size} {...(icon?{variant:"branded" as const}:{})} focusable="false"/>{network?<span className="absolute -bottom-1 -right-1 flex rounded-full border-2 border-card bg-card"><NetworkLogo network={network} size={Math.max(12,Math.round(size*0.48))}/></span>:null}</span>;
 }
 
 export function NetworkIdentity({network,label,className=""}:{network:string;label?:string;className?:string}) {
